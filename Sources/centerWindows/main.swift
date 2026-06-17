@@ -6,8 +6,17 @@ import AppKit
 // then `open dist/centerWindows.app`. The flag is cleared after one run.
 let selfTest = UserDefaults.standard.bool(forKey: "selftestTile")
 let selfTestGeo = UserDefaults.standard.bool(forKey: "selftestGeo")
+let selfTestMulti = UserDefaults.standard.bool(forKey: "selftestMulti")
 
 let app = NSApplication.shared
+
+if selfTestMulti {
+    UserDefaults.standard.set(false, forKey: "selftestMulti")
+    app.setActivationPolicy(.regular)
+    app.delegate = SelfTestMultiScreenDelegate()
+    app.run()
+    exit(0)
+}
 
 if selfTestGeo {
     UserDefaults.standard.set(false, forKey: "selftestGeo")
