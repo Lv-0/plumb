@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "centerWindows",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v26)
     ],
     products: [
         .executable(
