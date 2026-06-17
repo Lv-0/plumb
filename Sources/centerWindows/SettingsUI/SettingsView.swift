@@ -42,8 +42,11 @@ struct SettingsView: View {
             .listStyle(.sidebar)
         } detail: {
             detailView
-                .id(section)   // 切段时强制重建 → 触发过渡动画（Task 11）
+                .id(section)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .animation(.spring(duration: 0.35, bounce: 0.1), value: section)
         }
+        .animation(.smooth, value: apps.count)
         .task {
             apps = await Task.detached(priority: .userInitiated) {
                 InstalledAppCatalog.loadInstalledApps()

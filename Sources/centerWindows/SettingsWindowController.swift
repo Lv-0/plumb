@@ -37,12 +37,21 @@ final class SettingsWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         window?.center()
-        // 出现动画：淡入（Task 11 会替换为弹簧缩放 + 淡入）。
+        // 出现动画：缩放（0.96→1.0）+ 淡入，easeOut。
         window?.alphaValue = 0
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.2
-            window?.animator().alphaValue = 1
-        })
+        if let frame = window?.frame {
+            let scaled = NSRect(
+                origin: frame.origin,
+                size: NSSize(width: frame.width * 0.96, height: frame.height * 0.96)
+            )
+            window?.setFrame(scaled, display: true, animate: false)
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.28
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window?.animator().alphaValue = 1
+                window?.animator().setFrame(frame, display: true)
+            })
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 }
