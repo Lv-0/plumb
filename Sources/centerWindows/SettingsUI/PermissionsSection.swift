@@ -1,35 +1,62 @@
 import SwiftUI
 
-/// 权限段：状态行 + 两个 recessed 按钮。
+/// 权限段：状态行 + 两个按钮，整体放在 Liquid Glass 容器里。
 struct PermissionsSection: View {
     @State private var accessibilityOK = false
     @State private var screenCaptureOK = false
 
     var body: some View {
-        Form {
-            Section("辅助功能 / 屏幕录制") {
-                Text(statusText)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("centerWindows 需要以下权限才能控制窗口位置。")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
 
-                Button("打开辅助功能设置…") {
-                    AccessibilityPermission.openSettings()
-                    refresh()
+                VStack(alignment: .leading, spacing: 12) {
+                    permissionRow(
+                        title: "辅助功能",
+                        granted: accessibilityOK,
+                        symbol: "person.crop.circle.badge.checkmark",
+                        action: { AccessibilityPermission.openSettings(); refresh() }
+                    )
+                    Divider()
+                    permissionRow(
+                        title: "屏幕录制",
+                        granted: screenCaptureOK,
+                        symbol: "rectangle.dashed.badge.record",
+                        action: { ScreenCapturePermission.openSettings(); refresh() }
+                    )
                 }
-                Button("打开屏幕录制设置…") {
-                    ScreenCapturePermission.openSettings()
-                    refresh()
-                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .formStyle(.grouped)
-        // grouped Form 在 macOS 26 自带 Liquid Glass 卡片；隐藏其不透明内容背景，
-        // 让材质透出窗口内容，避免双重材质堆叠。
         .scrollContentBackground(.hidden)
         .onAppear { refresh() }
     }
 
-    private var statusText: String {
-        "辅助功能：\(accessibilityOK ? "已授权 ✓" : "未授权")    屏幕录制：\(screenCaptureOK ? "已授权 ✓" : "未授权")"
+    private func permissionRow(title: String, granted: Bool, symbol: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(granted ? .green : .secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .foregroundStyle(.primary)
+                Text(granted ? "已授权" : "未授权")
+                    .font(.caption)
+                    .foregroundStyle(granted ? .green : .orange)
+            }
+            Spacer(minLength: 8)
+            Button("打开设置…", action: action)
+                .buttonStyle(.bordered)
+        }
     }
 
     private func refresh() {

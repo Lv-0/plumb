@@ -61,7 +61,7 @@ struct SettingsView: View {
     private var detailView: some View {
         switch section {
         case .centering:
-            AppListSection(
+            CenteringSection(
                 footnote: "空列表 = 居中所有应用；打开开关即仅居中所选应用。",
                 selected: $settings.centeredBundleIDs,
                 apps: apps
