@@ -5,8 +5,17 @@ import AppKit
 // is active: set `defaults write com.comet.centerwindows selftestTile -bool true`
 // then `open dist/centerWindows.app`. The flag is cleared after one run.
 let selfTest = UserDefaults.standard.bool(forKey: "selftestTile")
+let selfTestGeo = UserDefaults.standard.bool(forKey: "selftestGeo")
 
 let app = NSApplication.shared
+
+if selfTestGeo {
+    UserDefaults.standard.set(false, forKey: "selftestGeo")
+    app.setActivationPolicy(.regular)
+    app.delegate = SelfTestGeometryDelegate()
+    app.run()
+    exit(0)
+}
 
 if selfTest {
     UserDefaults.standard.set(false, forKey: "selftestTile")
