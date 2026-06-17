@@ -227,6 +227,7 @@ final class WindowCenteringService {
         WindowAnimator.animate(
             from: CGRect(origin: startOrigin, size: windowSize),
             to: CGRect(origin: endOrigin, size: windowSize),
+            easing: WindowAnimator.spring,
             writer: { [weak self] frame in
                 guard let self else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
