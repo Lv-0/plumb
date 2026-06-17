@@ -29,5 +29,9 @@ struct AppListSection: View {
                 }
             }
         }
+        // 隐藏 List 自带的不透明内容背景，否则会盖住下面的玻璃材质。
+        .scrollContentBackground(.hidden)
+        // Liquid Glass 卡片层：折射背景内容，自适应活力度让文字保持清晰。
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

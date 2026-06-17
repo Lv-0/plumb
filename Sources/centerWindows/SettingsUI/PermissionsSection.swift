@@ -22,6 +22,9 @@ struct PermissionsSection: View {
             }
         }
         .formStyle(.grouped)
+        // grouped Form 在 macOS 26 自带 Liquid Glass 卡片；隐藏其不透明内容背景，
+        // 让材质透出窗口内容，避免双重材质堆叠。
+        .scrollContentBackground(.hidden)
         .onAppear { refresh() }
     }
 
