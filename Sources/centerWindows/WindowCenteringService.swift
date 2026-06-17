@@ -474,11 +474,15 @@ final class WindowCenteringService {
                     // 同时写入尺寸与位置，保持居中。
                     let sizeOK = self.setSizeAttribute(kAXSizeAttribute as CFString, value: frame.size, on: windowElement)
                     _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement)
-                    return sizeOK
+                    if sizeOK { return true }
+                    // 许多 App（如 TextEdit）单独 set kAXSize 不生效，但 AXFrame（同时设 origin+size）可以。
+                    return self.setRectAttribute("AXFrame" as CFString, value: frame, on: windowElement)
                 },
                 reader: reader,
                 completion: {
-                    // 收尾：最终落到精确的平铺目标，确保不因取整累积偏差。
+                    // 收尾：强制把窗口精确落到平铺目标。某些 App 在动画末帧会回弹尺寸，
+                    // 这里用 AXFrame 兜底写入 origin+size，确保最终是近铺满尺寸而非回弹的小尺寸。
+                    _ = self.setRectAttribute("AXFrame" as CFString, value: targetFrame, on: windowElement)
                     if let pid {
                         _ = self.tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
                     }
