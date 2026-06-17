@@ -71,31 +71,35 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
         Self.log("SELFTEST: window BEFORE tile = \(Self.stringify(before))")
 
         let service = WindowCenteringService()
+        // Use the ANIMATED path — this is where commit 0fc9703's AXFrame
+        // size-bounce fix lives (completion forces the exact targetFrame).
         do {
-            try service.tileWindowElement(windowElement, pid: pid, appElement: appElement, edgeMargin: 16)
-            Self.log("SELFTEST: tileWindowElement returned OK (no throw)")
+            try service.tileWindowElementAnimated(windowElement, pid: pid, appElement: appElement, edgeMargin: 16) { [weak self] in
+                guard let self else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    let after = Self.readFrame(windowElement)
+                    Self.log("SELFTEST: window AFTER animated tile = \(Self.stringify(after))")
+                    let target = CGRect(
+                        x: visible.minX + 16, y: visible.minY + 16,
+                        width: visible.width - 32, height: visible.height - 32
+                    )
+                    Self.log("SELFTEST: expected near-fullscreen ≈ \(Self.stringify(target))")
+                    let tol: CGFloat = 24
+                    let nearFullscreen =
+                        abs(after.minX - target.minX) <= tol &&
+                        abs(after.minY - target.minY) <= tol &&
+                        abs(after.width - target.width) <= tol &&
+                        abs(after.height - target.height) <= tol
+                    let grew = (after.width > before.width + 100) && (after.height > before.height + 100)
+                    Self.log("SELFTEST: near-fullscreen? \(nearFullscreen)   grew-from-small? \(grew)")
+                    Self.log("SELFTEST: RESULT=\(nearFullscreen && grew ? "PASS" : "CHECK")")
+                    self.finish()
+                }
+            }
+            Self.log("SELFTEST: tileWindowElementAnimated started OK (no throw)")
         } catch {
-            Self.log("SELFTEST: tileWindowElement threw: \(error)")
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            let after = Self.readFrame(windowElement)
-            Self.log("SELFTEST: window AFTER tile  = \(Self.stringify(after))")
-            let target = CGRect(
-                x: visible.minX + 16, y: visible.minY + 16,
-                width: visible.width - 32, height: visible.height - 32
-            )
-            Self.log("SELFTEST: expected near-fullscreen ≈ \(Self.stringify(target))")
-            let tol: CGFloat = 24
-            let nearFullscreen =
-                abs(after.minX - target.minX) <= tol &&
-                abs(after.minY - target.minY) <= tol &&
-                abs(after.width - target.width) <= tol &&
-                abs(after.height - target.height) <= tol
-            let grew = (after.width > before.width + 100) && (after.height > before.height + 100)
-            Self.log("SELFTEST: near-fullscreen? \(nearFullscreen)   grew-from-small? \(grew)")
-            Self.log("SELFTEST: RESULT=\(nearFullscreen && grew ? "PASS" : "CHECK")")
-            self?.finish()
+            Self.log("SELFTEST: tileWindowElementAnimated threw: \(error)")
+            finish()
         }
     }
 
