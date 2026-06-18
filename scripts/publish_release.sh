@@ -49,12 +49,29 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## Fixes
-- Auto-center now triggers reliably on app activation and new app windows (no need to switch away and back).
-- Multi-monitor: keep windows centered on their current display (no more jumping from screen 2 to screen 1).
-- Secondary windows (dialogs/panels) are excluded from auto-centering; only standard main windows are centered.
-- Better handling when a window is partially off-screen: first moves it back into the visible region, then centers it.
-- New: per-app auto-tiling (allowlist) with configurable edge margin and system-app filter in settings.
+## v1.0.0 — 首个正式版本
+
+全新品牌 **Plumb**（取自铅锤线 plumb line——找到真正的中心），全新视觉，全新设置界面。
+
+### 🎨 全新设计与品牌
+- 更名为 **Plumb**，全新水滴 Logo（灵感：三体"水滴"的极致圆润 + 2026 Apple Design Award 极简诗意风）。
+- **Liquid Glass 设置界面**（macOS 26）：毛玻璃质感、应用搜索、药丸开关、平滑重排。
+- 全新菜单栏图标。
+
+### ✨ 新功能
+- **指定 App 自动平铺**（白名单）：可配置统一四边边距，白名单 App 触发时优先平铺。
+- **设置窗口实时刷新应用列表**：新安装的应用立即出现在选择器中（无需重启 App）。
+- 居中段支持白名单：可仅对选定 App 自动居中。
+
+### 🐛 修复
+- 多显示器：窗口居中停留在当前所在屏幕，不再从 2 号屏跳到 1 号屏。
+- 次级窗口（对话框/面板）排除在自动居中外，仅标准主窗口被居中。
+- 窗口部分在屏外时：先移回可见区，再居中。
+- 自动居中在 App 激活/新窗口时可靠触发（无需来回切换）。
+
+### ℹ️ 注意
+- Bundle ID 变更为 `com.comet.plumb`（macOS 视为新应用；旧测试者的设置不会迁移）。
+- macOS 13+ 运行；Liquid Glass 界面需 macOS 26。
 EOF
 )
 

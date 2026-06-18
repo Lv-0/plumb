@@ -2,16 +2,22 @@
 
 English | [简体中文](./README.md)
 
-`Plumb` is a macOS menu bar window manager with both auto-center and per-app auto-tiling.
+<p align="center">
+  <img src="assets/AppIcon-base.png" width="128" height="128" alt="Plumb">
+</p>
 
-## Features
+> A single line descends, and finds its point.
 
-- Center once immediately on app launch
-- Center once when a new window is created / focused again after being closed
-- Moving a window will not trigger re-centering
-- Center inside usable screen area excluding Dock and menu bar (`screen.frame - screen.visibleFrame`)
-- Per-app auto-tiling (allowlist) with configurable uniform margins
-- Auto-generated app icon and menu bar icon
+`Plumb` is a macOS menu-bar window manager with both auto-center and per-app auto-tiling. Named after the plumb line — the weight a carpenter drops to find true vertical, true center.
+
+## ✨ Features
+
+- 🎯 **Center once on launch**, then only when a window is re-opened / a new window is focused
+- ✋ **Dragging a window never re-triggers centering** (won't fight your manual layout)
+- 🖥️ **Centers inside usable area** excluding Dock & menu bar (`screen.frame - screen.visibleFrame`), stable across multi-display
+- 📐 **Per-app auto-tiling** (allowlist) with a configurable uniform edge margin
+- 🔄 **Live app-list refresh** in settings — newly installed apps appear in the picker immediately
+- 🪟 **Liquid Glass settings UI** (macOS 26) — frosted glass, search, pill toggles
 
 ## Auto-Tiling (Selected Apps)
 
@@ -28,7 +34,7 @@ Semantics are inspired by Amethyst configuration concepts:
 
 ## Requirements
 
-- macOS 13+
+- macOS 13+ (Liquid Glass UI requires macOS 26)
 - Xcode Command Line Tools (`xcode-select --install`)
 
 ## Build locally

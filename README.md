@@ -2,16 +2,22 @@
 
 [English](./README.en.md) | 简体中文
 
-`Plumb` 是一个 macOS 菜单栏窗口管理工具：支持自动居中与按指定 App 自动平铺。
+<p align="center">
+  <img src="assets/AppIcon-base.png" width="128" height="128" alt="Plumb">
+</p>
 
-## 功能
+> 一线垂下，落定正中。
 
-- 启动立即居中一次
-- 之后仅在“窗口关闭后重新打开 / 切换到新窗口”时居中一次
-- 拖动移动窗口不会触发再次居中
-- 排除 Dock 与状态栏后居中（基于 `screen.frame - screen.visibleFrame`）
-- 支持“指定 App 自动平铺”（白名单），可配置统一边距
-- 菜单栏图标与应用图标自动生成
+`Plumb` 是一个 macOS 菜单栏窗口管理工具：支持自动居中与按指定 App 自动平铺。名字取自"铅锤线"（plumb line）——木匠用它找到真正的垂直与中心。
+
+## ✨ 功能
+
+- 🎯 **启动立即居中一次**，之后仅在"窗口关闭后重新打开 / 切换到新窗口"时居中一次
+- ✋ **拖动移动窗口不会触发再次居中**（不打扰你的手动布局）
+- 🖥️ **排除 Dock 与状态栏后居中**（基于 `screen.frame - screen.visibleFrame`，多屏稳定）
+- 📐 **指定 App 自动平铺**（白名单），可配置统一四边边距
+- 🔄 **设置窗口实时刷新应用列表**——新安装的应用立即出现在选择器中
+- 🪟 **Liquid Glass 设置界面**（macOS 26），毛玻璃质感、搜索、药丸开关
 
 ## 自动平铺（指定 App）
 
@@ -19,16 +25,16 @@
 - 可配置统一四边距（px）
 - 可从已安装应用列表中选择白名单 App（默认隐藏系统应用，可切换）
 - 白名单 App 触发时优先平铺，不再自动居中
-- 触发粒度为“每个进程首次窗口一次”；同一进程内后续不重复触发
+- 触发粒度为"每个进程首次窗口一次"；同一进程内后续不重复触发
 - 若窗口不支持修改尺寸，则跳过该窗口
 
 语义参考 Amethyst 配置思路：
 - `window-margin-size`：对应本项目平铺边距
-- `floating + floating-is-blacklist=false`：对应本项目“白名单自动平铺”
+- `floating + floating-is-blacklist=false`：对应本项目"白名单自动平铺"
 
 ## 系统要求
 
-- macOS 13+
+- macOS 13+（Liquid Glass 界面需 macOS 26）
 - Xcode Command Line Tools（`xcode-select --install`）
 
 ## 本地构建
@@ -69,7 +75,7 @@ scripts/sign_and_notarize.sh
 ## 安装说明
 1. 打开 DMG，将 `Plumb.app` 拖到 `Applications`。
 2. 到 `Applications` 中右键 `Plumb.app` -> `打开` -> 再次点击 `打开`。
-3. 若仍被拦截：`系统设置 -> 隐私与安全性` 页面底部点击“仍要打开”。
+3. 若仍被拦截：`系统设置 -> 隐私与安全性` 页面底部点击"仍要打开"。
 4. 若仍失败，可在终端执行：
 
 ```bash
@@ -84,7 +90,7 @@ xattr -dr com.apple.quarantine /Applications/Plumb.app
 
 - 路径：`系统设置 -> 隐私与安全性 -> 辅助功能`
 - 为什么需要：  
-  应用通过 macOS Accessibility API 读取前台窗口的位置/尺寸，并写入新位置来执行“窗口居中”。
+  应用通过 macOS Accessibility API 读取前台窗口的位置/尺寸，并写入新位置来执行"窗口居中"。
 - 不授权会怎样：  
   无法获取窗口几何信息，也无法移动窗口，居中功能不可用。
 
