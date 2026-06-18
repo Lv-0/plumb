@@ -96,6 +96,11 @@ func writePNG(_ image: CGImage, to path: String) throws {
 // Plumb 状态栏图标（template，单色，自动适配深浅色菜单栏）
 // 与 App 图标同一隐喻：一根细线垂下一颗水滴（真圆弧构造，极致圆润）。
 // 用纯黑绘制（NSImage.isTemplate=true 由 AppDelegate 设置），系统负责上色。
+//
+// 几何严格对齐设计稿 assets/AppIcon-base.png：
+//   • 水滴水平 + 垂直居中（占画面约 60% 高度）
+//   • 球部直径约画面 35%（小尺寸下饱满而不臃肿）
+//   • 悬线从水滴尖端向上、长度约为画面 25%（不到顶边，留呼吸感）
 // ─────────────────────────────────────────────────────────────────────────
 func drawStatusIcon(size: Int) throws -> CGImage {
     let s = CGFloat(size)
@@ -103,10 +108,14 @@ func drawStatusIcon(size: Int) throws -> CGImage {
     let rect = CGRect(x: 0, y: 0, width: s, height: s)
     ctx.clear(rect)
 
+    // 水滴整体高度约为画面的 60%，垂直居中 → 占 y ∈ [0.20·s, 0.80·s]。
+    // 球部占下方约 2/3，颈部收尖占上方约 1/3。
     let cx = s * 0.5
-    let circleCY = s * 0.38            // 水滴球部圆心（略低于视觉中心）
-    let R = s * 0.26                   // 球部半径：相对放大，小尺寸下仍饱满
-    let tipY = circleCY + R + s * 0.26 // 尖点
+    let dropHeight = s * 0.60
+    let bulbHeight = dropHeight * (2.0 / 3.0)   // 球部高度
+    let R = bulbHeight * 0.5                    // 球部半径 ≈ 0.20·s（直径 ≈ 0.40·s，约占画面 35% 宽）
+    let circleCY = s * 0.20 + R                 // 球部圆心：球底落在 0.20·s
+    let tipY = circleCY + R + (dropHeight - bulbHeight) // 尖点：落在 0.80·s
 
     // 真圆弧 + 相切曲线构造（与 App 图标设计稿同构的水滴形）。
     let theta: CGFloat = .pi * 50.0 / 180.0
@@ -134,11 +143,13 @@ func drawStatusIcon(size: Int) throws -> CGImage {
     ctx.addPath(bob)
     ctx.fillPath()
 
-    // 悬线：从水滴尖端向上垂出到画面顶部附近。
+    // 悬线：从水滴尖端向上垂出。尖端在 0.80·s，线顶落在 0.95·s，
+    // 即线长 ≈ 画面 15%——既呼应"铅锤悬线"的隐喻，又留出顶部呼吸感、不贴边。
+    let lineTopY = s * 0.95
     ctx.setStrokeColor(color(0, 0, 0, 1))
     ctx.setLineWidth(max(1.5, s * 0.05))
     ctx.setLineCap(.butt)
-    ctx.move(to: CGPoint(x: cx, y: s * 0.96))
+    ctx.move(to: CGPoint(x: cx, y: lineTopY))
     ctx.addLine(to: CGPoint(x: cx, y: tipY))
     ctx.strokePath()
 
