@@ -128,6 +128,9 @@ final class SettingsWindowController: NSWindowController {
         // 窗口关闭时会在 windowWillClose(_:) 切回 .accessory，避免 Plumb 图标长期驻留 Dock。
         window?.delegate = self
         NSApp.setActivationPolicy(.regular)
+        // windowWillClose 关闭窗口后会用 hide(_:) 让 Plumb 退回后台；这里（重开设置时）先取消隐藏，
+        // 配合下方 activate + makeKeyAndOrderFront 把窗口重新带到前台。
+        NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
 
@@ -142,9 +145,12 @@ final class SettingsWindowController: NSWindowController {
 extension SettingsWindowController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         // 切回 .accessory：showWindow 里临时切到 .regular 激活了液态玻璃折射，
-        // 但 .regular 会让 Plumb 在 Dock 显示图标。窗口关闭后必须切回 accessory，
-        // 否则 Dock 会长期驻留 Plumb 图标，破坏“纯菜单栏应用”的定位。
+        // 但 .regular 会让 Plumb 在 Dock 显示图标。仅 setActivationPolicy(.accessory) 在 App 仍处
+        // 前台激活态时，Dock 图标往往不会立即移除（会残留）。因此切回 accessory 后再 hide(_:)，
+        // 让 Plumb 退出前台、把焦点交还给用户原先在用的应用，Dock 图标随之立即消失，
+        // 回到“纯菜单栏应用”（与 LSUIElement=true 一致）。
         NSApp.setActivationPolicy(.accessory)
+        NSApp.hide(nil)
     }
 }
 
