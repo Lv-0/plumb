@@ -62,7 +62,7 @@ struct AppListSection: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("搜索应用", text: $query)
+                    TextField(L10n.searchApps, text: $query)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
                         .submitLabel(.search)

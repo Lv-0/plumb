@@ -20,21 +20,21 @@ struct PermissionsSection: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Plumb 需要以下权限才能控制窗口位置。")
+                Text(L10n.permissionsIntro)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
 
                 VStack(alignment: .leading, spacing: 12) {
                     permissionRow(
-                        title: "辅助功能",
+                        title: L10n.accessibility,
                         granted: accessibilityOK,
                         symbol: "person.crop.circle.badge.checkmark",
                         action: { AccessibilityPermission.openSettings(); refresh() }
                     )
                     Divider()
                     permissionRow(
-                        title: "屏幕录制",
+                        title: L10n.screenRecording,
                         granted: screenCaptureOK,
                         symbol: "rectangle.dashed.badge.record",
                         action: { ScreenCapturePermission.openSettings(); refresh() }
@@ -66,12 +66,12 @@ struct PermissionsSection: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .foregroundStyle(.primary)
-                Text(granted ? "已授权" : "未授权")
+                Text(granted ? L10n.granted : L10n.notGranted)
                     .font(.caption)
                     .foregroundStyle(granted ? .green : .orange)
             }
             Spacer(minLength: 8)
-            Button("打开设置…", action: action)
+            Button(L10n.openSettings, action: action)
                 .buttonStyle(.bordered)
         }
     }

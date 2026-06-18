@@ -55,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             if showAlertOnFailure {
-                showAlert(title: "窗口居中失败", message: error.localizedDescription)
+                showAlert(title: L10n.centerFailedTitle, message: error.localizedDescription)
             }
         }
     }
@@ -96,15 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App 菜单（系统会把它的标题替换为应用名）。
         let appMenuItem = mainMenu.addItem(withTitle: "Plumb", action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "关于 Plumb", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L10n.about, action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "退出 Plumb", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: L10n.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
 
         // 文件菜单：关闭窗口 ⌘W。target 留空 → 经响应链派发到 key window 的 performClose(_:)。
-        let fileMenuItem = mainMenu.addItem(withTitle: "文件", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "文件")
-        fileMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let fileMenuItem = mainMenu.addItem(withTitle: L10n.fileMenu, action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: L10n.fileMenu)
+        fileMenu.addItem(withTitle: L10n.closeWindow, action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
 
         NSApp.mainMenu = mainMenu
@@ -131,32 +131,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 头部：应用名 + 副标题
         let header = menu.addItem(withTitle: "Plumb", action: nil, keyEquivalent: "")
         header.isEnabled = false
-        let subtitle = menu.addItem(withTitle: "  窗口居中 · 平铺", action: nil, keyEquivalent: "")
+        let subtitle = menu.addItem(withTitle: "  " + L10n.menuSubtitle, action: nil, keyEquivalent: "")
         subtitle.isEnabled = false
         menu.addItem(.separator())
 
         // 主操作：立即居中
-        let centerItem = menu.addItem(withTitle: "立即居中", action: #selector(centerNow), keyEquivalent: "")
+        let centerItem = menu.addItem(withTitle: L10n.centerNow, action: #selector(centerNow), keyEquivalent: "")
         centerItem.target = self
         centerItem.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
 
         // 设置…
-        let settingsItem = menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        let settingsItem = menu.addItem(withTitle: L10n.settings, action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
 
         menu.addItem(.separator())
 
-        let accItem = menu.addItem(withTitle: "辅助功能权限…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+        let accItem = menu.addItem(withTitle: L10n.accessibilityPermission, action: #selector(openAccessibilitySettings), keyEquivalent: "")
         accItem.target = self
         accItem.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
 
-        let scrItem = menu.addItem(withTitle: "屏幕录制权限…", action: #selector(openScreenCaptureSettings), keyEquivalent: "")
+        let scrItem = menu.addItem(withTitle: L10n.screenRecordingPermission, action: #selector(openScreenCaptureSettings), keyEquivalent: "")
         scrItem.target = self
         scrItem.image = NSImage(systemSymbolName: "rectangle.dashed.badge.record", accessibilityDescription: nil)
 
         menu.addItem(.separator())
-        let quitItem = menu.addItem(withTitle: "退出 Plumb", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = menu.addItem(withTitle: L10n.quitApp, action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
 

@@ -107,8 +107,8 @@ struct PillToggle: View {
                 .fill(Color.primary.opacity(0.05))
                 .allowsHitTesting(false)
         )
-        .accessibilityLabel(Text("开关"))
-        .accessibilityValue(Text(isOn ? "开" : "关"))
+        .accessibilityLabel(Text(L10n.toggleSwitch))
+        .accessibilityValue(Text(L10n.toggleState(isOn)))
         .accessibilityAddTraits(.isButton)
     }
 

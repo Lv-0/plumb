@@ -37,9 +37,9 @@ struct SettingsView: View {
         case centering, tiling, permissions
         var title: String {
             switch self {
-            case .centering: return "居中"
-            case .tiling: return "平铺"
-            case .permissions: return "权限"
+            case .centering: return L10n.tabCentering
+            case .tiling: return L10n.tabTiling
+            case .permissions: return L10n.tabPermissions
             }
         }
         var symbol: String {
@@ -153,7 +153,7 @@ struct SettingsView: View {
         switch section {
         case .centering:
             CenteringSection(
-                footnote: "空列表 = 居中所有应用；打开开关即仅居中所选应用。",
+                footnote: L10n.centeringFootnote,
                 selected: $settings.centeredBundleIDs,
                 apps: apps
             )

@@ -43,19 +43,19 @@ enum WindowCenteringError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .accessibilityPermissionMissing:
-            return "缺少辅助功能权限，请在“系统设置 -> 隐私与安全性 -> 辅助功能”中授权。"
+            return L10n.errAccessibilityPermissionMissing
         case .noFrontmostApplication:
-            return "未检测到前台应用。"
+            return L10n.errNoFrontmostApplication
         case .noWindow:
-            return "前台应用没有可操作窗口。"
+            return L10n.errNoWindow
         case .fullscreenWindow:
-            return "当前窗口处于全屏状态，已跳过居中。"
+            return L10n.errFullscreenWindow
         case .unableToReadWindowFrame:
-            return "无法读取窗口位置或尺寸。"
+            return L10n.errUnableToReadWindowFrame
         case .unableToWriteWindowSize:
-            return "无法设置窗口尺寸（窗口可能不支持调整大小）。"
+            return L10n.errUnableToWriteWindowSize
         case .unableToWriteWindowPosition:
-            return "无法设置窗口位置（窗口可能不可移动）。"
+            return L10n.errUnableToWriteWindowPosition
         }
     }
 }

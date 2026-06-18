@@ -30,9 +30,9 @@ struct TilingSection: View {
                     // 平铺总开关：绑定 settings.isEnabled，未开启则整个平铺功能不生效。
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("启用自动平铺")
+                            Text(L10n.enableAutoTiling)
                                 .foregroundStyle(.primary)
-                            Text("开启后，勾选下方应用时会自动平铺到屏幕。")
+                            Text(L10n.enableAutoTilingHint)
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
@@ -46,7 +46,7 @@ struct TilingSection: View {
                     // 边距滑块
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 12) {
-                            Text("边距")
+                            Text(L10n.margin)
                                 .foregroundStyle(.primary)
                             Slider(value: $settings.edgeMargin,
                                    in: AppTilingSettings.minimumEdgeMargin...AppTilingSettings.maximumEdgeMargin)
@@ -56,7 +56,7 @@ struct TilingSection: View {
                                 .monospacedDigit()
                                 .frame(width: 56, alignment: .trailing)
                         }
-                        Text("平铺时窗口与屏幕边缘之间的间距。")
+                        Text(L10n.marginHint)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -73,8 +73,8 @@ struct TilingSection: View {
 
                 AppListSection(
                     footnote: settings.isEnabled
-                        ? "勾选希望自动平铺的应用；未勾选的应用保持居中。"
-                        : "请先在上方开启自动平铺。",
+                        ? L10n.tilingFootnoteOn
+                        : L10n.tilingFootnoteOff,
                     selected: $settings.tiledBundleIDs,
                     apps: apps
                 )

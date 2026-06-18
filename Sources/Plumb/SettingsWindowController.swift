@@ -36,7 +36,7 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "设置"
+        window.title = L10n.settings
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = .clear

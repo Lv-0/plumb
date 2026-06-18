@@ -64,6 +64,14 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
   <true/>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © $(date +%Y)</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>zh</string>
+    <string>en</string>
+    <string>ja</string>
+  </array>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
 </dict>
 </plist>
 EOF
