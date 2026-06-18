@@ -39,10 +39,11 @@ api() {
 }
 
 json_escape() {
-  python3 - <<'PY'
-import json,sys
-print(json.dumps(sys.stdin.read()))
-PY
+  # Reads the body from stdin and prints a JSON-escaped string.
+  # NOTE: the python script must be passed as a -c argument (not a heredoc),
+  # because a `<<'PY'` heredoc consumes python's stdin, leaving nothing for
+  # sys.stdin.read() to read — which silently produced an empty body.
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
 RELEASE_NAME="${TAG#v}"
