@@ -1,6 +1,20 @@
 import AppKit
 import SwiftUI
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - SettingsWindowController
+//
+// 模块角色：设置窗口的 AppKit 外壳（NSWindowController）。
+//
+// 职责：
+//   - 构造一个无标题栏、可拖拽、带 Liquid Glass 材质（macOS 26 NSGlassEffectView，
+//     低版本回退 NSVisualEffectView）的 NSWindow。
+//   - 用 NSHostingController 承载 SwiftUI 的 SettingsView，透明叠加在玻璃背景之上。
+//   - showWindow 时做缩放+淡入出现动画，并向 SettingsView 发 windowDidShow 通知，
+//     使缓存的视图能重新扫描已安装应用（AppDelegate 把本控制器缓存为单例，再次打开
+//     不会重触发 .task，故依赖该通知驱动刷新）。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 设置窗口壳：NSWindow + NSGlassEffectView 背景 + NSHostingController 承载 SwiftUI 内容。
 /// 窗口整体（含边缘）呈现 Liquid Glass 材质；SwiftUI 内容透明叠加其上。
 @MainActor

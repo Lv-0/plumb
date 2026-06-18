@@ -1,6 +1,36 @@
 import AppKit
 import ApplicationServices
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - WindowCenteringService
+//
+// 模块角色：窗口几何引擎（项目的核心复杂度所在）。
+//
+// 职责：
+//   - 读取前台窗口的位置/尺寸（AXPosition / AXSize），探测它使用的"坐标系"，
+//     计算居中或平铺目标，再写回（AXPosition / AXSize / AXFrame，逐级兜底）。
+//   - 提供四条对外路径：
+//       centerWindowElement(_:)          —— 瞬时居中（无动画，仅写一次）。
+//       centerWindowElementAnimated(_:)  —— 弹簧动画居中（手动"立即居中"使用）。
+//       tileWindowElement(_:)            —— 瞬时平铺（先设尺寸再定位，逐空间兜底）。
+//       tileWindowElementAnimated(_:)    —— 两阶段动画平铺：先居中、再从中心对称扩大。
+//
+// 坐标空间问题（本项目最棘手的复杂度）：
+//   macOS 各 app 报告窗口位置时使用的坐标系不统一，单个 AXPosition 值可能落在
+//   四种空间之一：globalBottomLeft / globalTopLeft / localBottomLeft / localTopLeft
+//   （原点不同、Y 轴方向不同）。本服务通过"窗口中心点归属选屏 + 逐空间重叠评分 +
+//   CGWindowList 辅助信号 + 按 PID 缓存"来稳定地推断正确的空间与屏幕。
+//
+// 不变量 / 关键约定：
+//   - 全屏窗口一律跳过（AXFullScreen 属性 + 几何比对双判定）。
+//   - 动画期间检测"用户拖动"：连续 jumpAbortConsecutiveTicks 帧偏离写入位置才中止，
+//     以过滤 macOS 激活动画造成的瞬时弹动（见 WindowAnimator）。
+//   - 切换 app 时 activeAnimationKey 锁与所有定时器都被 abortActiveAnimations() 清空。
+//
+// 与 WindowEventObserver 的边界：
+//   Observer 决定"何时、对哪个窗口"；本服务决定"如何算坐标、如何写 AX"。
+// ─────────────────────────────────────────────────────────────────────────────
+
 enum WindowCenteringError: LocalizedError {
     case accessibilityPermissionMissing
     case noFrontmostApplication
@@ -599,6 +629,43 @@ final class WindowCenteringService {
 
     // MARK: - 共享解算 / 动画辅助
 
+    /// 只读查询：返回给定窗口在当前屏幕上的平铺目标 frame（`visibleFrame` 内缩 edgeMargin）。
+    /// 复用与平铺动画相同的坐标空间探测与 `WindowGeometry.tiledFrame` 计算，但不写任何 AX 属性、
+    /// 也不启动动画。供 `WindowEventObserver.isWindowNearTiledTarget` 判断"窗口是否已铺满、
+    /// 可停止重试"使用——替换此前无法访问内部接口时的粗略面积启发式。
+    /// 读取失败或无法确定坐标空间时返回 nil。
+    func tiledTargetFrame(for windowElement: AXUIElement, pid: pid_t?, edgeMargin: CGFloat) -> CGRect? {
+        guard
+            let currentPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
+            let windowSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        else {
+            return nil
+        }
+        let primaryTopY = primaryScreenTopY()
+        // 优先 CG 信号（需 pid 以匹配 CGWindowList 的 ownerPID），回退 AX 推断；与平铺路径一致。
+        if let pid {
+            if let cgContext = detectWindowContextUsingCG(
+                windowElement: windowElement,
+                pid: pid,
+                rawPosition: currentPosition,
+                windowSize: windowSize,
+                primaryTopY: primaryTopY
+            ) {
+                let visibleFrame = effectiveVisibleFrame(for: cgContext.screen)
+                return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+            }
+        }
+        guard let context = detectWindowContext(
+            rawPosition: currentPosition,
+            windowSize: windowSize,
+            pid: pid,
+            primaryTopY: primaryTopY
+        ) else { return nil }
+        let visibleFrame = effectiveVisibleFrame(for: context.screen)
+        return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+    }
+
+
     /// 解算居中目标（坐标空间探测 + 居中原点 + AX 原点）。非动画与动画路径共用。
     private func resolveCenterTarget(windowElement: AXUIElement, pid: pid_t?) -> CenterTarget? {
         guard
@@ -673,12 +740,7 @@ final class WindowCenteringService {
     }
 
     private func windowElements(for appElement: AXUIElement) -> [AXUIElement] {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value)
-        guard result == .success else {
-            return []
-        }
-        return (value as? [AXUIElement]) ?? []
+        appElement.axWindowElements(kAXWindowsAttribute as CFString)
     }
 
     private func isApplicationInFullscreen(_ appElement: AXUIElement) -> Bool {
@@ -707,55 +769,16 @@ final class WindowCenteringService {
     }
 
     private func windowAttribute(_ attribute: CFString, on element: AXUIElement) -> AXUIElement? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        guard result == .success, let value else {
-            return nil
-        }
-        guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
-            return nil
-        }
-        return unsafeDowncast(value, to: AXUIElement.self)
+        // 委托给共享 AXAttributeAccess 扩展（带 CFGetTypeID 防御，行为与旧实现一致）。
+        element.axWindowElement(attribute)
     }
 
     private func pointAttribute(_ attribute: CFString, on element: AXUIElement) -> CGPoint? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value else {
-            return nil
-        }
-        guard CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-        let axValue = unsafeDowncast(value, to: AXValue.self)
-
-        var point = CGPoint.zero
-        guard AXValueGetValue(axValue, .cgPoint, &point) else {
-            return nil
-        }
-        return point
+        element.axPoint(attribute)
     }
 
     private func sizeAttribute(_ attribute: CFString, on element: AXUIElement) -> CGSize? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value else {
-            return nil
-        }
-        guard CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-        let axValue = unsafeDowncast(value, to: AXValue.self)
-
-        var size = CGSize.zero
-        guard AXValueGetValue(axValue, .cgSize, &size) else {
-            return nil
-        }
-        return size
+        element.axSize(attribute)
     }
 
     private func setPointAttribute(_ attribute: CFString, value: CGPoint, on element: AXUIElement) -> Bool {
@@ -783,14 +806,7 @@ final class WindowCenteringService {
     }
 
     private func boolAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else {
-            return nil
-        }
-        return CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self))
+        element.axBool(attribute)
     }
 
     private func isFullscreenWindow(_ windowElement: AXUIElement) -> Bool {
@@ -1032,18 +1048,8 @@ final class WindowCenteringService {
     }
 
     private func windowIDAttribute(on window: AXUIElement) -> CGWindowID? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, "AXWindowNumber" as CFString, &value) == .success else {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == CFNumberGetTypeID() else {
-            return nil
-        }
-        var n: Int32 = 0
-        guard CFNumberGetValue(unsafeDowncast(value, to: CFNumber.self), .sInt32Type, &n) else {
-            return nil
-        }
-        if n <= 0 { return nil }
+        // AXWindowNumber 为 CFNumber；通过共享扩展读取 Int32，再转 CGWindowID。
+        guard let n = window.axInt32("AXWindowNumber" as CFString), n > 0 else { return nil }
         return CGWindowID(n)
     }
 

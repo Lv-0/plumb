@@ -2,6 +2,28 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - WindowAnimator
+//
+// 模块角色：窗口动画驱动器。
+//
+// 职责：
+//   - 在主线程上以高频（默认 120Hz）反复写入窗口的 AXPosition/AXSize，把跨进程窗口
+//     从一个 frame 插值到另一个 frame，模拟出 macOS 本地无法跨进程提供的丝滑动画。
+//   - 提供两条驱动路径：
+//       `animate`        —— 起点→终点的单段插值（居中动画使用）；
+//       `animateCustom`  —— 每帧由调用方重新计算目标 rect（平铺"从中心对称扩大"使用）。
+//   - 动画过程中读取窗口真实位置；若连续多帧偏离写入位置超过阈值（jumpAbort），
+//     判定为"用户在拖动窗口"并中止，把控制权交还用户。
+//
+// 不变量 / 关键约定：
+//   - 所有帧坐标都四舍五入到整数像素（AX 写整数更稳，且与几何测试一致）。
+//   - 返回的 DispatchSourceTimer 由调用方持有；切换 app 时调用方负责 cancel()，
+//     使窗口停在最后一帧已写入位置（不回弹、不再写）。
+//   - 纯数学部分（easeInOut / spring / interpolatedRect / sampleCount）无 AppKit 依赖，
+//     被 WindowAnimatorTests 单测覆盖。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 基于高频定时器的窗口动画驱动器。
 ///
 /// macOS 上无法用 `NSAnimationContext` 动画化其他 App 的窗口，故通过在主线程上以高频率
@@ -97,7 +119,6 @@ enum WindowAnimator {
 
         let intervalNanos: Int = 1_000_000_000 / tickHz
         let tickCount = sampleCount(duration: duration)
-        let stepDuration = duration / TimeInterval(tickCount)
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .nanoseconds(intervalNanos))
@@ -163,8 +184,6 @@ enum WindowAnimator {
             if writer(frame) {
                 lastWritten = frame
             }
-
-            _ = stepDuration // 仅保留语义，未使用以避免抖动修正。
         }
 
         timer.resume()
