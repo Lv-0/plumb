@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// 瘦身后的设置窗口壳：只负责 NSWindow 与 NSHostingController 承载 SwiftUI 内容。
-/// Liquid Glass 由 SwiftUI 视图自身（NavigationSplitView 侧边栏）+ 窗口透明材质实现。
+/// 设置窗口壳：NSWindow + NSGlassEffectView 背景 + NSHostingController 承载 SwiftUI 内容。
+/// 窗口整体（含边缘）呈现 Liquid Glass 材质；SwiftUI 内容透明叠加其上。
 @MainActor
 final class SettingsWindowController: NSWindowController {
 
@@ -13,7 +13,7 @@ final class SettingsWindowController: NSWindowController {
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 880, height: 600),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .borderless],
             backing: .buffered,
             defer: false
         )
@@ -23,9 +23,42 @@ final class SettingsWindowController: NSWindowController {
         window.backgroundColor = .clear
         window.minSize = NSSize(width: 760, height: 520)
         window.isOpaque = false
+        window.hasShadow = true
+        window.isMovableByWindowBackground = true
         window.center()
 
+        guard let contentView = window.contentView else { super.init(window: window); return }
+
+        // 整窗 Liquid Glass 背景：macOS 26 的 NSGlassEffectView（若不可用则回退 NSVisualEffectView）。
+        let glassBackground: NSView = {
+            if #available(macOS 26.0, *) {
+                let v = NSGlassEffectView(frame: .zero)
+                // 给玻璃层一个柔和的底色，使其读起来是“磨砂玻璃”而非近乎全透明。
+                v.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
+                return v
+            } else {
+                let v = NSVisualEffectView(frame: .zero)
+                v.material = .hudWindow
+                v.blendingMode = .behindWindow
+                v.state = .active
+                return v
+            }
+        }()
+        glassBackground.translatesAutoresizingMaskIntoConstraints = false
+        glassBackground.wantsLayer = true
+        glassBackground.layer?.cornerRadius = 16
+        contentView.addSubview(glassBackground, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            glassBackground.topAnchor.constraint(equalTo: contentView.topAnchor),
+            glassBackground.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            glassBackground.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            glassBackground.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+        ])
+
+        // SwiftUI 内容透明叠加在玻璃背景之上。
         let hosting = NSHostingController(rootView: SettingsView(store: store))
+        hosting.view.wantsLayer = true
+        hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
         window.contentViewController = hosting
 
         super.init(window: window)
@@ -53,5 +86,11 @@ final class SettingsWindowController: NSWindowController {
             })
         }
         NSApp.activate(ignoringOtherApps: true)
+
+        // 通知设置视图：窗口已显示。
+        // 原因：本控制器被 AppDelegate 缓存为单例，每次"打开设置"复用同一个 SettingsView，
+        // 其 `.task` 仅在首次出现时执行一次 → 再次打开不会重新扫描已安装应用，
+        // 导致新安装的应用在退出 App 前不可见。视图收到本通知后会重新拉取应用列表。
+        NotificationCenter.default.post(name: SettingsWindowNotifications.windowDidShow, object: nil)
     }
 }
