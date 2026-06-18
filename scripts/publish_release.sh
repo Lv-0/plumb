@@ -50,13 +50,14 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.1
+## v1.0.2
 
-### 🐛 修复
-- **设置-应用搜索过滤失效**：输入关键字（如 "a"、"app"）不再过滤的根因是搜索谓词错误地按 bundle id 匹配——反向域名前缀（`com.apple.*`）几乎总含常见字母，导致几乎所有应用都被保留。现改为**仅按应用显示名过滤**，输入即可精确筛选。
+### ✨ 改进
+- **设置窗口液态玻璃**：设置窗口现呈现真正的 macOS 26 Liquid Glass（折射 + 边缘 lensing 高光），而非此前的毛玻璃/灰板观感。
+- 根因修复：Plumb 为菜单栏 accessory 应用，其窗口默认无法成为 key window，导致 `NSGlassEffectView` 渲染成非激活态（不透明）。现打开设置时临时切到 `.regular` 激活策略并 `makeKeyAndOrderFront`，激活玻璃折射。
 
 ### ℹ️ 说明
-- 纯 bugfix 版本，无其他功能/行为变更。
+- 需 macOS 26+。在彩色/有图案壁纸上液态玻璃效果最明显（深色纯色壁纸上玻璃质感会偏弱，这是 Liquid Glass 的固有特性）。
 EOF
 )
 

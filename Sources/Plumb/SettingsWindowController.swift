@@ -125,6 +125,8 @@ final class SettingsWindowController: NSWindowController {
         // 而 NSGlassEffectView 只有在“key 且 active”的窗口里才会渲染折射（晶莹液态玻璃），
         // 否则退化成不透明灰板。因此显示设置窗口时临时切到 .regular，让窗口能真正成为 key/active，
         // 使液态玻璃激活。NSGlassPanel 已覆写 canBecomeKey/canBecomeMain 配合。
+        // 窗口关闭时会在 windowWillClose(_:) 切回 .accessory，避免 Plumb 图标长期驻留 Dock。
+        window?.delegate = self
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -134,6 +136,15 @@ final class SettingsWindowController: NSWindowController {
         // 其 `.task` 仅在首次出现时执行一次 → 再次打开不会重新扫描已安装应用，
         // 导致新安装的应用在退出 App 前不可见。视图收到本通知后会重新拉取应用列表。
         NotificationCenter.default.post(name: SettingsWindowNotifications.windowDidShow, object: nil)
+    }
+}
+
+extension SettingsWindowController: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        // 切回 .accessory：showWindow 里临时切到 .regular 激活了液态玻璃折射，
+        // 但 .regular 会让 Plumb 在 Dock 显示图标。窗口关闭后必须切回 accessory，
+        // 否则 Dock 会长期驻留 Plumb 图标，破坏“纯菜单栏应用”的定位。
+        NSApp.setActivationPolicy(.accessory)
     }
 }
 
