@@ -31,18 +31,11 @@ struct AppListSection: View {
 
     /// 过滤 + 排序：选中的排前面，再按名称字母序；叠加搜索过滤。
     private var sortedFilteredApps: [InstalledAppInfo] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return apps
-            .filter { app in
-                if q.isEmpty { return true }
-                return app.name.lowercased().contains(q) || app.bundleID.contains(q)
-            }
-            .sorted { a, b in
-                let aOn = selected.contains(a.bundleID)
-                let bOn = selected.contains(b.bundleID)
-                if aOn != bOn { return aOn && !bOn }
-                return a.name.localizedLowercase < b.name.localizedLowercase
-            }
+        AppListFilter.filterAndSort(
+            apps: apps,
+            query: query,
+            selected: selected
+        )
     }
 
     var body: some View {
@@ -118,6 +111,41 @@ struct AppListSection: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
+    }
+}
+
+/// 应用列表搜索过滤 + 排序的纯函数命名空间（无 MainActor 隔离，便于单测）。
+///
+/// 过滤策略：**仅按显示名匹配**。
+///
+/// 回归历史（为何不碰 bundle id）：
+///   1. 最初 `app.bundleID.contains(q)` —— 反向域名前缀（`com.apple.` 等）几乎总含
+///      常见字母，输入 "a" 几乎所有 Apple 应用都命中（bug：搜索 a 不过滤）。
+///   2. 改成只比 bundle id 最后一段 —— 仍有漏洞：`com.mowglii.ItsycalApp`→`itsycalapp`、
+///      `net.whatsapp.WhatsApp`→`whatsapp`，最后一段本身常含 "app" 等通用词，输入 "app"
+///      会把名字里没有 app 的 Itsycal/WhatsApp 也带出来（bug：搜 app 出现 Itsycal）。
+///
+/// 对菜单栏居中/平铺工具而言，用户认知里只有"应用名"，bundle id 是内部标识。按 bundle id
+/// 搜索对终端用户没有实际价值，反而持续制造"看似没过滤干净"的困惑。故彻底只按显示名过滤，
+/// 简单、可测、符合用户心智。
+enum AppListFilter {
+    static func filterAndSort(
+        apps: [InstalledAppInfo],
+        query: String,
+        selected: Set<String>
+    ) -> [InstalledAppInfo] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return apps
+            .filter { app in
+                if q.isEmpty { return true }
+                return app.name.lowercased().contains(q)
+            }
+            .sorted { a, b in
+                let aOn = selected.contains(a.bundleID)
+                let bOn = selected.contains(b.bundleID)
+                if aOn != bOn { return aOn && !bOn }
+                return a.name.localizedLowercase < b.name.localizedLowercase
+            }
     }
 }
 
