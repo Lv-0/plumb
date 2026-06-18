@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="centerWindows"
-BUNDLE_ID="${BUNDLE_ID:-com.comet.centerwindows}"
+APP_NAME="Plumb"
+BUNDLE_ID="${BUNDLE_ID:-com.comet.plumb}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_DIR=".build/release"
 DIST_DIR="dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
-BINARY_PATH="${BUILD_DIR}/centerWindows"
+BINARY_PATH="${BUILD_DIR}/Plumb"
 ICON_BUILD_DIR=".build/icons"
 APP_ICON="${ICON_BUILD_DIR}/AppIcon.icns"
 STATUS_ICON="${ICON_BUILD_DIR}/StatusIconTemplate.png"
@@ -69,4 +69,12 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
 EOF
 
 echo "APPL????" > "${APP_DIR}/Contents/PkgInfo"
+
+# The release binary carries an ad-hoc linker signature that predates the bundle resources
+# (icons, Info.plist). Without re-signing after resources are in place, the resource seal is
+# broken and codesign --verify fails — which can surface as a "damaged" app on a clean Mac.
+# Re-sign the whole bundle ad-hoc so the resource directory is properly sealed.
+# (Distribution builds replace this with a Developer ID signature via sign_and_notarize.sh.)
+codesign --force --deep --sign - "${APP_DIR}" >/dev/null
+
 echo "[4/4] 完成: ${APP_DIR}"

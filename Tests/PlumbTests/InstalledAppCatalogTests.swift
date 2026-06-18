@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import centerWindows
+@testable import Plumb
 
 /// 验证 `InstalledAppCatalog.loadInstalledApps()` 的"可重复调用、无内部缓存"契约。
 ///

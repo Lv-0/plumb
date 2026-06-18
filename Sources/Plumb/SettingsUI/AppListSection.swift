@@ -1,0 +1,125 @@
+import SwiftUI
+
+/// 居中/平铺段共用的“应用列表”：搜索框 + 药丸开关行，选中的应用排在前面。
+struct AppListSection: View {
+    let footnote: String
+    @Binding var selected: Set<String>
+    let apps: [InstalledAppInfo]
+
+    @State private var query: String = ""
+    /// 搜索框焦点：显式 @FocusState。用于：
+    ///   (a) 切换到该段时自动聚焦搜索框，用户可直接打字（UX 改进）；
+    ///   (b) 确保搜索框的焦点生命周期由 SwiftUI 管理，不受外层玻璃/容器影响；
+    ///   (c) 提供 selftest 可观测的"焦点可达"信号（确认 allowsHitTesting(false) 修复有效）。
+    @FocusState private var searchFocused: Bool
+
+    /// 过滤 + 排序：选中的排前面，再按名称字母序；叠加搜索过滤。
+    private var sortedFilteredApps: [InstalledAppInfo] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return apps
+            .filter { app in
+                if q.isEmpty { return true }
+                return app.name.lowercased().contains(q) || app.bundleID.contains(q)
+            }
+            .sorted { a, b in
+                let aOn = selected.contains(a.bundleID)
+                let bOn = selected.contains(b.bundleID)
+                if aOn != bOn { return aOn && !bOn }
+                return a.name.localizedLowercase < b.name.localizedLowercase
+            }
+    }
+
+    var body: some View {
+        contentView
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 内容（不含 ScrollView）—— 供居中段直接使用；平铺段会放进它自己的 ScrollView。
+    var contentView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(footnote)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            // 搜索框：Liquid Glass 仅作为 ZStack 底层（.allowsHitTesting(false)），
+            // 文本框在最上层独立捕获点击/焦点。
+            // 此前用 .glassEffect().interactive 直接包裹 TextField 导致无法聚焦；
+            // 改用显式 ZStack + allowsHitTesting(false) 彻底排除玻璃层参与命中测试，
+            // 保证 TextField 一定能获得焦点。
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.clear)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .allowsHitTesting(false)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("搜索应用", text: $query)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .focused($searchFocused)
+                    if !query.isEmpty {
+                        Button {
+                            query = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .frame(height: 40)
+            .onAppear {
+                // 自动聚焦搜索框：用户切换到该段即可直接打字筛选。
+                // 延后到下一 runloop，确保布局完成后再请求焦点，提高可靠性。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    searchFocused = true
+                }
+            }
+
+            // 应用列表：选中在前 —— 切换开关时平滑重排。
+            LazyVStack(spacing: 2) {
+                ForEach(sortedFilteredApps, id: \.bundleID) { app in
+                    AppListRow(app: app, isOn: Binding(
+                        get: { selected.contains(app.bundleID) },
+                        set: { on in
+                            if on { selected.insert(app.bundleID) }
+                            else { selected.remove(app.bundleID) }
+                            // 触发排序动画
+                            withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
+                        }
+                    ))
+                }
+            }
+            .padding(8)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .animation(.spring(duration: 0.35, bounce: 0.15), value: selected)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+    }
+}
+
+/// 居中段的滚动容器包装。
+/// 关键修复：此前使用 `AppListSection(...).contentView`（计算属性间接访问），
+/// 这会破坏 SwiftUI 的视图标识，导致 @FocusState/@State 绑定失效 → 搜索框无法聚焦。
+/// 平铺段（TilingSection）直接使用 `AppListSection(...)`（走 body）则正常。
+/// 现统一为直接使用 body，与平铺段一致。
+struct CenteringSection: View {
+    let footnote: String
+    @Binding var selected: Set<String>
+    let apps: [InstalledAppInfo]
+
+    var body: some View {
+        ScrollView {
+            AppListSection(footnote: footnote, selected: $selected, apps: apps)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollContentBackground(.hidden)
+    }
+}

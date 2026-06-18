@@ -8,7 +8,7 @@ import ApplicationServices
 /// This isolates the geometry (requirement 3's core) from the AX-write concern
 /// (which needs a trusted GUI session this environment lacks).
 ///
-/// Trigger: `defaults write com.comet.centerwindows selftestGeo -bool true` then `open`.
+/// Trigger: `defaults write com.comet.plumb selftestGeo -bool true` then `open`.
 
 @MainActor
 final class SelfTestGeometryDelegate: NSObject, NSApplicationDelegate {

@@ -14,6 +14,13 @@ enum WindowAnimator {
     static let tickHz: Int = 120
     /// 判定窗口"被用户挪走"的像素阈值。
     static let jumpAbortThreshold: CGFloat = 40
+    /// 连续多少个 tick 读回位置都偏离写入位置超过阈值，才认定为"用户拖动"。
+    /// macOS 在 app 刚激活时会短暂地自行移动/弹动窗口（激活动画、聚焦调整），这会
+    /// 产生瞬时的大 Δ；若仅凭单帧就中止，会把"系统弹动"误判为"用户拖动"，导致自动
+    /// 居中刚启动就被掐断、窗口永远到不了中心（需求："切换到 Music 后 Music 不居中"的根因）。
+    /// 真正的用户拖动会持续整个动画过程，因此要求"连续多帧"才中止既不误伤系统弹动，
+    /// 又仍能在真实拖动时及时让出控制权。
+    static let jumpAbortConsecutiveTicks: Int = 4
 
     // MARK: - 纯数学（便于单元测试）
 
@@ -67,7 +74,12 @@ enum WindowAnimator {
     ///
     /// - `writer`: 将给定 rect 写入窗口（origin+size），返回是否成功。
     /// - `reader`: 读取窗口当前真实 rect；若与上次写入位置偏离超过阈值则中止。
-    /// - `completion`: 动画正常结束或中止时都会调用（主线程）。
+    /// - `completion`: 动画正常结束或被外部取消时都会调用（主线程）。
+    ///
+    /// 返回底层 `DispatchSourceTimer`，调用方可持有并在切换 app 等场景下 `cancel()` 以立即
+    /// 中止动画（窗口停在最后一帧已写入的位置，不回弹、不再写）。返回 nil 表示因 duration<=0
+    /// 未启动定时器（已同步写完最终帧）。
+    @discardableResult
     static func animate(
         from startFrame: CGRect,
         to endFrame: CGRect,
@@ -76,11 +88,11 @@ enum WindowAnimator {
         writer: @escaping FrameWriter,
         reader: @escaping CurrentReader,
         completion: Completion? = nil
-    ) {
+    ) -> DispatchSourceTimer? {
         guard duration > 0 else {
             _ = writer(endFrame)
             completion?()
-            return
+            return nil
         }
 
         let intervalNanos: Int = 1_000_000_000 / tickHz
@@ -94,6 +106,11 @@ enum WindowAnimator {
         var index = 0
         var lastWritten: CGRect? = startFrame
         var finished = false
+        // 连续偏离计数：只有连续多帧读回位置都偏离写入位置超过阈值，才中止。
+        // 初始为 0；每帧若偏离大则 +1，否则归 0；达到 jumpAbortConsecutiveTicks 才中止。
+        // 关键：初始几帧不参与判定（启动宽限），避免把"系统激活动画把窗口从起始位置弹开"
+        // 误判为用户拖动。前若干帧只写不判，等我们自己写入的位置稳定后再开始监控漂移。
+        var consecutiveDrift = 0
 
         timer.setEventHandler {
             // 完成态：写最终帧并停止。
@@ -121,17 +138,25 @@ enum WindowAnimator {
             )
 
             // 检测用户是否在动画过程中拖动了窗口。
-            if let lastWritten, let current = reader() {
+            // 仅在我们已经写入过至少一帧之后才监控（index > 1 表示已写过 frame[0]），
+            // 且要求连续 jumpAbortConsecutiveTicks 帧都偏离——过滤掉 macOS 激活动画造成的
+            // 瞬时弹动（单帧大 Δ 不再误判中止，见 jumpAbortConsecutiveTicks 注释）。
+            if index > 1, let lastWritten, let current = reader() {
                 let dx = abs(current.midX - lastWritten.midX)
                 let dy = abs(current.midY - lastWritten.midY)
                 if dx > jumpAbortThreshold || dy > jumpAbortThreshold {
-                    if !finished {
-                        finished = true
-                        timer.cancel()
-                        DiagnosticLog.debug("animator: aborted (user moved window dx=\(dx) dy=\(dy))")
-                        completion?()
+                    consecutiveDrift += 1
+                    if consecutiveDrift >= jumpAbortConsecutiveTicks {
+                        if !finished {
+                            finished = true
+                            timer.cancel()
+                            DiagnosticLog.debug("animator: aborted (user moved window sustained dx=\(dx) dy=\(dy) ticks=\(consecutiveDrift))")
+                            completion?()
+                        }
+                        return
                     }
-                    return
+                } else {
+                    consecutiveDrift = 0
                 }
             }
 
@@ -143,21 +168,27 @@ enum WindowAnimator {
         }
 
         timer.resume()
+        return timer
     }
 
     /// 分帧驱动：每个进度步调用一次 `frameForProgress` 计算目标 rect 再写入。
     /// 适用于 Phase B 这类"每帧重新居中"的场景。
+    ///
+    /// 返回底层 `DispatchSourceTimer`，调用方可持有并在切换 app 等场景下 `cancel()` 以立即
+    /// 中止动画（窗口停在最后一帧已写入的位置，不回弹、不再写）。返回 nil 表示因 duration<=0
+    /// 未启动定时器（已同步写完最终帧）。
+    @discardableResult
     static func animateCustom(
         duration: TimeInterval = defaultDuration,
         frameForProgress: @escaping (CGFloat) -> CGRect,
         writer: @escaping FrameWriter,
         reader: @escaping CurrentReader,
         completion: Completion? = nil
-    ) {
+    ) -> DispatchSourceTimer? {
         guard duration > 0 else {
             _ = writer(frameForProgress(1).rounded())
             completion?()
-            return
+            return nil
         }
 
         let intervalNanos: Int = 1_000_000_000 / tickHz
@@ -186,11 +217,6 @@ enum WindowAnimator {
 
             let frame = frameForProgress(easeInOut(progress)).rounded()
 
-            // Phase B（每帧重新居中 + 改尺寸）会"主动"改变 origin 和 size，
-            // 因此无法可靠地用 reader() 区分"用户干预"与"我们自己的写入"——
-            // 许多 App 在被 set kAXSize 后会以约束/弹性回弹，读回的 size 与写入值有几
-            // 十像素差异，若据此中止会让平铺放大动画瞬间夭折。
-            // 这里仅在 writer 写入失败时中止（窗口不可动），不再因读回差异中止。
             if !writer(frame) {
                 if !finished {
                     finished = true
@@ -204,6 +230,7 @@ enum WindowAnimator {
         }
 
         timer.resume()
+        return timer
     }
 }
 

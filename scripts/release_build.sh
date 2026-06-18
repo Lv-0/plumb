@@ -11,6 +11,6 @@ echo "[3/4] Sign + notarize release artifact"
 scripts/sign_and_notarize.sh
 
 echo "[4/4] Verify notarized dmg"
-spctl --assess --type open --context context:primary-signature --verbose=4 dist/centerWindows.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 dist/Plumb.dmg
 
-echo "Release artifact ready: dist/centerWindows.dmg"
+echo "Release artifact ready: dist/Plumb.dmg"

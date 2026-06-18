@@ -1,8 +1,8 @@
-# centerWindows
+# Plumb
 
 English | [简体中文](./README.md)
 
-`centerWindows` is a macOS menu bar window manager. It centers the frontmost window when launched, and supports optional auto-center detection with a configurable interval.
+`Plumb` is a macOS menu bar window manager with both auto-center and per-app auto-tiling.
 
 ## Features
 
@@ -10,7 +10,21 @@ English | [简体中文](./README.md)
 - Center once when a new window is created / focused again after being closed
 - Moving a window will not trigger re-centering
 - Center inside usable screen area excluding Dock and menu bar (`screen.frame - screen.visibleFrame`)
+- Per-app auto-tiling (allowlist) with configurable uniform margins
 - Auto-generated app icon and menu bar icon
+
+## Auto-Tiling (Selected Apps)
+
+- Open `Tiling Settings…` from the menu bar to enable/disable this feature
+- Configure a single uniform edge margin (px)
+- Select allowlisted apps from installed applications (system apps hidden by default, toggleable)
+- For allowlisted apps, tiling has priority over auto-centering
+- Trigger scope is once per process startup (PID); no repeated tiling in the same process
+- If a window cannot be resized, it is skipped
+
+Semantics are inspired by Amethyst configuration concepts:
+- `window-margin-size`: equivalent to tiling margin in this project
+- `floating + floating-is-blacklist=false`: equivalent to allowlisted auto-tiling here
 
 ## Requirements
 
@@ -22,7 +36,7 @@ English | [简体中文](./README.md)
 ```bash
 swift test
 swift build -c release
-./.build/release/centerWindows
+./.build/release/Plumb
 ```
 
 ## Package
@@ -34,15 +48,15 @@ scripts/create_dmg.sh
 
 Outputs:
 
-- `dist/centerWindows.app`
-- `dist/centerWindows.dmg`
+- `dist/Plumb.app`
+- `dist/Plumb.dmg`
 
 The DMG includes:
 
-- `centerWindows.app`
+- `Plumb.app`
 - `Applications` (shortcut to system Applications folder)
 
-Install by dragging `centerWindows.app` into `Applications`.
+Install by dragging `Plumb.app` into `Applications`.
 
 ## Sign and notarize (Developer ID)
 
@@ -64,13 +78,13 @@ Note: Unsigned/unnotarized DMG files can be blocked on a new Mac and may show as
 
 ## Installation Guidelines
 
-1. Open the DMG and drag `centerWindows.app` into `Applications`.
-2. In `Applications`, right-click `centerWindows.app` -> `Open` -> click `Open` again.
+1. Open the DMG and drag `Plumb.app` into `Applications`.
+2. In `Applications`, right-click `Plumb.app` -> `Open` -> click `Open` again.
 3. If blocked, go to `System Settings -> Privacy & Security` and click “Open Anyway”.
 4. If still blocked, run:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/centerWindows.app
+xattr -dr com.apple.quarantine /Applications/Plumb.app
 ```
 
 This is a normal Gatekeeper flow for unnotarized apps, not a corruption of app code.
@@ -80,17 +94,17 @@ This is a normal Gatekeeper flow for unnotarized apps, not a corruption of app c
 ### Accessibility
 
 - Path: `System Settings -> Privacy & Security -> Accessibility`
-- Why required:  
+- Why required:
   The app uses macOS Accessibility APIs to read the frontmost window's frame and set a new position for centering.
-- Without it:  
+- Without it:
   The app cannot read window geometry or move windows, so centering will not work.
 
 ### Screen Recording
 
 - Path: `System Settings -> Privacy & Security -> Screen Recording`
-- Why required:  
+- Why required:
   The app needs full screen context to reliably compute usable display bounds and avoid Dock/menu bar while centering.
-- Without it:  
+- Without it:
   Screen-context-dependent centering can become unstable on multi-display or complex layouts.
 
 ### Permission boundary

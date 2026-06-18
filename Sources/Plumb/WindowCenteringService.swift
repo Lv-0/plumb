@@ -74,8 +74,32 @@ final class WindowCenteringService {
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
 
+    /// 进行中的动画定时器句柄（Phase-A 由 WindowAnimator 返回；Phase-B 平铺推进由本类持有）。
+    /// 切换 app 时通过 `abortActiveAnimations()` 全部取消，避免 zombie 定时器在后台继续
+    /// 移动已非前台 app 的窗口（"切走后 Safari 跑到另一个屏幕"的根因）。
+    private var activeAnimatorTimers: [DispatchSourceTimer] = []
+    /// 平铺 Phase-B 的分步推进定时器（独立追踪，因其不在 WindowAnimator 体系内）。
+    private var activeTileTimer: DispatchSourceTimer?
+
     /// 是否有任意窗口动画正在进行中（供观察者决定是否需要重试）。
     var isAnyAnimationInProgress: Bool { activeAnimationKey != nil }
+
+    /// 切换 app / 手动中止时调用：立即停止所有进行中的动画，窗口停在最后一帧已写入的位置
+    ///（不回弹、不再写）。消除 zombie 定时器在非前台时继续移动窗口的缺陷。
+    func abortActiveAnimations() {
+        let hadActive = activeAnimationKey != nil || !activeAnimatorTimers.isEmpty || activeTileTimer != nil
+        activeTileTimer?.cancel()
+        activeTileTimer = nil
+        for timer in activeAnimatorTimers {
+            timer.cancel()
+        }
+        activeAnimatorTimers.removeAll()
+        // 清空锁，确保后续动画能正常启动（被 cancel 的定时器不会触发其 completion，故主动清空）。
+        activeAnimationKey = nil
+        if hadActive {
+            DiagnosticLog.debug("abortActiveAnimations: stopped all in-flight animations")
+        }
+    }
 
     func centerFrontmostWindow(selectionPolicy: WindowSelectionPolicy = .focusedOrAnyNonFullscreen) throws {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else {
@@ -224,7 +248,10 @@ final class WindowCenteringService {
         }
         activeAnimationKey = animKey
 
-        WindowAnimator.animate(
+        // 用 box 持有定时器引用：completion 闭包需要引用它，但它本身是 animate 的返回值，
+        // 不能在声明前被同一作用域的闭包捕获。声明在前、赋值在后即可。
+        var animatorTimerBox: DispatchSourceTimer?
+        animatorTimerBox = WindowAnimator.animate(
             from: CGRect(origin: startOrigin, size: windowSize),
             to: CGRect(origin: endOrigin, size: windowSize),
             easing: WindowAnimator.spring,
@@ -247,10 +274,17 @@ final class WindowCenteringService {
                 if self?.activeAnimationKey == animKey {
                     self?.activeAnimationKey = nil
                 }
+                // 正常完成后从追踪列表移除（已 cancel，保留也无害，但避免堆积）。
+                if let timer = animatorTimerBox {
+                    self?.activeAnimatorTimers.removeAll { $0 === timer }
+                }
                 DiagnosticLog.debug("center-animator: finished pid=\(pid.map(String.init) ?? "?")")
                 completion?()
             }
         )
+        if let animatorTimer = animatorTimerBox {
+            activeAnimatorTimers.append(animatorTimer)
+        }
     }
 
     func tileWindowElement(_ windowElement: AXUIElement, pid: pid_t? = nil, appElement: AXUIElement? = nil, edgeMargin: CGFloat) throws {
@@ -390,7 +424,7 @@ final class WindowCenteringService {
 
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
-
+        DiagnosticLog.debug("tile-animator: detect pid=\(pid.map(String.init) ?? "?") rawPos=\(currentPosition) size=\(windowSize) visibleFrame=\(visibleFrame) space=\(context.space) targetFrame=\(targetFrame)")
         // 防止同一窗口叠加动画 / 重试重叠。
         let animKey = animationKey(for: windowElement, pid: pid, kind: "tile")
         if activeAnimationKey == animKey {
@@ -410,9 +444,12 @@ final class WindowCenteringService {
         }
 
         let finishActive = { [weak self] in
-            if self?.activeAnimationKey == animKey {
-                self?.activeAnimationKey = nil
+            guard let self else { return }
+            if self.activeAnimationKey == animKey {
+                self.activeAnimationKey = nil
             }
+            // 正常完成后清空 Phase-B 定时器追踪（已 cancel）。
+            self.activeTileTimer = nil
         }
 
         // === 阶段 A：以当前尺寸居中（仅移动） ===
@@ -431,6 +468,7 @@ final class WindowCenteringService {
         // 阶段 B 的尺寸能否写入（即窗口是否可调整大小）。
         let canResize = isResizable(windowElement)
 
+
         // 若既已居中又不可调整大小，则无需动画。
         if alreadyCentered, !canResize {
             finishActive()
@@ -447,50 +485,84 @@ final class WindowCenteringService {
                 return
             }
 
-            // 阶段 B：尺寸从当前线性/ease 插值到平铺尺寸，且每帧重新居中。
-            // 先探测可用坐标空间（与 tileWindowElement 一致：优先 context.space）。
-            let startSize = windowSize
+            // 阶段 B（架构变更，3+ 次 per-frame 尝试失败后的正确方案）：
+            // 高频 per-frame 写 size 会导致 app 每帧重新布局、把窗口"弹回"到一个
+            // 非目标位置，使 macOS 把尺寸 clamp 到"不溢出屏"的小值（"4 边铺不满"根因）。
+            // 实测有效方案：先把 position 移到最终平铺原点（一次写），给 app ~0.25s settle，
+            // 再分少量大步把尺寸插值到目标（每步之间也 settle），最后强制 pos+size 落地。
             let endSize = targetFrame.size
+            let targetAXOrigin = toAXOrigin(
+                bottomLeftOrigin: targetFrame.origin,
+                windowSize: endSize,
+                screenFrame: context.screen.frame,
+                space: context.space,
+                primaryTopY: primaryTopY
+            )
 
-            WindowAnimator.animateCustom(
-                frameForProgress: { [weak self] p in
-                    guard let self else { return CGRect(origin: centerAXOrigin, size: endSize) }
-                    let curW = startSize.width + (endSize.width - startSize.width) * p
-                    let curH = startSize.height + (endSize.height - startSize.height) * p
-                    let curSize = CGSize(width: curW, height: curH)
-                    // 每帧重新居中：窗口从中心对称向外扩大。
-                    let bl = WindowGeometry.centeredOrigin(windowSize: curSize, visibleFrame: visibleFrame)
-                    let origin = self.toAXOrigin(
-                        bottomLeftOrigin: bl,
-                        windowSize: curSize,
-                        screenFrame: context.screen.frame,
-                        space: context.space,
-                        primaryTopY: primaryTopY
-                    )
-                    return CGRect(origin: origin, size: curSize)
-                },
-                writer: { [weak self] frame in
-                    guard let self else { return false }
-                    // 同时写入尺寸与位置，保持居中。
-                    let sizeOK = self.setSizeAttribute(kAXSizeAttribute as CFString, value: frame.size, on: windowElement)
-                    _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement)
-                    if sizeOK { return true }
-                    // 许多 App（如 TextEdit）单独 set kAXSize 不生效，但 AXFrame（同时设 origin+size）可以。
-                    return self.setRectAttribute("AXFrame" as CFString, value: frame, on: windowElement)
-                },
-                reader: reader,
-                completion: {
-                    // 收尾：强制把窗口精确落到平铺目标。某些 App 在动画末帧会回弹尺寸，
-                    // 这里用 AXFrame 兜底写入 origin+size，确保最终是近铺满尺寸而非回弹的小尺寸。
-                    _ = self.setRectAttribute("AXFrame" as CFString, value: targetFrame, on: windowElement)
+            // 1) 先把窗口左下角移到平铺原点。
+            _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
+
+            // 2) 用 DispatchSource 定时器分步推进尺寸（每步 ~120ms settle），避免高频写触发 app 弹回。
+            //    从 startSize 线性到 endSize，分 6 步。
+            //    定时器存入 self.activeTileTimer 以便切换 app 时由 abortActiveAnimations() 取消；
+            //    此外每步开头有前台守卫（双保险），防止 zombie 定时器在非前台 app 上继续写窗口。
+            let steps = 6
+            let stepDelay: UInt64 = 120_000_000  // 0.12s
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            activeTileTimer = timer
+            var step = 0
+            timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(120))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari
+                // 被 zombie 定时器拉到另一屏"的关键防线（即便外部未调用 abort）。
+                if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                    timer.cancel()
+                    if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                    if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
+                    DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
+                    return
+                }
+                step += 1
+                if step >= steps {
+                    timer.cancel()
+                    if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                    // 最终强制 pos+size 落到目标。
+                    _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
+                    let sizeOK = self.setSizeAttribute(kAXSizeAttribute as CFString, value: endSize, on: windowElement)
                     if let pid {
                         _ = self.tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
                     }
+                    // 终端类 app（如 electerm）按字符行网格 snap，高度可能无法精确到目标。
+                    // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸在
+                    // visibleFrame 内重新居中，避免窗口顶部对齐而底部溢出/贴边。
+                    let actualSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+                    if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
+                        let recenteredBL = WindowGeometry.centeredOrigin(windowSize: actualSize, visibleFrame: visibleFrame)
+                        let recenteredAX = self.toAXOrigin(
+                            bottomLeftOrigin: recenteredBL,
+                            windowSize: actualSize,
+                            screenFrame: context.screen.frame,
+                            space: context.space,
+                            primaryTopY: primaryTopY
+                        )
+                        _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: recenteredAX, on: windowElement)
+                        DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); recentered to \(recenteredAX)")
+                    }
+                    let postSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+                    let postPos = self.pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
+                    DiagnosticLog.debug("tile-animator: phase B done pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) sizeOK=\(sizeOK) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
                     finishActive()
-                    DiagnosticLog.debug("tile-animator: phase B done pid=\(pid.map(String.init) ?? "?")")
                     completion?()
+                    return
                 }
-            )
+                let p = CGFloat(step) / CGFloat(steps)
+                let curW = windowSize.width + (endSize.width - windowSize.width) * p
+                let curH = windowSize.height + (endSize.height - windowSize.height) * p
+                let curSize = CGSize(width: curW, height: curH)
+                _ = self.setSizeAttribute(kAXSizeAttribute as CFString, value: curSize, on: windowElement)
+            }
+            timer.resume()
         }
 
         if alreadyCentered {
@@ -499,7 +571,8 @@ final class WindowCenteringService {
         }
 
         // 执行阶段 A，完成后进入阶段 B。
-        WindowAnimator.animate(
+        var phaseATimerBox: DispatchSourceTimer?
+        phaseATimerBox = WindowAnimator.animate(
             from: CGRect(origin: currentPosition, size: windowSize),
             to: CGRect(origin: centerAXOrigin, size: windowSize),
             writer: { [weak self] frame in
@@ -510,11 +583,18 @@ final class WindowCenteringService {
                 return self.setRectAttribute("AXFrame" as CFString, value: frame, on: windowElement)
             },
             reader: reader,
-            completion: {
+            completion: { [weak self] in
+                // Phase-A 正常完成：从追踪列表移除（已 cancel），随后进入 Phase-B。
+                if let timer = phaseATimerBox {
+                    self?.activeAnimatorTimers.removeAll { $0 === timer }
+                }
                 DiagnosticLog.debug("tile-animator: phase A done pid=\(pid.map(String.init) ?? "?")")
                 runPhaseB()
             }
         )
+        if let phaseATimer = phaseATimerBox {
+            activeAnimatorTimers.append(phaseATimer)
+        }
     }
 
     // MARK: - 共享解算 / 动画辅助
@@ -546,6 +626,7 @@ final class WindowCenteringService {
             space: context.space,
             primaryTopY: primaryTopY
         )
+        DiagnosticLog.debug("resolveCenterTarget: pid=\(pid.map(String.init) ?? "?") rawPos=\(currentPosition) size=\(windowSize) visibleFrame=\(visibleFrame) space=\(context.space) centeredBL=\(centeredBottomLeftOrigin) targetAX=\(targetAXOrigin)")
         return CenterTarget(
             context: context,
             visibleFrame: visibleFrame,
@@ -554,13 +635,24 @@ final class WindowCenteringService {
         )
     }
 
-    /// 是否可调整窗口大小（AXEnhancedUserInterface / AXManualAccessibility 不影响该属性）。
+    /// 是否可调整窗口大小。
+    /// 探测顺序：先试 kAXSizeAttribute（标准窗口都走这条）；若失败再试 AXFrame
+    /// （同时写 origin+size）。许多 Electron / Chromium 应用（如 Apifox）拒绝单独写
+    /// kAXSize 但接受 AXFrame —— 旧实现只试 kAXSize，导致这类应用被判为"不可调整大小"，
+    /// 平铺阶段 B 被跳过，窗口永远无法放大（用户反馈"平铺对 Apifox 无效"的根因之一）。
     private func isResizable(_ windowElement: AXUIElement) -> Bool {
-        // kAXSizeAttribute 可写即可调。最可靠的做法是：尝试写回当前尺寸看是否成功。
         guard let current = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement) else {
             return false
         }
-        return setSizeAttribute(kAXSizeAttribute as CFString, value: current, on: windowElement)
+        if setSizeAttribute(kAXSizeAttribute as CFString, value: current, on: windowElement) {
+            return true
+        }
+        // kAXSize 写不进：尝试用 AXFrame 写回当前 origin+size（需读 position）。
+        if let pos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement) {
+            let frame = CGRect(origin: pos, size: current)
+            return setRectAttribute("AXFrame" as CFString, value: frame, on: windowElement)
+        }
+        return false
     }
 
     /// 生成动画去重 key。
@@ -922,6 +1014,7 @@ final class WindowCenteringService {
             best = (space, globalRect, err)
         }
         guard let best else { return nil }
+        DiagnosticLog.debug("detectCG: pid=\(pid) cgRect=\(cgRect) cocoaRect=\(cocoaRect) pickedSpace=\(best.space) err=\(best.error)")
 
         if let id = displayID(for: screen) {
             cachedDisplayByPID[pid] = id

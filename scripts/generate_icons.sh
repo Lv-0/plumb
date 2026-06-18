@@ -59,75 +59,135 @@ func drawAppIcon(size: Int) throws -> CGImage {
     ctx.addPath(bgPath)
     ctx.clip()
 
-    // Vibrant diagonal gradient (indigo → blue → teal), Apple Design Award vibe.
-    let gradientColors: [CGColor] = [
-        color(0.36, 0.28, 0.92, 1.0),  // indigo
-        color(0.16, 0.52, 0.98, 1.0),  // blue
-        color(0.12, 0.74, 0.82, 1.0)   // teal
+    // Aurora gradient (deep violet → indigo → blue → teal → mint) — richer, award-medallion depth.
+    let aurora: [CGColor] = [
+        color(0.30, 0.10, 0.55, 1.0),  // deep violet
+        color(0.24, 0.26, 0.90, 1.0),  // indigo
+        color(0.13, 0.46, 0.97, 1.0),  // blue
+        color(0.10, 0.66, 0.85, 1.0),  // teal
+        color(0.18, 0.80, 0.62, 1.0)   // mint
     ]
-    let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: gradientColors as CFArray, locations: [0, 0.55, 1])!
-    ctx.drawLinearGradient(
-        gradient,
-        start: CGPoint(x: 0, y: s),
-        end: CGPoint(x: s, y: 0),
-        options: []
-    )
+    let auroraGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                colors: aurora as CFArray,
+                                locations: [0, 0.32, 0.6, 0.85, 1])!
+    ctx.drawLinearGradient(auroraGrad,
+                           start: CGPoint(x: 0, y: s),
+                           end: CGPoint(x: s, y: 0),
+                           options: [])
 
-    // Soft radial glow behind the window for depth.
-    let glowRect = CGRect(x: s * 0.18, y: s * 0.16, width: s * 0.64, height: s * 0.64)
-    let glowGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                              colors: [color(1, 1, 1, 0.35), color(1, 1, 1, 0)] as CFArray,
-                              locations: [0, 1])!
+    // Large soft radial bloom behind the mark for premium glow.
+    let bloomC = CGPoint(x: s * 0.5, y: s * 0.56)
+    let bloom = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                           colors: [color(0.62, 0.78, 1.0, 0.45),
+                                    color(0.40, 0.55, 1.0, 0.12),
+                                    color(0.30, 0.40, 1.0, 0)] as CFArray,
+                           locations: [0, 0.5, 1])!
     ctx.saveGState()
-    ctx.addEllipse(in: glowRect)
-    ctx.clip()
-    ctx.drawRadialGradient(glowGrad,
-                           startCenter: CGPoint(x: glowRect.midX, y: glowRect.midY), startRadius: 0,
-                           endCenter: CGPoint(x: glowRect.midX, y: glowRect.midY), endRadius: glowRect.width / 2,
+    ctx.drawRadialGradient(bloom,
+                           startCenter: bloomC, startRadius: 0,
+                           endCenter: bloomC, endRadius: s * 0.62,
                            options: [])
     ctx.restoreGState()
 
-    // Glass window card: frosted, rounded, with subtle inner highlight.
-    let winRect = CGRect(x: 230 * scale, y: 286 * scale, width: 564 * scale, height: 452 * scale)
-    let winPath = CGPath(roundedRect: winRect, cornerWidth: 96 * scale, cornerHeight: 96 * scale, transform: nil)
-
-    // Drop shadow under the card.
+    // Subtle vignette at the very corners for depth.
+    let vignette = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                              colors: [color(0, 0, 0, 0), color(0.02, 0.03, 0.12, 0.35)] as CFArray,
+                              locations: [0.55, 1])!
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -18 * scale), blur: 60 * scale, color: color(0.04, 0.10, 0.30, 0.45))
+    ctx.drawRadialGradient(vignette,
+                           startCenter: CGPoint(x: s/2, y: s/2), startRadius: s * 0.35,
+                           endCenter: CGPoint(x: s/2, y: s/2), endRadius: s * 0.75,
+                           options: [])
+    ctx.restoreGState()
+
+    // Glass window card: frosted, rounded, with strong top highlight + edge ring.
+    let winRect = CGRect(x: 232 * scale, y: 272 * scale, width: 560 * scale, height: 480 * scale)
+    let winPath = CGPath(roundedRect: winRect, cornerWidth: 104 * scale, cornerHeight: 104 * scale, transform: nil)
+
+    // Drop shadow under the card (award-medallion float).
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -26 * scale), blur: 78 * scale,
+                  color: color(0.02, 0.04, 0.22, 0.5))
     ctx.addPath(winPath)
-    ctx.setFillColor(color(1, 1, 1, 0.96))
+    ctx.setFillColor(color(1, 1, 1, 0.97))
     ctx.fillPath()
     ctx.restoreGState()
 
-    // Top highlight band on the card.
+    // Inner glass tint: faint cool wash.
     ctx.saveGState()
     ctx.addPath(winPath)
     ctx.clip()
-    let hiRect = CGRect(x: winRect.minX, y: winRect.maxY - 120 * scale, width: winRect.width, height: 120 * scale)
+    let glassWash = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                               colors: [color(0.94, 0.97, 1.0, 0.65), color(0.86, 0.91, 1.0, 0.25)] as CFArray,
+                               locations: [0, 1])!
+    ctx.drawLinearGradient(glassWash, start: CGPoint(x: 0, y: winRect.maxY), end: CGPoint(x: 0, y: winRect.minY), options: [])
+
+    // Top highlight band on the card.
+    let hiRect = CGRect(x: winRect.minX, y: winRect.maxY - 140 * scale, width: winRect.width, height: 140 * scale)
     let hiGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                            colors: [color(1, 1, 1, 0.55), color(1, 1, 1, 0)] as CFArray,
+                            colors: [color(1, 1, 1, 0.7), color(1, 1, 1, 0)] as CFArray,
                             locations: [0, 1])!
     ctx.drawLinearGradient(hiGrad, start: CGPoint(x: 0, y: hiRect.maxY), end: CGPoint(x: 0, y: hiRect.minY), options: [])
     ctx.restoreGState()
 
-    // Crosshair "center" target inside the card — the app's core concept.
+    // Outer bright edge ring on the card.
+    ctx.saveGState()
+    ctx.addPath(winPath)
+    ctx.setStrokeColor(color(1, 1, 1, 0.55))
+    ctx.setLineWidth(2 * scale)
+    ctx.strokePath()
+    ctx.restoreGState()
+
+    // Center target ring (medallion-style): faint ring + crosshair.
     let midX = winRect.midX
-    let midY = winRect.midY - 8 * scale
+    let midY = winRect.midY - 6 * scale
+
+    // Concentric target rings.
+    for (radius, alpha) in [(170 * scale, 0.10), (120 * scale, 0.16), (72 * scale, 0.22)] {
+        let rRect = CGRect(x: midX - radius, y: midY - radius, width: radius * 2, height: radius * 2)
+        ctx.saveGState()
+        ctx.addEllipse(in: rRect)
+        ctx.setStrokeColor(color(0.16, 0.34, 0.92, alpha))
+        ctx.setLineWidth(6 * scale)
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    // Crosshair arms.
     ctx.setStrokeColor(color(0.20, 0.40, 0.92, 1.0))
-    ctx.setLineWidth(22 * scale)
+    ctx.setLineWidth(20 * scale)
     ctx.setLineCap(.round)
-    let arm = 118 * scale
+    let arm = 150 * scale
+    let gap = 40 * scale  // 留出中心给高亮圆点
     ctx.move(to: CGPoint(x: midX - arm, y: midY))
+    ctx.addLine(to: CGPoint(x: midX - gap, y: midY))
+    ctx.move(to: CGPoint(x: midX + gap, y: midY))
     ctx.addLine(to: CGPoint(x: midX + arm, y: midY))
     ctx.move(to: CGPoint(x: midX, y: midY - arm))
+    ctx.addLine(to: CGPoint(x: midX, y: midY - gap))
+    ctx.move(to: CGPoint(x: midX, y: midY + gap))
     ctx.addLine(to: CGPoint(x: midX, y: midY + arm))
     ctx.strokePath()
 
-    // Center dot — accent gradient bead.
-    let dotR = 34 * scale
+    // Center glowing bead with halo.
+    let haloR = 70 * scale
+    let haloRect = CGRect(x: midX - haloR, y: midY - haloR, width: haloR * 2, height: haloR * 2)
+    ctx.saveGState()
+    ctx.addEllipse(in: haloRect)
+    ctx.clip()
+    let halo = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                          colors: [color(0.5, 0.7, 1.0, 0.55), color(0.5, 0.7, 1.0, 0)] as CFArray,
+                          locations: [0, 1])!
+    ctx.drawRadialGradient(halo,
+                           startCenter: CGPoint(x: midX, y: midY), startRadius: 0,
+                           endCenter: CGPoint(x: midX, y: midY), endRadius: haloR,
+                           options: [])
+    ctx.restoreGState()
+
+    let dotR = 32 * scale
     let dotRect = CGRect(x: midX - dotR, y: midY - dotR, width: dotR * 2, height: dotR * 2)
     let dotGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                             colors: [color(0.42, 0.34, 1.0, 1.0), color(0.16, 0.52, 0.98, 1.0)] as CFArray,
+                             colors: [color(0.55, 0.45, 1.0, 1.0), color(0.20, 0.50, 0.98, 1.0)] as CFArray,
                              locations: [0, 1])!
     ctx.saveGState()
     ctx.addEllipse(in: dotRect)
@@ -135,6 +195,14 @@ func drawAppIcon(size: Int) throws -> CGImage {
     ctx.drawRadialGradient(dotGrad,
                            startCenter: CGPoint(x: dotRect.minX, y: dotRect.maxY), startRadius: 0,
                            endCenter: CGPoint(x: dotRect.minX, y: dotRect.maxY), endRadius: dotR * 2.4,
+                           options: [])
+    // Specular highlight on the bead.
+    let spec = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                          colors: [color(1, 1, 1, 0.85), color(1, 1, 1, 0)] as CFArray,
+                          locations: [0, 1])!
+    ctx.drawRadialGradient(spec,
+                           startCenter: CGPoint(x: midX - dotR * 0.3, y: midY + dotR * 0.3), startRadius: 0,
+                           endCenter: CGPoint(x: midX - dotR * 0.3, y: midY + dotR * 0.3), endRadius: dotR * 0.7,
                            options: [])
     ctx.restoreGState()
 

@@ -1,6 +1,6 @@
 import CoreGraphics
 import Testing
-@testable import centerWindows
+@testable import Plumb
 
 @Test
 func selectByCenterWhenCenterInsideOneScreen() {

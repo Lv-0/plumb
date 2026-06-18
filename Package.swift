@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "centerWindows",
+    name: "Plumb",
     platforms: [
         .macOS(.v26)
     ],
     products: [
         .executable(
-            name: "centerWindows",
-            targets: ["centerWindows"]
+            name: "Plumb",
+            targets: ["Plumb"]
         )
     ],
     dependencies: [
@@ -17,12 +17,12 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "centerWindows"
+            name: "Plumb"
         ),
         .testTarget(
-            name: "centerWindowsTests",
+            name: "PlumbTests",
             dependencies: [
-                "centerWindows",
+                "Plumb",
                 .product(name: "Testing", package: "swift-testing")
             ]
         )

@@ -7,11 +7,15 @@ import ApplicationServices
 /// produces a near-fullscreen rect — independent of any external app's quirks.
 ///
 /// Must run under a full app.run() lifecycle so the AX bridge is active.
-/// Run: `dist/centerWindows.app/Contents/MacOS/centerWindows --selftest-tile`
+/// Run: `dist/Plumb.app/Contents/MacOS/Plumb --selftest-tile`
 
 @MainActor
 final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    /// MUST be held as an instance property: tileWindowElementAnimated's Phase B completion runs
+    /// ~0.3s later via a timer; if the service is a local it gets deallocated before Phase B and
+    /// the weak-self capture becomes nil → tiling stalls at Phase A (the bug previously masked).
+    private var service: WindowCenteringService?
     private static let logPath = "/tmp/cw_selftest.log"
 
     private static func log(_ message: String) {
@@ -71,6 +75,9 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
         Self.log("SELFTEST: window BEFORE tile = \(Self.stringify(before))")
 
         let service = WindowCenteringService()
+        // MUST retain the service for the duration of the animation (Phase B runs ~0.3s later
+        // via a timer; without this retention the weak-self capture in runPhaseB becomes nil).
+        self.service = service
         // Use the ANIMATED path — this is where commit 0fc9703's AXFrame
         // size-bounce fix lives (completion forces the exact targetFrame).
         do {
@@ -78,7 +85,10 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     let after = Self.readFrame(windowElement)
-                    Self.log("SELFTEST: window AFTER animated tile = \(Self.stringify(after))")
+                    Self.log("SELFTEST: window AFTER animated tile (AX) = \(Self.stringify(after))")
+                    if let win = self.window {
+                        Self.log("SELFTEST: window AFTER actual NSWindow frame=\(Self.stringify(win.frame)) contentMinSize=\(win.contentMinSize) contentMaxSize=\(win.contentMaxSize) minSize=\(win.minSize) maxSize=\(win.maxSize)")
+                    }
                     let target = CGRect(
                         x: visible.minX + 16, y: visible.minY + 16,
                         width: visible.width - 32, height: visible.height - 32

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish a GitHub Release and upload dist/centerWindows.dmg.
+# Publish a GitHub Release and upload dist/Plumb.dmg.
 #
 # Usage:
 #   GITHUB_TOKEN=... scripts/publish_release.sh v0.1.4
@@ -21,8 +21,8 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
-REPO="${GITHUB_REPOSITORY:-Lv-0/centerWindows}"
-ASSET_PATH="dist/centerWindows.dmg"
+REPO="${GITHUB_REPOSITORY:-Lv-0/Plumb}"
+ASSET_PATH="dist/Plumb.dmg"
 ASSET_NAME="$(basename "${ASSET_PATH}")"
 
 if [[ ! -f "${ASSET_PATH}" ]]; then
@@ -54,6 +54,7 @@ BODY=$(
 - Multi-monitor: keep windows centered on their current display (no more jumping from screen 2 to screen 1).
 - Secondary windows (dialogs/panels) are excluded from auto-centering; only standard main windows are centered.
 - Better handling when a window is partially off-screen: first moves it back into the visible region, then centers it.
+- New: per-app auto-tiling (allowlist) with configurable edge margin and system-app filter in settings.
 EOF
 )
 

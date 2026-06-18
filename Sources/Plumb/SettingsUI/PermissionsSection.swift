@@ -8,7 +8,7 @@ struct PermissionsSection: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("centerWindows 需要以下权限才能控制窗口位置。")
+                Text("Plumb 需要以下权限才能控制窗口位置。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)

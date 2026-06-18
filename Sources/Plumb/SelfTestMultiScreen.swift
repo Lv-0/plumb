@@ -12,7 +12,7 @@ import ApplicationServices
 /// different sizes/Dock positions) and proves the center-point-ownership
 /// logic picks the correct screen and tiles against THAT screen's visibleFrame.
 ///
-/// Trigger: `defaults write com.comet.centerwindows selftestMulti -bool true` then `open`.
+/// Trigger: `defaults write com.comet.plumb selftestMulti -bool true` then `open`.
 
 @MainActor
 final class SelfTestMultiScreenDelegate: NSObject, NSApplicationDelegate {

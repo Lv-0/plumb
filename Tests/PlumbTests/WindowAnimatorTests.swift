@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import centerWindows
+@testable import Plumb
 
 @Test
 func easeInOutEndpoints() async throws {
