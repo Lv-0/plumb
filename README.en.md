@@ -6,12 +6,12 @@
 
 A single line descends, and finds its point.
 
-> Make your Mac feel a little more elegant.
+> Make your Mac feel more elegant to use.
 
 Auto-centers and tiles macOS apps — a blessing for neat freaks!
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg?style=flat-square)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
 [![Release](https://img.shields.io/badge/release-v1.0.0-success.svg?style=flat-square)](#download--install)
 
@@ -138,7 +138,7 @@ See [Build locally](#build-locally).
 
 ## Requirements
 
-- macOS 13+ (Liquid Glass settings UI requires macOS 26)
+- **macOS 26+** (built on the macOS 26 SDK with the Liquid Glass UI; older versions are not supported)
 - Xcode Command Line Tools (`xcode-select --install`)
 
 ## Build locally

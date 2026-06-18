@@ -6,12 +6,12 @@
 
 一线垂下，落定正中。
 
-> 让 Mac 使用起来变得更加优雅。
+> 让你的 Mac 使用起来更加优雅。
 
 自动居中与平铺 macOS App，强迫症爱好者的福音！
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg?style=flat-square)](#系统要求)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#系统要求)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
 [![Release](https://img.shields.io/badge/release-v1.0.0-success.svg?style=flat-square)](#下载安装)
 
@@ -137,7 +137,7 @@ swift build -c release
 
 ## 系统要求
 
-- macOS 13+（Liquid Glass 设置界面需 macOS 26）
+- **macOS 26+**（基于 macOS 26 SDK 构建，使用 Liquid Glass 界面，不支持更低版本）
 - Xcode Command Line Tools（`xcode-select --install`）
 
 ## 本地构建
