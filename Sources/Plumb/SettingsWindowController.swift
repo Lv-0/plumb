@@ -7,25 +7,30 @@ import SwiftUI
 // 模块角色：设置窗口的 AppKit 外壳（NSWindowController）。
 //
 // 职责：
-//   - 构造一个无标题栏、可拖拽、带 Liquid Glass 材质（macOS 26 NSGlassEffectView，
+//   - 构造一个无标题栏、可拖拽、带液态玻璃材质（macOS 26 NSGlassEffectView，
 //     低版本回退 NSVisualEffectView）的 NSWindow。
-//   - 用 NSHostingController 承载 SwiftUI 的 SettingsView，透明叠加在玻璃背景之上。
+//   - 用 NSHostingController 承载 SwiftUI 的 SettingsView，并把它嵌入
+//     NSGlassEffectView.contentView——这是官方集成方式，使折射/lensing/边缘高光作用于
+//     整窗（含边缘），而非把 SwiftUI 平铺在不参与折射的同层背景之上。
 //   - showWindow 时做缩放+淡入出现动画，并向 SettingsView 发 windowDidShow 通知，
 //     使缓存的视图能重新扫描已安装应用（AppDelegate 把本控制器缓存为单例，再次打开
 //     不会重触发 .task，故依赖该通知驱动刷新）。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 设置窗口壳：NSWindow + NSGlassEffectView 背景 + NSHostingController 承载 SwiftUI 内容。
-/// 窗口整体（含边缘）呈现 Liquid Glass 材质；SwiftUI 内容透明叠加其上。
+/// 设置窗口壳：NSWindow + NSGlassEffectView（SwiftUI 内容嵌入其 contentView）。
+/// 液态玻璃由 NSGlassEffectView 提供（动态折射/边缘高光），SwiftUI 内容保持透明叠加在玻璃内部。
 @MainActor
 final class SettingsWindowController: NSWindowController {
-
     private let store: AppTilingSettingsStore
 
     init(store: AppTilingSettingsStore) {
         self.store = store
 
-        let window = NSWindow(
+        // 自定义窗口子类：强制 isOpaque=false + backgroundColor=.clear + 可成为 key/main。
+        // 关键：标准 .titled 窗口即便设了 backgroundColor=.clear，主题仍会画一层不透明背景，
+        // 把 NSGlassEffectView 的折射压成灰板。只有让窗口“什么都不画”，玻璃才能采样窗口后方
+        // 的桌面/内容做动态折射（晶莹液态玻璃，而非毛玻璃）。
+        let window = LiquidGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 880, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .borderless],
             backing: .buffered,
@@ -41,39 +46,55 @@ final class SettingsWindowController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.center()
 
-        guard let contentView = window.contentView else { super.init(window: window); return }
+        // macOS 26 液态玻璃：NSGlassEffectView 作为窗口 contentView，SwiftUI 用 NSHostingView
+        // 嵌入 glass.contentView（按官方/onmyway133 指南的成熟模式）。
+        // 关键：window.backgroundColor = .clear（已在上方设置）必需，否则窗口会在玻璃上
+        // 绘制自己的不透明背景，把折射压成实心面板。glass.clipsToBounds 裁圆角。
+        let rootView = SettingsView(store: store)
 
-        // 整窗 Liquid Glass 背景：macOS 26 的 NSGlassEffectView（若不可用则回退 NSVisualEffectView）。
-        let glassBackground: NSView = {
-            if #available(macOS 26.0, *) {
-                let v = NSGlassEffectView(frame: .zero)
-                // 给玻璃层一个柔和的底色，使其读起来是“磨砂玻璃”而非近乎全透明。
-                v.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
-                return v
-            } else {
-                let v = NSVisualEffectView(frame: .zero)
-                v.material = .hudWindow
-                v.blendingMode = .behindWindow
-                v.state = .active
-                return v
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = 20
+            // 折射拉满：tint=nil（完全不染色），折射完全由窗口后方内容驱动，
+            // 玻璃质感最强。任何 tint 都会削弱折射，故“最高液态玻璃”=无 tint。
+            glass.tintColor = nil
+            glass.clipsToBounds = true
+            let host = NSHostingView(rootView: rootView)
+            // hosting view 必须透明，否则会盖住玻璃折射。
+            host.wantsLayer = true
+            host.layer?.backgroundColor = NSColor.clear.cgColor
+            glass.contentView = host
+            window.contentView = glass
+
+            // 顶部 lensing 高光拉满：液态玻璃最明显的特征是边缘折光高光。
+            // 用一条较强的白色渐变贴在玻璃顶部边缘，让窗口在任何背景下都呈现明显的“玻璃浮起”感。
+            if let glassLayer = glass.layer {
+                let highlight = CAGradientLayer()
+                highlight.frame = glass.bounds
+                highlight.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+                highlight.colors = [
+                    NSColor(calibratedWhite: 1.0, alpha: 0.45).cgColor,
+                    NSColor(calibratedWhite: 1.0, alpha: 0.0).cgColor
+                ]
+                highlight.locations = [0, 0.18]
+                highlight.startPoint = CGPoint(x: 0.5, y: 1.0)
+                highlight.endPoint = CGPoint(x: 0.5, y: 0.0)
+                glassLayer.addSublayer(highlight)
+                _ = glassLayer
             }
-        }()
-        glassBackground.translatesAutoresizingMaskIntoConstraints = false
-        glassBackground.wantsLayer = true
-        glassBackground.layer?.cornerRadius = 16
-        contentView.addSubview(glassBackground, positioned: .below, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            glassBackground.topAnchor.constraint(equalTo: contentView.topAnchor),
-            glassBackground.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            glassBackground.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            glassBackground.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-        ])
-
-        // SwiftUI 内容透明叠加在玻璃背景之上。
-        let hosting = NSHostingController(rootView: SettingsView(store: store))
-        hosting.view.wantsLayer = true
-        hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
-        window.contentViewController = hosting
+        } else {
+            // 低版本回退：NSVisualEffectView 只能给毛玻璃近似，无真折射。
+            let v = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 880, height: 600))
+            v.material = .hudWindow
+            v.blendingMode = .behindWindow
+            v.state = .active
+            let host = NSHostingView(rootView: rootView)
+            host.frame = v.bounds
+            host.autoresizingMask = [.width, .height]
+            v.addSubview(host)
+            window.contentView = v
+        }
 
         super.init(window: window)
     }
@@ -99,7 +120,14 @@ final class SettingsWindowController: NSWindowController {
                 window?.animator().setFrame(frame, display: true)
             })
         }
+
+        // 关键：本应用是菜单栏 accessory app（.accessory），其窗口默认无法成为真正的 key window。
+        // 而 NSGlassEffectView 只有在“key 且 active”的窗口里才会渲染折射（晶莹液态玻璃），
+        // 否则退化成不透明灰板。因此显示设置窗口时临时切到 .regular，让窗口能真正成为 key/active，
+        // 使液态玻璃激活。NSGlassPanel 已覆写 canBecomeKey/canBecomeMain 配合。
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
 
         // 通知设置视图：窗口已显示。
         // 原因：本控制器被 AppDelegate 缓存为单例，每次"打开设置"复用同一个 SettingsView，
@@ -107,4 +135,26 @@ final class SettingsWindowController: NSWindowController {
         // 导致新安装的应用在退出 App 前不可见。视图收到本通知后会重新拉取应用列表。
         NotificationCenter.default.post(name: SettingsWindowNotifications.windowDidShow, object: nil)
     }
+}
+
+/// 液态玻璃面板：自定义 NSWindow 子类，强制透明并允许成为 key/main。
+///
+/// 为什么需要子类：标准 `.titled` 窗口即便设了 `backgroundColor = .clear`，主题系统仍会在
+/// contentView 之下绘制一层不透明背景，把 `NSGlassEffectView` 的折射压成均匀灰板（毛玻璃/实心）。
+/// 真正的液态玻璃（折射后方内容）要求窗口“完全不绘制自身背景”，只剩玻璃层。本子类通过：
+///   - `isOpaque` 恒返回 false；
+///   - `backgroundColor` 恒返回 `.clear`；
+///   - `canBecomeKey`/`canBecomeMain` 返回 true（配合 `.borderless` 让无标题栏窗口仍可成为 key window）。
+/// 从而让 `NSGlassEffectView` 能采样窗口后方的桌面/内容做动态折射。
+private final class LiquidGlassPanel: NSWindow {
+    override var isOpaque: Bool {
+        get { false }
+        set { _ = newValue }   // 忽略外部设置，始终非不透明
+    }
+    override var backgroundColor: NSColor? {
+        get { .clear }
+        set { _ = newValue }   // 忽略外部设置，始终透明
+    }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }

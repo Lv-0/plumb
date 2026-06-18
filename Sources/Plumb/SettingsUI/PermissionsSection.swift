@@ -42,7 +42,12 @@ struct PermissionsSection: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // 不用 .glassEffect（窗口已是晶莹液态玻璃，叠 glass 会变磨砂）；
+                // 极淡填充做卡片分区，保留窗口单一折射。
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)

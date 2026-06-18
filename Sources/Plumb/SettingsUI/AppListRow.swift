@@ -100,11 +100,11 @@ struct PillToggle: View {
         }
         .buttonStyle(.plain)
         .background(
-            // 玻璃作为背景层，allowsHitTesting(false) 彻底排除参与命中测试，
+            // 极淡半透明背景层，allowsHitTesting(false) 彻底排除参与命中测试，
             // 保证 Button 始终能接收点击（修复"开关点击不灵"问题）。
+            // 不用 .glassEffect：窗口已是晶莹液态玻璃，叠 glass 会变磨砂。
             Capsule(style: .continuous)
-                .fill(Color.clear)
-                .glassEffect(.regular, in: Capsule(style: .continuous))
+                .fill(Color.primary.opacity(0.05))
                 .allowsHitTesting(false)
         )
         .accessibilityLabel(Text("开关"))

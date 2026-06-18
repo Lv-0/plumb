@@ -51,15 +51,13 @@ struct AppListSection: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
 
-            // 搜索框：Liquid Glass 仅作为 ZStack 底层（.allowsHitTesting(false)），
-            // 文本框在最上层独立捕获点击/焦点。
-            // 此前用 .glassEffect().interactive 直接包裹 TextField 导致无法聚焦；
-            // 改用显式 ZStack + allowsHitTesting(false) 彻底排除玻璃层参与命中测试，
-            // 保证 TextField 一定能获得焦点。
+            // 搜索框：极淡半透明作 ZStack 底层（allowsHitTesting(false)），文本框在顶层独立
+            // 获得焦点。不用 .glassEffect：窗口本身已是晶莹液态玻璃，这里再叠 glass 会变成
+            // 磨砂糊状；仅用一层很淡的填充区分搜索框区域，保留窗口单一折射。
+            // allowsHitTesting(false) 彻底排除该层参与命中测试，保证 TextField 一定能聚焦。
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.clear)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .fill(Color.primary.opacity(0.05))
                     .allowsHitTesting(false)
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -106,7 +104,12 @@ struct AppListSection: View {
                 }
             }
             .padding(8)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            // 不用 .glassEffect（窗口已是晶莹液态玻璃，叠 glass 会变磨砂）；
+            // 极淡填充仅做卡片分区，保留窗口单一折射。
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
             .animation(.spring(duration: 0.35, bounce: 0.15), value: selected)
         }
         .padding(.horizontal, 20)

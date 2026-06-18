@@ -12,13 +12,13 @@ import SwiftUI
 //     通知）与 .task 首次出现都触发，保证新装应用即时可见。
 //   - observeWorkspaceAppLaunches：窗口在屏时监听 app 启动，实时刷新列表。
 //
-// 设计说明：玻璃材质由外层 NSGlassEffectView 提供，本视图内容透明叠加；标签/卡片再
-// 各自用 .glassEffect 局部增强质感。
+// 设计说明：液态玻璃由外层 NSGlassEffectView 提供，本视图被嵌入其 contentView；
+// 视图本身保持透明，让真实折射/lensing 透出。标签/卡片只用极淡半透明填充区分层级，不叠 glass。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 设置根视图：顶部标签栏（居中/平铺/权限）+ 下方内容区。
-/// 采用上下布局，左右对称；窗口整体背景由 NSGlassEffectView 提供 Liquid Glass 材质，
-/// SwiftUI 内容透明叠加其上，因此窗口边缘也呈现玻璃质感。
+/// 采用上下布局，左右对称；窗口的液态玻璃由外层 NSGlassEffectView 提供，本视图被嵌入
+/// 它的 contentView，因此内容本身就“在玻璃里”，SwiftUI 保持透明以透出折射与边缘高光。
 struct SettingsView: View {
     let store: AppTilingSettingsStore
     @State private var settings: AppTilingSettings
@@ -65,14 +65,9 @@ struct SettingsView: View {
             detailContainer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 显式 Liquid Glass 背景：整窗呈现可感知的磨砂玻璃材质，
-        // 而非几乎透明地直接透出桌面。
-        .background(
-            RoundedRectangle(cornerRadius: 0, style: .continuous)
-                .fill(Color.primary.opacity(0.001))  // 非空填充触发 glassEffect 作用域
-                .glassEffect(.regular, in: Rectangle())
-                .ignoresSafeArea()
-        )
+        // 不再在此叠加 .glassEffect 背景：窗口的液态玻璃由外层 NSGlassEffectView 提供
+        //（本视图被嵌入它的 contentView），SwiftUI 内容保持透明，让真实折射/边缘高光透出。
+        // 此前在此再叠一层 glassEffect+tint 会把折射压成磨砂色块。
         .animation(.smooth, value: apps.count)
         .task {
             // 首次出现：加载一次应用列表，并注册 NSWorkspace 观察者。
@@ -194,13 +189,13 @@ private struct TabPill: View {
         }
         .buttonStyle(.plain)
         .background {
-            // 背景层：选中=强调色，未选中=Liquid Glass。仅作用于背景，不拦截点击。
-            // 用 .regular（非 interactive）：interactive 玻璃可能参与命中测试与 Button 竞争，
-            // 导致标签点击不灵敏。静态玻璃即可。
+            // 背景层：选中=强调色，未选中=极淡半透明。
+            // 不再用 .glassEffect：窗口本身已是晶莹液态玻璃，控件再叠一层 glass 会“玻璃上叠玻璃”
+            // 变成磨砂/糊状。这里只用一层很淡的填充区分层级，让窗口的单一折射透出。
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.clear))
-                .glassEffect(.regular,
-                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .fill(isSelected
+                      ? AnyShapeStyle(Color.accentColor)
+                      : AnyShapeStyle(Color.primary.opacity(0.06)))
         }
         .animation(.spring(duration: 0.32, bounce: 0.18), value: isSelected)
     }
