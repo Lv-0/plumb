@@ -21,7 +21,7 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
-REPO="${GITHUB_REPOSITORY:-Lv-0/Plumb}"
+REPO="${GITHUB_REPOSITORY:-Lv-0/plumb}"
 ASSET_PATH="dist/Plumb.dmg"
 ASSET_NAME="$(basename "${ASSET_PATH}")"
 
