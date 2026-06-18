@@ -1,5 +1,22 @@
 import AppKit
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - main (入口)
+//
+// 模块角色：程序入口，负责"正常启动"与"自测模式"的分流。
+//
+// 职责：
+//   - 创建 NSApplication，设为 .accessory（仅菜单栏、无 Dock 图标）。
+//   - 检查 UserDefaults 中的 selftest* 标志：命中则进入对应的自测 harness（通过
+//     Launch Services 触发，使 AX 桥接处于激活状态），运行后 exit(0)。
+//     标志会在进入前被清零，保证每次只运行一次。
+//   - 无自测标志时：构造 AppDelegate，交给 runloop。
+//
+// 设计说明：自测 harness（SelfTest*.swift）只在标志命中时被实例化；正常用户运行
+// 不会触碰它们。它们存在的目的是在没有 CI/真实窗口自动化的前提下，用真实引擎验证
+// 居中/平铺/多屏/动画中止等行为。
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Self-test mode: verifies the tiling engine produces a near-fullscreen rect on a
 // real NSWindow that we fully control. Trigger via Launch Services so the AX bridge
 // is active: set `defaults write com.comet.plumb selftestTile -bool true`

@@ -1,6 +1,24 @@
 import CoreGraphics
 import Foundation
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - AppTilingSettings / AppTilingSettingsStore
+//
+// 模块角色：平铺与居中的设置模型 + 持久化。
+//
+// 数据模型 AppTilingSettings：
+//   - isEnabled / edgeMargin / tiledBundleIDs  ：平铺总开关、四边距、平铺白名单。
+//   - centerEnabled / centeredBundleIDs        ：居中总开关与居中白名单
+//     （空列表 => 居中全部；非空 => 仅列表内；关闭 => 永不自动居中）。
+//   - shouldTile / shouldCenter                 ：统一的判定语义，bundle id 做归一化（trim+小写）。
+//
+// 存储 AppTilingSettingsStore：
+//   - 持久化到 UserDefaults，键前缀 tiling.* / centering.*。
+//   - load() 在缺少键时回退默认值（向后兼容旧版本），save() 写入前归一化。
+//
+// 不变量：margin 在 [minimumEdgeMargin, maximumEdgeMargin] 内；bundle id 永远归一化存储。
+// ─────────────────────────────────────────────────────────────────────────────
+
 struct AppTilingSettings: Equatable {
     static let defaultEdgeMargin: CGFloat = 16
     static let minimumEdgeMargin: CGFloat = 0

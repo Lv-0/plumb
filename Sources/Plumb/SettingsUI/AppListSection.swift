@@ -1,5 +1,21 @@
 import SwiftUI
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - AppListSection / CenteringSection (SettingsUI)
+//
+// 模块角色：居中段与平铺段共用的"应用列表 + 搜索"视图。
+//
+// 职责：
+//   - 搜索框（Liquid Glass 作 ZStack 底层、allowsHitTesting(false)，TextField 在顶层独立
+//     获得焦点——修复 .interactive 玻璃吞焦点的问题）。
+//   - LazyVStack 渲染 AppListRow；选中的应用排在前面，切换开关时平滑重排。
+//   - sortedFilteredApps：叠加搜索过滤与"选中在前+名称字母序"排序的纯计算。
+//
+// CenteringSection：把 AppListSection 放进 ScrollView 的居中段容器。
+// 关键：直接使用 AppListSection 走 body（而非 .contentView 间接访问），否则会破坏
+// SwiftUI 视图标识导致 @FocusState/@State 绑定失效。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 居中/平铺段共用的“应用列表”：搜索框 + 药丸开关行，选中的应用排在前面。
 struct AppListSection: View {
     let footnote: String

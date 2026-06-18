@@ -1,5 +1,21 @@
 import SwiftUI
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - SettingsView (SettingsUI)
+//
+// 模块角色：设置窗口的 SwiftUI 根视图。
+//
+// 职责：
+//   - 顶部胶囊标签栏（居中 / 平铺 / 权限）+ 切换淡入淡出的内容区。
+//   - 持有 settings（绑定 AppTilingSettingsStore，onChange 自动落盘）与 apps 列表。
+//   - refreshApps：后台扫描已安装应用；防抖（取消旧任务）；窗口每次显示（windowDidShow
+//     通知）与 .task 首次出现都触发，保证新装应用即时可见。
+//   - observeWorkspaceAppLaunches：窗口在屏时监听 app 启动，实时刷新列表。
+//
+// 设计说明：玻璃材质由外层 NSGlassEffectView 提供，本视图内容透明叠加；标签/卡片再
+// 各自用 .glassEffect 局部增强质感。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 设置根视图：顶部标签栏（居中/平铺/权限）+ 下方内容区。
 /// 采用上下布局，左右对称；窗口整体背景由 NSGlassEffectView 提供 Liquid Glass 材质，
 /// SwiftUI 内容透明叠加其上，因此窗口边缘也呈现玻璃质感。

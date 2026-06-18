@@ -1,5 +1,21 @@
 import AppKit
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - AppDelegate
+//
+// 模块角色：应用生命周期与菜单栏 UI 的总装。
+//
+// 职责：
+//   - 启动时创建状态栏菜单项（水滴图标）+ 菜单（立即居中 / 设置… / 权限… / 退出）。
+//   - 申请屏幕录制与辅助功能权限；启动 WindowEventObserver 进入自动居中/平铺主循环。
+//   - centerOnceOnLaunch：启动后短暂重试居中前台窗口（等待权限授予与窗口稳定）。
+//   - 持有 SettingsWindowController 单例，按需弹出设置窗口。
+//
+// 与其它模块的边界：
+//   不直接读写窗口几何——所有居中/平铺都委托给 centeringService（进而走
+//   WindowEventObserver + WindowCenteringService）。本类只做 UI 与触发。
+// ─────────────────────────────────────────────────────────────────────────────
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let centeringService = WindowCenteringService()

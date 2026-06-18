@@ -1,5 +1,16 @@
 import Foundation
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - SettingsWindowNotifications (SettingsUI)
+//
+// 模块角色：设置窗口相关通知名的集中定义。
+//
+// 唯一定义的 windowDidShow：SettingsWindowController 在每次 showWindow 完成后发出，
+// SettingsView 监听后重新扫描已安装应用。存在原因：AppDelegate 把控制器缓存为单例，
+// 再次"打开设置"复用同一 SettingsView，其 .task 不再触发——故用本通知驱动刷新。
+// 通知名加产品前缀，避免与系统/第三方通知冲突。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 设置窗口相关的通知名集中定义。
 ///
 /// 设计目的：`AppDelegate` 将 `SettingsWindowController` 缓存为单例，再次"打开设置"

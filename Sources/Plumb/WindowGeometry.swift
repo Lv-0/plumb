@@ -1,5 +1,20 @@
 import CoreGraphics
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - WindowGeometry
+//
+// 模块角色：纯几何计算（无 AppKit 依赖，完全可单测）。
+//
+// 职责：把"居中 / 约束 / 平铺 / 可用区 inset"这些数学下沉为纯函数：
+//   - centeredOrigin   ：在 visibleFrame 内居中（含 best-effort 夹取，不溢出）。
+//   - constrainedOrigin：把任意原点约束进 bounds（用于把远离屏幕的窗口先拉回可视区）。
+//   - tiledFrame       ：visibleFrame 内缩 edgeMargin 得到平铺目标（带防负保护）。
+//   - insetsFromVisibleFrame：从 frame 与 visibleFrame 反推逐边 inset（让 Dock 在
+//     左/右/下、菜单栏在顶的逐屏差异可独立测试）。
+//
+// 不变量：所有返回坐标都四舍五入到整数像素（与 AX 写入一致，便于测试断言）。
+// ─────────────────────────────────────────────────────────────────────────────
+
 enum WindowGeometry {
     static func centeredOrigin(windowSize: CGSize, visibleFrame: CGRect) -> CGPoint {
         // Center relative to the usable region (visibleFrame). If the window is larger than the visible area on

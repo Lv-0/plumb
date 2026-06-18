@@ -3,6 +3,24 @@ import Foundation
 import Darwin
 #endif
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - InstalledAppCatalog
+//
+// 模块角色：已安装应用扫描器（供设置界面应用选择器使用）。
+//
+// 职责：
+//   - 扫描 /Applications、/System/Applications(/Utilities)、/System/Library/CoreServices、
+//     ~/Applications，发现所有 .app 包，解析 bundle id / 显示名 / 是否系统应用。
+//   - 关键兼容：Safari 等系统 app 在 /Applications 下是符号链接到 /System/Cryptexes/...，
+//     FileManager 的枚举器被 macOS App-management 过滤掉这些链接——故用 POSIX readdir
+//     兜底读取顶层条目，再 resolveSymlink 加载真实 bundle。
+//   - /System 位置下过滤 LSUIElement=true 的后台 agent（Dock/ControlCenter 等），但
+//     保留用户目录下带该标志的真实窗口应用（Raycast/BetterDisplay 等）。
+//
+// 不变量：每次调用都重新扫描文件系统、不缓存（设置窗口"重新打开即刷新"依赖此契约，
+// 由 InstalledAppCatalogTests 保证）；结果按名去重并按名称排序。
+// ─────────────────────────────────────────────────────────────────────────────
+
 struct InstalledAppInfo: Hashable {
     let bundleID: String
     let name: String

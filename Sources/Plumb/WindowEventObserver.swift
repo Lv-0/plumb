@@ -1,6 +1,32 @@
 import AppKit
 import ApplicationServices
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - WindowEventObserver
+//
+// 模块角色：自动居中/平铺的"事件入口 + 生命周期编排器"。
+//
+// 职责：
+//   - 监听 NSWorkspace 的 didActivate / didTerminate 通知，跟踪前台 app 切换。
+//   - 为前台 app 绑定 AXObserver，订阅 kAXFocusedWindowChanged / kAXWindowCreated
+//     通知，在前台 app 出现"新聚焦窗口 / 新建窗口"时决定是否居中或平铺。
+//   - 编排居中/平铺的时序：app 刚激活时 macOS 仍在播激活动画、窗口在抖动，
+//     故不在 attach 当下立即居中，而是交给 startInitialCenteringRetries 等动画
+//     稳定后再触发（与手动"立即居中"走同一条已被验证的路径）。
+//   - 维护"本激活周期内每个 PID 只处理一次主窗口"的契约（processedPIDs），
+//     满足"软件本体居中即可，二级窗口/对话框/标签页弹层不要居中"的需求。
+//
+// 不变量 / 关键约定：
+//   - 切换 app 前必须调用 service.abortActiveAnimations()，避免 zombie 定时器在
+//     非前台 app 上继续移动窗口（"切走后 Safari 跑到另一屏"的根因）。
+//   - 缓存按 pid:windowNumber 与 pid 两级记录，app 退出时按 pid 前缀清理；
+//     re-attach 到同一 app 时清掉该 pid 的旧缓存，使"切走再回来"能重新居中。
+//   - 仅处理前台 app；对后台窗口一律拒绝（handle 内有 frontmost == pid 守卫）。
+//
+// 与 WindowCenteringService 的边界：
+//   Observer 负责"何时、对哪个窗口"做；Service 负责"如何算坐标、如何写 AX"。
+// ─────────────────────────────────────────────────────────────────────────────
+
 @MainActor
 final class WindowEventObserver {
     private let service: WindowCenteringService
@@ -319,7 +345,7 @@ final class WindowEventObserver {
 
         // Prefer the focused window if it is a standard main window.
         if
-            let focused = windowElementAttribute(kAXFocusedWindowAttribute as CFString, on: appElement)
+            let focused = appElement.axWindowElement(kAXFocusedWindowAttribute as CFString)
         {
             if isAutoCenterEligibleWindow(focused) {
                 DiagnosticLog.debug("candidate: focused window eligible")
@@ -333,11 +359,11 @@ final class WindowEventObserver {
 
         // Some apps do not set AXFocusedWindow immediately after activation; fall back to selecting the
         // largest standard window from AXWindows.
-        let windows = windowElementsAttribute(kAXWindowsAttribute as CFString, on: appElement)
+        let windows = appElement.axWindowElements(kAXWindowsAttribute as CFString)
         DiagnosticLog.debug("candidate: AXWindows count=\(windows.count)")
         var best: (window: AXUIElement, area: CGFloat)?
         for w in windows where isAutoCenterEligibleWindow(w) {
-            guard let size = sizeAttribute(kAXSizeAttribute as CFString, on: w) else { continue }
+            guard let size = w.axSize(kAXSizeAttribute as CFString) else { continue }
             let area = max(0, size.width) * max(0, size.height)
             if let best, best.area >= area { continue }
             best = (w, area)
@@ -359,7 +385,7 @@ final class WindowEventObserver {
         // not minimized/modal/fullscreen. This is what makes auto-centering match the proven manual
         // behavior for apps whose focused window reports a non-standard subrole (or none).
         if
-            let focused = windowElementAttribute(kAXFocusedWindowAttribute as CFString, on: appElement),
+            let focused = appElement.axWindowElement(kAXFocusedWindowAttribute as CFString),
             isMovableNonAuxiliaryWindow(focused)
         {
             DiagnosticLog.debug("candidate: focused-window fallback (lenient)")
@@ -380,7 +406,7 @@ final class WindowEventObserver {
         }
 
         if
-            let window = windowElementAttribute(kAXWindowAttribute as CFString, on: element),
+            let window = element.axWindowElement(kAXWindowAttribute as CFString),
             isAutoCenterEligibleWindow(window)
         {
             return window
@@ -391,19 +417,19 @@ final class WindowEventObserver {
     private func isAutoCenterEligibleWindow(_ window: AXUIElement) -> Bool {
         // Only auto-center/tile standard main windows. This skips dialogs/sheets/panels that users perceive as
         // "secondary pages" within the same app.
-        let role = stringAttribute(kAXRoleAttribute as CFString, on: window)
+        let role = window.axString(kAXRoleAttribute as CFString)
         if role != kAXWindowRole as String {
             return false
         }
 
-        if let minimized = boolAttribute(kAXMinimizedAttribute as CFString, on: window), minimized {
+        if let minimized = window.axBool(kAXMinimizedAttribute as CFString), minimized {
             return false
         }
-        if let modal = boolAttribute(kAXModalAttribute as CFString, on: window), modal {
+        if let modal = window.axBool(kAXModalAttribute as CFString), modal {
             return false
         }
 
-        if let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: window) {
+        if let subrole = window.axString(kAXSubroleAttribute as CFString) {
             if subrole == kAXStandardWindowSubrole as String {
                 return true
             }
@@ -424,17 +450,17 @@ final class WindowEventObserver {
 
     /// Diagnostic: human-readable reason a window was rejected by `isAutoCenterEligibleWindow`.
     private func eligibilityReason(_ window: AXUIElement) -> String {
-        let role = stringAttribute(kAXRoleAttribute as CFString, on: window)
+        let role = window.axString(kAXRoleAttribute as CFString)
         if role != kAXWindowRole as String {
             return "role='\(role ?? "nil")' != AXWindow"
         }
-        if let minimized = boolAttribute(kAXMinimizedAttribute as CFString, on: window), minimized {
+        if let minimized = window.axBool(kAXMinimizedAttribute as CFString), minimized {
             return "minimized"
         }
-        if let modal = boolAttribute(kAXModalAttribute as CFString, on: window), modal {
+        if let modal = window.axBool(kAXModalAttribute as CFString), modal {
             return "modal"
         }
-        let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: window)
+        let subrole = window.axString(kAXSubroleAttribute as CFString)
         if let subrole, subrole != kAXStandardWindowSubrole as String {
             return "subrole='\(subrole)' != AXStandardWindow"
         }
@@ -447,17 +473,17 @@ final class WindowEventObserver {
     /// NOT require the `AXStandardWindow` subrole, so apps whose main window reports a different or
     /// missing subrole still get auto-centered (matching the proven manual behavior).
     private func isMovableNonAuxiliaryWindow(_ window: AXUIElement) -> Bool {
-        let role = stringAttribute(kAXRoleAttribute as CFString, on: window)
+        let role = window.axString(kAXRoleAttribute as CFString)
         guard role == kAXWindowRole as String else { return false }
 
-        if let minimized = boolAttribute(kAXMinimizedAttribute as CFString, on: window), minimized {
+        if let minimized = window.axBool(kAXMinimizedAttribute as CFString), minimized {
             return false
         }
-        if let modal = boolAttribute(kAXModalAttribute as CFString, on: window), modal {
+        if let modal = window.axBool(kAXModalAttribute as CFString), modal {
             return false
         }
 
-        if let subrole = stringAttribute(kAXSubroleAttribute as CFString, on: window) {
+        if let subrole = window.axString(kAXSubroleAttribute as CFString) {
             // Explicitly skip common "secondary"/auxiliary window types.
             if subrole == kAXDialogSubrole as String ||
                 subrole == kAXSystemDialogSubrole as String ||
@@ -557,122 +583,46 @@ final class WindowEventObserver {
         timer.resume()
     }
 
-    /// 窗口当前尺寸是否已接近平铺目标（用于停止重试）。
+    /// 窗口当前尺寸是否已接近平铺目标（用于停止平铺稳定重试）。
+    ///
+    /// 通过 `service.tiledTargetFrame` 拿到该窗口在其屏幕上的真实平铺目标（visibleFrame 内缩
+    /// edgeMargin），再比较窗口当前 宽/高 与目标 宽/高 的差值是否在容差内。
+    /// 替换此前"窗口面积 >= 主屏可视区 80%"的粗略启发式——后者无法区分不同屏幕尺寸、
+    /// 也无法反映 edgeMargin 配置。失败时返回 false（保守地继续重试）。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, edgeMargin: CGFloat) -> Bool {
-        guard let pos = pointAttributeValue(windowElement),
-              let size = sizeAttributeValue(windowElement)
+        guard let size = sizeAttributeValue(windowElement),
+              let target = service.tiledTargetFrame(for: windowElement, pid: pid, edgeMargin: edgeMargin)
         else { return false }
-        // 通过 service 拿到目标平铺尺寸需要内部接口；这里用粗略判断：
-        // 窗口面积是否已达到主屏可视区面积的 80% 以上。
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return false }
-        let visibleArea = screen.visibleFrame.width * screen.visibleFrame.height
-        let windowArea = size.width * size.height
-        return windowArea >= visibleArea * 0.8
+        let tol: CGFloat = 16
+        return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
     }
 
     private func pointAttributeValue(_ windowElement: AXUIElement) -> CGPoint? {
-        var v: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowElement, kAXPositionAttribute as CFString, &v) == .success,
-              let val = v else { return nil }
-        var p = CGPoint.zero
-        AXValueGetValue(val as! AXValue, .cgPoint, &p)
-        return p
+        // 委托给共享扩展；旧实现用 `as! AXValue` 强转，在 app 返回非 AXValue 类型时会崩溃，
+        // 现统一走带 CFGetTypeID 防御的 AXAttributeAccess。
+        windowElement.axPoint(kAXPositionAttribute as CFString)
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
-        var v: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowElement, kAXSizeAttribute as CFString, &v) == .success,
-              let val = v else { return nil }
-        var s = CGSize.zero
-        AXValueGetValue(val as! AXValue, .cgSize, &s)
-        return s
-    }
-
-    private func windowElementAttribute(_ attribute: CFString, on element: AXUIElement) -> AXUIElement? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        guard result == .success, let value else { return nil }
-        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return unsafeDowncast(value, to: AXUIElement.self)
-    }
-
-    private func windowElementsAttribute(_ attribute: CFString, on element: AXUIElement) -> [AXUIElement] {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        guard result == .success else { return [] }
-        return (value as? [AXUIElement]) ?? []
+        windowElement.axSize(kAXSizeAttribute as CFString)
     }
 
     private func systemWideFocusedWindow(for pid: pid_t) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedWindowAttribute as CFString, &value) == .success else {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
-            return nil
-        }
-        let window = unsafeDowncast(value, to: AXUIElement.self)
         var ownerPID: pid_t = 0
+        // axWindowElement 内部已用 CFGetTypeID 校验返回值确为 AXUIElement。
+        guard let window = systemWide.axWindowElement(kAXFocusedWindowAttribute as CFString) else {
+            return nil
+        }
         AXUIElementGetPid(window, &ownerPID)
         return ownerPID == pid ? window : nil
     }
 
-    private func stringAttribute(_ attribute: CFString, on element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == CFStringGetTypeID() else {
-            return nil
-        }
-        return unsafeDowncast(value, to: CFString.self) as String
-    }
-
-    private func boolAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else {
-            return nil
-        }
-        return CFBooleanGetValue(unsafeDowncast(value, to: CFBoolean.self))
-    }
-
-    private func sizeAttribute(_ attribute: CFString, on element: AXUIElement) -> CGSize? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-        guard let value else {
-            return nil
-        }
-        guard CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-        let axValue = unsafeDowncast(value, to: AXValue.self)
-
-        var size = CGSize.zero
-        guard AXValueGetValue(axValue, .cgSize, &size) else {
-            return nil
-        }
-        return size
-    }
-
     private func windowNumber(of window: AXUIElement) -> Int? {
-        var value: CFTypeRef?
-        if AXUIElementCopyAttributeValue(window, "AXWindowNumber" as CFString, &value) != .success {
-            return nil
-        }
-        guard let value, CFGetTypeID(value) == CFNumberGetTypeID() else {
-            return nil
-        }
-        var n: Int = 0
-        if CFNumberGetValue(unsafeDowncast(value, to: CFNumber.self), .intType, &n) {
-            return n
-        }
-        return nil
+        // AXWindowNumber 是 CFNumber；通过共享扩展读取并转成 Int。
+        // nil / 非正数视为无有效窗口编号（调用方会回退到 CFHash 作为 key）。
+        guard let n = window.axInt32("AXWindowNumber" as CFString), n > 0 else { return nil }
+        return Int(n)
     }
 
     private func tilePendingWindows(
@@ -687,7 +637,7 @@ final class WindowEventObserver {
             candidates.append(primaryWindow)
         }
 
-        for window in windowElementsAttribute(kAXWindowsAttribute as CFString, on: appElement) where isAutoCenterEligibleWindow(window) {
+        for window in appElement.axWindowElements(kAXWindowsAttribute as CFString) where isAutoCenterEligibleWindow(window) {
             if candidates.contains(where: { CFEqual($0, window) }) {
                 continue
             }

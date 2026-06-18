@@ -1,5 +1,17 @@
 import SwiftUI
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - PermissionsSection (SettingsUI)
+//
+// 模块角色：设置中"权限"标签页的内容视图。
+//
+// 职责：展示辅助功能与屏幕录制两项权限的当前状态（已授权/未授权），并提供"打开设置…"
+// 按钮跳转对应系统设置面板；点击按钮后立即 refresh() 重读状态。
+//
+// 说明：未授权仅为降级——辅助功能缺失则居中/平铺不可用；屏幕录制缺失则多屏坐标识别
+// 可能不稳定（详见 AccessibilityPermission / ScreenCapturePermission 模块头）。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 权限段：状态行 + 两个按钮，整体放在 Liquid Glass 容器里。
 struct PermissionsSection: View {
     @State private var accessibilityOK = false

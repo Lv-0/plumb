@@ -1,6 +1,19 @@
 import Foundation
 import os
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - DiagnosticLog
+//
+// 模块角色：轻量诊断日志（追踪自动居中/平铺管线）。
+//
+// 职责：
+//   - 把消息写入统一日志子系统 com.comet.plumb（Console.app 可见，category autoCenter）。
+//   - 当环境变量 PLUMB_LOG_FILE 设置时，同时追加写入该文件，便于离线分析问题。
+//
+// 设计说明：用 os_log 而非 print，避免 Release 构建里产生文件 I/O 开销；文件落盘
+// 仅在显式设置环境变量时启用，是调试/取证手段，非正常运行路径。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Lightweight diagnostic logger used to trace the auto-centering pipeline.
 /// Writes to the unified logging subsystem `com.comet.plumb` (visible in Console.app)
 /// and, when the env var `PLUMB_LOG_FILE` is set, also appends to that file.

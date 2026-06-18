@@ -1,5 +1,20 @@
 import SwiftUI
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - TilingSection (SettingsUI)
+//
+// 模块角色：设置中"平铺"标签页的内容视图。
+//
+// 职责：
+//   - 平铺总开关（绑定 settings.isEnabled）+ 边距滑块（绑定 settings.edgeMargin，
+//     范围 minimumEdgeMargin...maximumEdgeMargin），共用一个 Liquid Glass 容器。
+//   - 总开关未开启时滑块置灰、提示文案切换。
+//   - 复用 AppListSection 渲染平铺白名单（selected = settings.tiledBundleIDs）。
+//
+// 关键历史：此前 settings.isEnabled 从未绑定到 UI（默认 false），导致 shouldTile()
+// 永远返回 false——这是"平铺功能完全无法使用"的根因。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 平铺段：顶部总开关 + 边距滑块（Liquid Glass）+ 应用列表。
 /// 关键修复：此前 settings.isEnabled（平铺总开关）从未绑定到任何 UI，
 /// 默认 false 导致 shouldTile() 永远返回 false —— 这是"平铺功能完全无法使用"的根因。
