@@ -50,14 +50,16 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.2
+## v1.0.3
 
-### ✨ 改进
-- **设置窗口液态玻璃**：设置窗口现呈现真正的 macOS 26 Liquid Glass（折射 + 边缘 lensing 高光），而非此前的毛玻璃/灰板观感。
-- 根因修复：Plumb 为菜单栏 accessory 应用，其窗口默认无法成为 key window，导致 `NSGlassEffectView` 渲染成非激活态（不透明）。现打开设置时临时切到 `.regular` 激活策略并 `makeKeyAndOrderFront`，激活玻璃折射。
+### 🐛 修复
+- **设置窗口快捷键可用**：打开设置后 ⌘W（关闭窗口）、⌘Q（退出 Plumb）现可正常工作。
+  根因：Plumb 是菜单栏 accessory 应用（`LSUIElement=true`），默认没有主菜单，⌘W/⌘Q 这类标准快捷键由主菜单的 key equivalent 派发——无 `NSApp.mainMenu` 时在设置窗口里完全无响应。现装配最小主菜单（App 菜单：关于/退出⌘Q；文件菜单：关闭窗口⌘W）。
+- **关闭设置后 Dock 图标不再驻留**：窗口关闭后立即移除 Dock 图标，回到纯菜单栏应用。
+  根因：打开设置时临时切到 `.regular` 激活玻璃折射，关闭时仅 `setActivationPolicy(.accessory)` 在 App 仍处前台激活态时 Dock 图标不会立即移除。现切回 accessory 后追加 `hide` 让 Plumb 退出前台、交还焦点。
 
 ### ℹ️ 说明
-- 需 macOS 26+。在彩色/有图案壁纸上液态玻璃效果最明显（深色纯色壁纸上玻璃质感会偏弱，这是 Liquid Glass 的固有特性）。
+- 需 macOS 26+。
 EOF
 )
 
