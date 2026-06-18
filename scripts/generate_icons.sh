@@ -56,30 +56,18 @@ if [[ "${SRC_W}" != "1024" ]]; then
   sips -z 1024 1024 "${APP_BASE}" >/dev/null
 fi
 
-# ── 生成状态栏 template 图标（代码绘制，单色）──
-cat > "${TMP_DIR}/draw_status.swift" <<'SWIFT'
+# ── 生成状态栏 template 图标（从设计稿提取水滴剪影，单色）──
+# 直接从彩色设计稿 AppIcon-base.png 提取水滴 silhouette：
+#   1. 以亮度阈值找出所有"亮"像素（包含水滴主体与四角白色填充伪影）。
+#   2. 从画面中心做 flood-fill，只保留与中心连通的亮块——即水滴本身，
+#      自动丢弃四角的白色填充（它们与中心不连通）。
+#   3. 输出纯黑 + 透明 alpha 的单色 template，交给 macOS 上色。
+# 这样状态栏剪影与 App 图标完全同构，而非代码近似的几何。
+cat > "${TMP_DIR}/extract_status.swift" <<'SWIFT'
 import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
-
-func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1.0) -> CGColor {
-    CGColor(red: r, green: g, blue: b, alpha: a)
-}
-
-func makeContext(size: Int) -> CGContext {
-    let ctx = CGContext(
-        data: nil,
-        width: size, height: size,
-        bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    )!
-    ctx.interpolationQuality = .high
-    ctx.setAllowsAntialiasing(true)
-    ctx.setShouldAntialias(true)
-    return ctx
-}
 
 func writePNG(_ image: CGImage, to path: String) throws {
     let url = URL(fileURLWithPath: path) as CFURL
@@ -92,78 +80,88 @@ func writePNG(_ image: CGImage, to path: String) throws {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Plumb 状态栏图标（template，单色，自动适配深浅色菜单栏）
-// 与 App 图标同一隐喻：一根细线垂下一颗水滴（真圆弧构造，极致圆润）。
-// 用纯黑绘制（NSImage.isTemplate=true 由 AppDelegate 设置），系统负责上色。
-//
-// 几何严格对齐设计稿 assets/AppIcon-base.png：
-//   • 水滴水平 + 垂直居中（占画面约 60% 高度）
-//   • 球部直径约画面 35%（小尺寸下饱满而不臃肿）
-//   • 悬线从水滴尖端向上、长度约为画面 25%（不到顶边，留呼吸感）
-// ─────────────────────────────────────────────────────────────────────────
-func drawStatusIcon(size: Int) throws -> CGImage {
-    let s = CGFloat(size)
-    let ctx = makeContext(size: size)
-    let rect = CGRect(x: 0, y: 0, width: s, height: s)
-    ctx.clear(rect)
+let argv = CommandLine.arguments
+let srcPath = argv[1]        // 已标准化的 1024×1024 AppIcon-base.png 工作副本
+let outPath = argv[2]        // StatusIconTemplate.png
 
-    // 水滴整体高度约为画面的 60%，垂直居中 → 占 y ∈ [0.20·s, 0.80·s]。
-    // 球部占下方约 2/3，颈部收尖占上方约 1/3。
-    let cx = s * 0.5
-    let dropHeight = s * 0.60
-    let bulbHeight = dropHeight * (2.0 / 3.0)   // 球部高度
-    let R = bulbHeight * 0.5                    // 球部半径 ≈ 0.20·s（直径 ≈ 0.40·s，约占画面 35% 宽）
-    let circleCY = s * 0.20 + R                 // 球部圆心：球底落在 0.20·s
-    let tipY = circleCY + R + (dropHeight - bulbHeight) // 尖点：落在 0.80·s
+// Load source into an RGBA buffer.
+guard
+    let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: srcPath) as CFURL, nil),
+    let img = CGImageSourceCreateImageAtIndex(src, 0, nil)
+else {
+    throw NSError(domain: "IconGen", code: 3, userInfo: [NSLocalizedDescriptionKey: "无法读取设计稿"])
+}
+let W = img.width, H = img.height
+let cs = CGColorSpace(name: CGColorSpace.genericRGBLinear)!
+let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
+                    bytesPerRow: 0, space: cs,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+ctx.clear(CGRect(x: 0, y: 0, width: W, height: H))
+ctx.draw(img, in: CGRect(x: 0, y: 0, width: W, height: H))
+let buf = ctx.data!.assumingMemoryBound(to: UInt8.self)
 
-    // 真圆弧 + 相切曲线构造（与 App 图标设计稿同构的水滴形）。
-    let theta: CGFloat = .pi * 50.0 / 180.0
-    let tx = R * cos(theta)
-    let ty = R * sin(theta)
-    let tanPointR = CGPoint(x: cx + tx, y: circleCY + ty)
-    let tanPointL = CGPoint(x: cx - tx, y: circleCY + ty)
-    let neckLen = (tipY - tanPointR.y) * 0.55
-    let cp1R = CGPoint(x: tanPointR.x + neckLen * sin(theta),
-                       y: tanPointR.y + neckLen * cos(theta))
-    let cp2R = CGPoint(x: cx, y: tipY - neckLen * 1.4)
-    let cp1L = CGPoint(x: tanPointL.x - neckLen * sin(theta),
-                       y: tanPointL.y + neckLen * cos(theta))
-
-    let bob = CGMutablePath()
-    bob.move(to: tanPointR)
-    bob.addArc(center: CGPoint(x: cx, y: circleCY), radius: R,
-               startAngle: theta, endAngle: .pi - theta, clockwise: true)
-    bob.addCurve(to: CGPoint(x: cx, y: tipY),
-                 control1: cp1L, control2: CGPoint(x: cx, y: tipY - neckLen * 1.4))
-    bob.addCurve(to: tanPointR, control1: cp2R, control2: cp1R)
-    bob.closeSubpath()
-
-    ctx.setFillColor(color(0, 0, 0, 1))
-    ctx.addPath(bob)
-    ctx.fillPath()
-
-    // 悬线：从水滴尖端向上垂出。尖端在 0.80·s，线顶落在 0.95·s，
-    // 即线长 ≈ 画面 15%——既呼应"铅锤悬线"的隐喻，又留出顶部呼吸感、不贴边。
-    let lineTopY = s * 0.95
-    ctx.setStrokeColor(color(0, 0, 0, 1))
-    ctx.setLineWidth(max(1.5, s * 0.05))
-    ctx.setLineCap(.butt)
-    ctx.move(to: CGPoint(x: cx, y: lineTopY))
-    ctx.addLine(to: CGPoint(x: cx, y: tipY))
-    ctx.strokePath()
-
-    guard let image = ctx.makeImage() else {
-        throw NSError(domain: "IconGen", code: 4, userInfo: [NSLocalizedDescriptionKey: "状态栏图标绘制失败"])
-    }
-    return image
+// Bright-pixel test. 阈值 90 兼顾半透明边缘与高光，同时仍能排除深色背景。
+func isBright(_ x: Int, _ y: Int) -> Bool {
+    let o = (y * W + x) * 4
+    let l = 0.299 * Double(buf[o]) + 0.587 * Double(buf[o + 1]) + 0.114 * Double(buf[o + 2])
+    return Int(l) >= 90
 }
 
-let outputDir = CommandLine.arguments[1]
-try writePNG(drawStatusIcon(size: 64), to: outputDir + "/StatusIconTemplate.png")
+// 从画面中心做 flood-fill，保留与中心连通的亮块。
+var keep = [UInt8](repeating: 0, count: W * H)
+let seed = (W / 2, H / 2)
+var queue = [(Int, Int)]()
+if isBright(seed.0, seed.1) {
+    queue.append(seed)
+    keep[seed.1 * W + seed.0] = 1
+}
+var head = 0
+while head < queue.count {
+    let (x, y) = queue[head]; head += 1
+    let nbrs = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    for (nx, ny) in nbrs {
+        guard nx >= 0, nx < W, ny >= 0, ny < H else { continue }
+        let idx = ny * W + nx
+        guard keep[idx] == 0, isBright(nx, ny) else { continue }
+        keep[idx] = 1
+        queue.append((nx, ny))
+    }
+}
+
+// 把连通的水滴块写入一个单色（黑）+ 透明 alpha 的输出上下文。
+let out = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
+                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+out.clear(CGRect(x: 0, y: 0, width: W, height: H))
+let obuf = out.data!.assumingMemoryBound(to: UInt8.self)
+for y in 0..<H {
+    for x in 0..<W {
+        if keep[y * W + x] == 1 {
+            let o = (y * W + x) * 4
+            obuf[o] = 0; obuf[o + 1] = 0; obuf[o + 2] = 0; obuf[o + 3] = 255
+        }
+    }
+}
+guard let fullRes = out.makeImage() else {
+    throw NSError(domain: "IconGen", code: 4, userInfo: [NSLocalizedDescriptionKey: "状态栏剪影合成失败"])
+}
+
+// 缩放到 64×64（菜单栏实际渲染尺寸，@1x）。高质量重采样保证 16px 渲染清晰。
+let px = 64
+let scaled = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8,
+                       bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+scaled.interpolationQuality = .high
+scaled.clear(CGRect(x: 0, y: 0, width: px, height: px))
+scaled.draw(fullRes, in: CGRect(x: 0, y: 0, width: px, height: px))
+guard let final = scaled.makeImage() else {
+    throw NSError(domain: "IconGen", code: 5, userInfo: [NSLocalizedDescriptionKey: "状态栏图标缩放失败"])
+}
+try writePNG(final, to: outPath)
 SWIFT
 
-swift "${TMP_DIR}/draw_status.swift" "${TMP_DIR}"
+swift "${TMP_DIR}/extract_status.swift" "${APP_BASE}" "${STATUS_ICON}"
+
 
 # ── 由设计稿缩放出 iconset 全尺寸 ──
 mkdir -p "${ICONSET_DIR}"
