@@ -50,16 +50,15 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.3
+## v1.0.4
 
-### 🐛 修复
-- **设置窗口快捷键可用**：打开设置后 ⌘W（关闭窗口）、⌘Q（退出 Plumb）现可正常工作。
-  根因：Plumb 是菜单栏 accessory 应用（`LSUIElement=true`），默认没有主菜单，⌘W/⌘Q 这类标准快捷键由主菜单的 key equivalent 派发——无 `NSApp.mainMenu` 时在设置窗口里完全无响应。现装配最小主菜单（App 菜单：关于/退出⌘Q；文件菜单：关闭窗口⌘W）。
-- **关闭设置后 Dock 图标不再驻留**：窗口关闭后立即移除 Dock 图标，回到纯菜单栏应用。
-  根因：打开设置时临时切到 `.regular` 激活玻璃折射，关闭时仅 `setActivationPolicy(.accessory)` 在 App 仍处前台激活态时 Dock 图标不会立即移除。现切回 accessory 后追加 `hide` 让 Plumb 退出前台、交还焦点。
+### ✨ 新功能
+- **界面自动跟随系统语言**：现支持 **中文 / English / Español / Français / 日本語** 五种语言。根据系统首选语言自动切换，无需手动设置；其他语言回退为英语。
+- **README 默认展示英语**：GitHub 仓库首页现以英文呈现，可在 顶部/底部 一键切换至 简体中文 / Español / Français / 日本語。
 
 ### ℹ️ 说明
 - 需 macOS 26+。
+- 本版本 DMG 未签名/未公证；首次打开若被 Gatekeeper 拦截提示「已损坏」，请执行 `xattr -dr com.apple.quarantine /Applications/Plumb.app`（详见 README FAQ）。
 EOF
 )
 
