@@ -13,7 +13,7 @@ Auto-centers and tiles macOS apps — a blessing for neat freaks!
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg?style=flat-square)](#download--install)
+[![Release](https://img.shields.io/badge/release-v1.0.4-success.svg?style=flat-square)](#download--install)
 
 **English** · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -46,6 +46,7 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 - 🎯 Centers once on launch, then only when a window is re-opened / a new window is focused
 - 🖥️ Computes within the usable screen area (auto-excludes Dock & menu bar), stable across multi-display
 - 📐 Per-app auto-tiling (allowlist) with a configurable uniform edge margin
+- 🔌 Optional **Launch at Login** (native macOS login item, no hacky scripts)
 - 🪟 Liquid Glass settings UI (macOS 26) — frosted glass, app search, pill toggles
 
 ## ✨ Features
@@ -59,6 +60,7 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 | 🔄 Live app-list refresh | Newly installed apps appear in the settings picker immediately, no restart needed |
 | 🪟 Liquid Glass settings UI | macOS 26 frosted glass, search, pill toggles |
 | 🧠 Smart coordinate-space detection | Auto-detects each app's window coordinate space and caches it for stability |
+| 🔌 Launch at Login | Optional native macOS login item (`SMAppService.mainApp`); toggle reflects the real system state |
 | 🪧 Non-intrusive menu-bar presence | Menu-bar icon only, does not occupy the Dock |
 
 ## 📐 Auto-Tiling
@@ -114,6 +116,7 @@ See [Build locally](#build-locally).
 4. Click the menu-bar icon:
    - Trigger centering manually
    - Open `Tiling Settings…` to configure the allowlist and margin
+   - Open `Settings…` → **Permissions** tab to enable **Launch at Login** (Plumb starts automatically when you log in)
 
 > 💡 **Design principle**: each window is centered/tiled **only once** (keyed by `pid:windowNumber`). Manually dragging a window is never "corrected" back — Plumb won't fight your manual layout.
 
@@ -135,6 +138,12 @@ See [Build locally](#build-locally).
 
 - ❌ The app **does not upload screen content** and **does not perform telemetry collection**.
 - ✅ Permissions are used **only** for local window geometry calculations and positioning.
+
+### Launch at Login
+
+- **Where**: `Settings…` (menu bar) → **Permissions** tab → **Launch at Login** toggle.
+- **How**: Registered as a native macOS login item via `SMAppService.mainApp` (no background daemons, no LaunchAgent hacks). The toggle reads the **real** system state, so it stays in sync even if you change it from `System Settings → General → Login Items`.
+- **Note**: Requires running as a signed `.app`. The bare `swift build` executable cannot register a login item.
 
 ## Requirements
 
