@@ -76,6 +76,8 @@ enum L10n {
         case granted
         case notGranted
         case openSettings
+        case launchAtLogin
+        case launchAtLoginHint
         // 开关 / 无障碍
         case toggleSwitch
         case on, off
@@ -120,6 +122,8 @@ enum L10n {
             .granted: "Granted",
             .notGranted: "Not Granted",
             .openSettings: "Open Settings…",
+            .launchAtLogin: "Launch at Login",
+            .launchAtLoginHint: "Automatically launch Plumb when your Mac starts.",
             .toggleSwitch: "Switch",
             .on: "On",
             .off: "Off",
@@ -159,6 +163,8 @@ enum L10n {
             .granted: "Concedido",
             .notGranted: "No concedido",
             .openSettings: "Abrir ajustes…",
+            .launchAtLogin: "Abrir al iniciar sesión",
+            .launchAtLoginHint: "Inicia Plumb automáticamente al encender el Mac.",
             .toggleSwitch: "Interruptor",
             .on: "Activado",
             .off: "Desactivado",
@@ -198,6 +204,8 @@ enum L10n {
             .granted: "Accordée",
             .notGranted: "Non accordée",
             .openSettings: "Ouvrir les réglages…",
+            .launchAtLogin: "Lancer à la connexion",
+            .launchAtLoginHint: "Lance Plumb automatiquement au démarrage du Mac.",
             .toggleSwitch: "Interrupteur",
             .on: "Activé",
             .off: "Désactivé",
@@ -237,6 +245,8 @@ enum L10n {
             .granted: "已授权",
             .notGranted: "未授权",
             .openSettings: "打开设置…",
+            .launchAtLogin: "开机自启动",
+            .launchAtLoginHint: "Mac 开机后自动启动 Plumb。",
             .toggleSwitch: "开关",
             .on: "开",
             .off: "关",
@@ -276,6 +286,8 @@ enum L10n {
             .granted: "許可済み",
             .notGranted: "未許可",
             .openSettings: "設定を開く…",
+            .launchAtLogin: "ログイン時に起動",
+            .launchAtLoginHint: "Mac 起動時に Plumb を自動的に起動します。",
             .toggleSwitch: "スイッチ",
             .on: "オン",
             .off: "オフ",
@@ -318,6 +330,8 @@ enum L10n {
     static var granted: String { tr(.granted) }
     static var notGranted: String { tr(.notGranted) }
     static var openSettings: String { tr(.openSettings) }
+    static var launchAtLogin: String { tr(.launchAtLogin) }
+    static var launchAtLoginHint: String { tr(.launchAtLoginHint) }
     static var toggleSwitch: String { tr(.toggleSwitch) }
     static var on: String { tr(.on) }
     static var off: String { tr(.off) }
