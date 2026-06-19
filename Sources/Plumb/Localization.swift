@@ -15,7 +15,7 @@ import Foundation
 
 /// 应用支持的语言。按系统偏好自动解析其一；无匹配时回退到英语。
 enum AppLanguage {
-    case zh, en, ja
+    case zh, en, es, fr, ja
 
     /// 进程级单次解析，首次访问时缓存。
     static let current: AppLanguage = resolve(from: Locale.preferredLanguages)
@@ -27,6 +27,8 @@ enum AppLanguage {
             let lang = Locale(identifier: pref).language.languageCode?.identifier ?? ""
             switch lang {
             case "zh": return .zh
+            case "es": return .es
+            case "fr": return .fr
             case "ja": return .ja
             case "en": return .en
             default: continue
@@ -129,6 +131,84 @@ enum L10n {
             .errUnableToReadWindowFrame: "Unable to read window position or size.",
             .errUnableToWriteWindowSize: "Unable to set window size (the window may not be resizable).",
             .errUnableToWriteWindowPosition: "Unable to set window position (the window may not be movable).",
+        ],
+        .es: [
+            .menuSubtitle: "Centrado de ventanas · Mosaico",
+            .centerNow: "Centrar ahora",
+            .settings: "Ajustes…",
+            .accessibilityPermission: "Permiso de accesibilidad…",
+            .screenRecordingPermission: "Permiso de grabación de pantalla…",
+            .quitApp: "Salir de Plumb",
+            .about: "Acerca de Plumb",
+            .fileMenu: "Archivo",
+            .closeWindow: "Cerrar ventana",
+            .tabCentering: "Centrado",
+            .tabTiling: "Mosaico",
+            .tabPermissions: "Permisos",
+            .centeringFootnote: "Lista vacía = centrar todas las apps; activa el interruptor para centrar solo las apps seleccionadas.",
+            .searchApps: "Buscar apps",
+            .enableAutoTiling: "Activar mosaico automático",
+            .enableAutoTilingHint: "Cuando está activado, las apps marcadas abajo se colocan en mosaico en la pantalla automáticamente.",
+            .margin: "Margen",
+            .marginHint: "Espacio entre la ventana y los bordes de la pantalla al colocar en mosaico.",
+            .tilingFootnoteOn: "Marca las apps que quieres en mosaico; las no marcadas permanecen centradas.",
+            .tilingFootnoteOff: "Activa primero el mosaico automático arriba.",
+            .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
+            .accessibility: "Accesibilidad",
+            .screenRecording: "Grabación de pantalla",
+            .granted: "Concedido",
+            .notGranted: "No concedido",
+            .openSettings: "Abrir ajustes…",
+            .toggleSwitch: "Interruptor",
+            .on: "Activado",
+            .off: "Desactivado",
+            .centerFailedTitle: "Error al centrar la ventana",
+            .errAccessibilityPermissionMissing: "Falta el permiso de accesibilidad. Concédelo en Ajustes del sistema → Privacidad y seguridad → Accesibilidad.",
+            .errNoFrontmostApplication: "No se detectó ninguna aplicación en primer plano.",
+            .errNoWindow: "La app en primer plano no tiene ninguna ventana operable.",
+            .errFullscreenWindow: "La ventana está en pantalla completa; se omitió el centrado.",
+            .errUnableToReadWindowFrame: "No se pudo leer la posición o el tamaño de la ventana.",
+            .errUnableToWriteWindowSize: "No se pudo establecer el tamaño de la ventana (puede que no sea redimensionable).",
+            .errUnableToWriteWindowPosition: "No se pudo establecer la posición de la ventana (puede que no se pueda mover).",
+        ],
+        .fr: [
+            .menuSubtitle: "Centrage de fenêtre · Mosaïque",
+            .centerNow: "Centrer maintenant",
+            .settings: "Réglages…",
+            .accessibilityPermission: "Permission d'accèsibilité…",
+            .screenRecordingPermission: "Permission d'enregistrement d'écran…",
+            .quitApp: "Quitter Plumb",
+            .about: "À propos de Plumb",
+            .fileMenu: "Fichier",
+            .closeWindow: "Fermer la fenêtre",
+            .tabCentering: "Centrage",
+            .tabTiling: "Mosaïque",
+            .tabPermissions: "Permissions",
+            .centeringFootnote: "Liste vide = centrer toutes les apps ; activez l'interrupteur pour ne centrer que les apps sélectionnées.",
+            .searchApps: "Rechercher des apps",
+            .enableAutoTiling: "Activer la mosaïque automatique",
+            .enableAutoTilingHint: "Lorsque c'est activé, les apps cochées ci-dessous sont placées en mosaïque à l'écran automatiquement.",
+            .margin: "Marge",
+            .marginHint: "Espace entre la fenêtre et les bords de l'écran lors de la mosaïque.",
+            .tilingFootnoteOn: "Cochez les apps à placer en mosaïque ; les apps non cochées restent centrées.",
+            .tilingFootnoteOff: "Activez d'abord la mosaïque automatique ci-dessus.",
+            .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
+            .accessibility: "Accessibilité",
+            .screenRecording: "Enregistrement d'écran",
+            .granted: "Accordée",
+            .notGranted: "Non accordée",
+            .openSettings: "Ouvrir les réglages…",
+            .toggleSwitch: "Interrupteur",
+            .on: "Activé",
+            .off: "Désactivé",
+            .centerFailedTitle: "Échec du centrage de la fenêtre",
+            .errAccessibilityPermissionMissing: "La permission d'accessibilité manque. Accordez-la dans Réglages Système → Confidentialité et sécurité → Accessibilité.",
+            .errNoFrontmostApplication: "Aucune application au premier plan détectée.",
+            .errNoWindow: "L'app au premier plan n'a aucune fenêtre opérable.",
+            .errFullscreenWindow: "La fenêtre est en plein écran ; centrage ignoré.",
+            .errUnableToReadWindowFrame: "Impossible de lire la position ou la taille de la fenêtre.",
+            .errUnableToWriteWindowSize: "Impossible de définir la taille de la fenêtre (elle n'est peut-être pas redimensionnable).",
+            .errUnableToWriteWindowPosition: "Impossible de définir la position de la fenêtre (elle n'est peut-être pas déplaçable).",
         ],
         .zh: [
             .menuSubtitle: "窗口居中 · 平铺",

@@ -26,22 +26,40 @@ struct LocalizationTests {
         #expect(AppLanguage.resolve(from: ["ja"]) == .ja)
     }
 
-    @Test("unsupported first preference falls through to a later supported one")
-    func fallbackWithinList() {
-        #expect(AppLanguage.resolve(from: ["fr-FR", "en-US"]) == .en)
-        #expect(AppLanguage.resolve(from: ["de-DE", "ja-JP"]) == .ja)
+    @Test("es variants resolve to .es")
+    func esVariants() {
+        #expect(AppLanguage.resolve(from: ["es-MX"]) == .es)
+        #expect(AppLanguage.resolve(from: ["es-ES"]) == .es)
+        #expect(AppLanguage.resolve(from: ["es"]) == .es)
     }
 
-    @Test("no supported language in list falls back to .en")
-    func noMatchFallsBackToEnglish() {
-        #expect(AppLanguage.resolve(from: ["fr-FR"]) == .en)
-        #expect(AppLanguage.resolve(from: ["ko-KR", "fr-FR"]) == .en)
+    @Test("fr variants resolve to .fr")
+    func frVariants() {
+        #expect(AppLanguage.resolve(from: ["fr-CA"]) == .fr)
+        #expect(AppLanguage.resolve(from: ["fr-FR"]) == .fr)
+        #expect(AppLanguage.resolve(from: ["fr"]) == .fr)
+    }
+
+    @Test("unsupported first preference falls through to a later supported one")
+    func fallbackWithinList() {
+        #expect(AppLanguage.resolve(from: ["de-DE", "en-US"]) == .en)
+        #expect(AppLanguage.resolve(from: ["de-DE", "ja-JP"]) == .ja)
+        #expect(AppLanguage.resolve(from: ["de-DE", "es-ES"]) == .es)
+        #expect(AppLanguage.resolve(from: ["ko-KR", "fr-FR"]) == .fr)
     }
 
     @Test("first user preference wins when multiple supported present")
     func firstPreferenceWins() {
         #expect(AppLanguage.resolve(from: ["ja", "zh"]) == .ja)
         #expect(AppLanguage.resolve(from: ["zh", "en"]) == .zh)
+        #expect(AppLanguage.resolve(from: ["es", "fr"]) == .es)
+        #expect(AppLanguage.resolve(from: ["fr", "es"]) == .fr)
+    }
+
+    @Test("no supported language in list falls back to .en")
+    func noMatchFallsBackToEnglish() {
+        #expect(AppLanguage.resolve(from: ["ko-KR"]) == .en)
+        #expect(AppLanguage.resolve(from: ["ko-KR", "de-DE"]) == .en)
     }
 
     @Test("empty preference list falls back to .en")
@@ -53,7 +71,7 @@ struct LocalizationTests {
 
     @Test("every key is present and non-empty in every supported language")
     func tableCompleteness() throws {
-        for lang in [AppLanguage.zh, .en, .ja] {
+        for lang in [AppLanguage.en, .zh, .es, .fr, .ja] {
             let dict = try #require(L10n.table[lang])
             for key in L10n.Key.allCases {
                 let v = try #require(dict[key], "Missing key \(key.rawValue) in \(lang)")

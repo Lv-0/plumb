@@ -68,6 +68,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
   <array>
     <string>zh</string>
     <string>en</string>
+    <string>es</string>
+    <string>fr</string>
     <string>ja</string>
   </array>
   <key>CFBundleDevelopmentRegion</key>
