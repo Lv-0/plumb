@@ -52,13 +52,13 @@ BODY=$(
   cat <<'EOF' | json_escape
 ## v1.0.4
 
-### ✨ 新功能
-- **界面自动跟随系统语言**：现支持 **中文 / English / Español / Français / 日本語** 五种语言。根据系统首选语言自动切换，无需手动设置；其他语言回退为英语。
-- **README 默认展示英语**：GitHub 仓库首页现以英文呈现，可在 顶部/底部 一键切换至 简体中文 / Español / Français / 日本語。
+### ✨ New
+- **UI now follows the system language automatically**: supports **中文 / English / Español / Français / 日本語**. Switches automatically based on the system's preferred language — no manual setting; other languages fall back to English.
+- **README defaults to English**: the repo landing page now renders in English, with one-click switching at the top/bottom to 简体中文 / Español / Français / 日本語.
 
-### ℹ️ 说明
-- 需 macOS 26+。
-- 本版本 DMG 未签名/未公证；首次打开若被 Gatekeeper 拦截提示「已损坏」，请执行 `xattr -dr com.apple.quarantine /Applications/Plumb.app`（详见 README FAQ）。
+### ℹ️ Notes
+- Requires macOS 26+.
+- This release's DMG is unsigned / unnotarized; if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
 EOF
 )
 
