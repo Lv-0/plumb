@@ -16,6 +16,7 @@ import SwiftUI
 struct PermissionsSection: View {
     @State private var accessibilityOK = false
     @State private var screenCaptureOK = false
+    @State private var launchAtLogin: Bool = false
 
     var body: some View {
         ScrollView {
@@ -48,6 +49,8 @@ struct PermissionsSection: View {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color.primary.opacity(0.04))
                 )
+
+                launchAtLoginCard
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -79,5 +82,47 @@ struct PermissionsSection: View {
     private func refresh() {
         accessibilityOK = AccessibilityPermission.ensureTrusted(prompt: false)
         screenCaptureOK = ScreenCapturePermission.ensureAuthorized(prompt: false)
+        launchAtLogin = LaunchAtLogin.isEnabled
+    }
+
+    /// 开机自启动独立卡片：图标 + 标题/说明 + 开关。视觉与权限卡片一致（极淡填充，不叠 glass）。
+    private var launchAtLoginCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "power")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.launchAtLogin)
+                    .foregroundStyle(.primary)
+                Text(L10n.launchAtLoginHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            PillToggle(isOn: $launchAtLogin)
+                .animation(.spring(duration: 0.32, bounce: 0.25), value: launchAtLogin)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+        .onChange(of: launchAtLogin) { _, isOn in
+            toggleLaunchAtLogin(to: isOn)
+        }
+    }
+
+    /// 切换开机自启动：以系统状态为准刷新；失败时回滚开关到真实值，保持一致且不崩溃。
+    private func toggleLaunchAtLogin(to isOn: Bool) {
+        do {
+            if isOn { try LaunchAtLogin.enable() }
+            else    { try LaunchAtLogin.disable() }
+            launchAtLogin = LaunchAtLogin.isEnabled
+        } catch {
+            // 失败（如裸可执行环境）→ 回滚到真实状态。
+            launchAtLogin = LaunchAtLogin.isEnabled
+        }
     }
 }
