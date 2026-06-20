@@ -80,7 +80,7 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.4
+## v1.0.5
 
 ### ✨ New
 - **In-app automatic updates**: Plumb now checks for updates on launch and via "Check for Updates…" in the menu bar. Update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` (it asks for your password once, since writing to `/Applications` requires it).
