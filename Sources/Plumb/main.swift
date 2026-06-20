@@ -118,6 +118,17 @@ if selfTestUI {
     exit(0)
 }
 
+// Installer mode: triggered when the normal-mode app writes installerMode=true and
+// relaunches itself. Runs a minimal privileged installer that replaces
+// /Applications/Plumb.app, then relaunches the new version.
+if UserDefaults.standard.bool(forKey: UpdateConfig.installerModeKey) {
+    UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)  // cleared here too for safety
+    app.setActivationPolicy(.regular)
+    app.delegate = UpdateInstallerDelegate()
+    app.run()
+    exit(0)
+}
+
 let delegate = AppDelegate()
 
 app.delegate = delegate

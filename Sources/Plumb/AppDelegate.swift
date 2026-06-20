@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AccessibilityPermission.ensureTrusted(prompt: true)
         eventObserver.start()
         centerOnceOnLaunch()
+        UpdateCoordinator.shared.checkForUpdatesInBackground()
     }
 
     @objc private func centerNow() {
@@ -79,6 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateCoordinator.shared.checkForUpdatesManually()
     }
 
     // MARK: 主菜单（让 ⌘W / ⌘Q 等标准快捷键可用）
@@ -144,6 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsItem = menu.addItem(withTitle: L10n.settings, action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+
+        // 检查更新…
+        let updateItem = menu.addItem(withTitle: L10n.otaCheckForUpdates, action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.target = self
+        updateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
 
         menu.addItem(.separator())
 
