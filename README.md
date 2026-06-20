@@ -13,7 +13,7 @@ Auto-centers and tiles macOS apps — a blessing for neat freaks!
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.0.6-success.svg?style=flat-square)](#download--install)
+[![Release](https://img.shields.io/badge/release-v1.0.7-success.svg?style=flat-square)](#download--install)
 
 **English** · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 

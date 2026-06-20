@@ -5,7 +5,7 @@ set -euo pipefail
 # then commit appcast.json so in-app OTA sees the new version.
 #
 # Usage:
-#   GITHUB_TOKEN=... VERSION=1.0.6 scripts/publish_release.sh v1.0.6
+#   GITHUB_TOKEN=... VERSION=1.0.7 scripts/publish_release.sh v1.0.7
 #
 # Notes:
 # - Does not embed tokens anywhere; relies on $GITHUB_TOKEN from the environment.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 TAG="${1:-}"
 if [[ -z "${TAG}" ]]; then
-  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.6 $0 <tag>  (e.g. v1.0.6)"
+  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.7 $0 <tag>  (e.g. v1.0.7)"
   exit 1
 fi
 
@@ -80,10 +80,10 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.6
+## v1.0.7
 
-### 🐛 Fixed
-- **In-app update no longer installs a "damaged" app**: the update downloader now extracts the update package with `ditto` (Mac-aware) instead of generic `unzip`. Previously the resource forks in the `.app` were dropped during extraction, breaking the code-signing seal and causing macOS to report the installed app as "damaged" / "can't be opened".
+### ✨ Added
+- **About tab in Settings**: the settings window now has a 4th tab ("About") showing the current app version number and a button that opens the GitHub repository page (https://github.com/Lv-0/plumb) in your default browser. Useful for checking which version you're on and reaching the source/issues.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
