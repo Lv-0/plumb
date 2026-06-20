@@ -14,7 +14,7 @@ import Foundation
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 语义化版本。仅支持 major.minor.patch 三段数字（OTA 场景足够）。
-struct AppVersion: Comparable, Equatable {
+struct AppVersion: Comparable, Equatable, Codable {
     let major: Int
     let minor: Int
     let patch: Int
@@ -25,15 +25,22 @@ struct AppVersion: Comparable, Equatable {
         self.patch = patch
     }
 
-    /// 从字符串解析；支持可选前导 'v'。非三段数字或含非数字字符则返回 nil。
+    /// 从字符串解析；支持可选前导 'v'，接受 2 段（major.minor，patch=0）或 3 段。
+    /// 非数字段或含非数字字符则返回 nil。
     init?(parsing raw: String) {
         var s = raw
         if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
         let parts = s.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let maj = Int(parts[0]),
-              let min = Int(parts[1]),
-              let pat = Int(parts[2]) else { return nil }
+        guard parts.count == 2 || parts.count == 3 else { return nil }
+        guard let maj = Int(parts[0]),
+              let min = Int(parts[1]) else { return nil }
+        let pat: Int
+        if parts.count == 3 {
+            guard let p = Int(parts[2]) else { return nil }
+            pat = p
+        } else {
+            pat = 0
+        }
         self.init(major: maj, minor: min, patch: pat)
     }
 

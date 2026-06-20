@@ -19,12 +19,15 @@ struct AppVersionTests {
         #expect(AppVersion(parsing: "v1.0.5") == AppVersion(major: 1, minor: 0, patch: 5))
     }
 
-    @Test("rejects non-numeric segments")
-    func rejectsNonNumeric() {
-        #expect(AppVersion(parsing: "1.0") == nil)
+    @Test("accepts 2- and 3-segment forms, rejects malformed")
+    func parsingForms() {
+        #expect(AppVersion(parsing: "1.0") == AppVersion(major: 1, minor: 0, patch: 0))   // 2-seg → patch 0
+        #expect(AppVersion(parsing: "26.1") == AppVersion(major: 26, minor: 1, patch: 0))
         #expect(AppVersion(parsing: "1.x.3") == nil)
         #expect(AppVersion(parsing: "") == nil)
         #expect(AppVersion(parsing: "latest") == nil)
+        #expect(AppVersion(parsing: "1") == nil)                                            // 1-seg rejected
+        #expect(AppVersion(parsing: "1.2.3.4") == nil)                                      // 4-seg rejected
     }
 
     // MARK: - Comparison (Comparable)
