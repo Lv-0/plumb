@@ -114,19 +114,36 @@ final class UpdateCoordinator {
 
     /// 写 installerMode + 待安装路径，以 Launch Services 重开自身，然后退出当前进程。
     ///
-    /// 重要：必须用带 completion handler 的 openApplication，等新实例确认打开后再 terminate。
-    /// 旧实现 openApplication 后立即 terminate，新进程连接尚未建立就失去旧进程引用，
-    /// 触发 LaunchServices `-609 connectionInvalid` → 安装器无法启动 → installerMode 永久卡死 → app 无法打开。
+    /// 重要：必须用独立的 shell 进程（`/usr/bin/open`）启动新实例，而非 NSWorkspace.openApplication。
+    /// 旧实现（及 completion-handler 版）从正在退出的 app 内部调用 openApplication：
+    ///   - 旧版：openApplication 后立即 terminate，竞态 → -609 connectionInvalid
+    ///   - completion 版：terminate 放在 completion 里仍被 macOS 取消（app 关闭序列会丢弃
+    ///     自身的 LaunchServices 启动请求），新实例依然不启动
+    /// 用 `/usr/bin/open` 经独立 shell 进程启动：该进程不归当前 app 管，terminate 当前 app
+    /// 不会取消它，新实例可靠启动为安装器。延迟 0.4s 再 terminate，给 open 命令执行时间。
     private func relaunchIntoInstaller(with newApp: URL) {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: UpdateConfig.installerModeKey)
         defaults.set(newApp.path, forKey: UpdateConfig.installerAppPathKey)
-        let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        // 加入队列后立即在后台启动新实例；completion 回调（无论成功失败）才退出当前进程，
-        // 确保 LaunchServices 完成连接切换，不再竞态。
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
-            NSApp.terminate(nil)
+        // 关键：不能用 NSApp.terminate（会杀整个 session 包括子进程）也不能用 `open`（app 刚退出时
+        // LaunchServices 静默忽略重启请求，返回 0 但不启动）。实测唯一可靠的方式：
+        // 用 nohup + disown 启动一个独立 shell，sleep 后直接执行 app 二进制（绕过 LaunchServices），
+        // 然后用 exit(0) 退出当前进程（exit 不发 session 清理信号，nohup 子进程能存活）。
+        // 直接执行二进制而非 `open`：绕过 LS 的"刚退出的 app 不重启"机制，新实例真实启动为安装器。
+        guard let execURL = Bundle.main.executableURL else { exit(0) }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = ["-c", #"nohup /bin/sh -c "sleep 1.0 && '\#(execURL.path)'" >/dev/null 2>&1 & disown"#]
+        do {
+            try proc.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                exit(0)
+            }
+        } catch {
+            // 兜底：稍等后直接退出，安全网会处理 installerMode。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                exit(0)
+            }
         }
     }
 
