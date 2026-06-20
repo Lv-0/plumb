@@ -136,6 +136,16 @@ swift build -c release
 - ❌ 本项目**不会上传屏幕内容**，**不会进行网络采集**。
 - ✅ 权限**仅用于**本地窗口几何计算与窗口位置调整。
 
+### 为什么权限可能需要重新授权（以及如何修复）
+
+macOS 以应用的**稳定签名身份**（designated requirement）为键保存「辅助功能」与「屏幕录制」授权。早期版本的 Plumb 使用 **ad-hoc 签名**——这种签名的身份只是可执行文件的哈希（`cdhash`），每次重新编译都会变化。结果：每次更新都被 macOS 视为一个全新应用，授权记录随之失效。
+
+从本版本起，Plumb 改用**固定的自签名证书**签名，designated requirement 绑定到证书身份而非每次构建的哈希。授权因此可跨更新保留——授权一次，升级后依然有效。
+
+**从 ad-hoc 版本升级的用户请注意：** 由于旧授权绑定的是旧的哈希，升级到本版本时仍需**最后一次**重新授予「辅助功能 / 屏幕录制」权限。此后所有更新都将自动保留授权。
+
+**局限——从源码编译裸可执行文件：** 权限稳定性的保证仅适用于由 `scripts/build_app.sh` 产出的、经签名的 `.app` 包。`swift build` / `swift run` 产出的裸可执行文件没有 `.app` 包、没有稳定签名身份，其 TCC 授权以 `cdhash` 为键，每次重新编译都会失效。日常测试依赖权限的功能时，请使用 `.app` 构建产物。
+
 ## 系统要求
 
 - **macOS 26+**（基于 macOS 26 SDK 构建，使用 Liquid Glass 界面，不支持更低版本）
@@ -202,6 +212,16 @@ xattr -dr com.apple.quarantine /Applications/Plumb.app
 ```
 
 或前往 `系统设置 → 隐私与安全性`，点击页面底部的「仍要打开」。
+
+</details>
+
+<details>
+<summary><b>每次从源码重新编译后权限都失效？</b></summary>
+
+你在使用裸可执行（`swift run`）或 ad-hoc 的 `.app`。两者都没有稳定的签名身份，macOS 会把每次构建当成新应用。要在本地获得稳定权限：
+
+1. 运行一次 `scripts/make_signing_cert.sh`（会请求一次密码以设置证书信任）。
+2. 用 `scripts/build_app.sh` 构建。输出会包含 `签名身份: Plumb Local Signer`，此后授权即可跨重新构建保留。
 
 </details>
 
