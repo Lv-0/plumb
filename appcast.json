@@ -1,7 +1,7 @@
 {
   "version": "1.0.6",
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.6/Plumb-1.0.6.zip",
-  "sha256": "REPLACE_AT_RELEASE_TIME",
+  "sha256": "ef31e0468721de282510ee593f62ce1cb84b6d7edd4e4bcf67038995ff0b80cb",
   "notes": {
     "en": "Fixes a bug where the in-app update would install a version that macOS reported as 'damaged' / 'can't be opened'.",
     "zh": "修复软件内更新安装后 macOS 报「应用已损坏 / 无法打开」的问题。",
