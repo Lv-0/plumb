@@ -1,0 +1,13 @@
+{
+  "version": "1.0.6",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.6/Plumb-1.0.6.zip",
+  "sha256": "REPLACE_AT_RELEASE_TIME",
+  "notes": {
+    "en": "In-app updates + permissions now survive updates.",
+    "zh": "软件内更新 + 权限现在可跨更新保留。",
+    "es": "Actualizaciones desde la app y los permisos ya se conservan entre actualizaciones.",
+    "fr": "Mises à jour depuis l'app et les permissions sont désormais conservées entre les mises à jour.",
+    "ja": "アプリ内アップデートと、アップデート後も権限が維持されるようになりました。"
+  },
+  "minOS": "26.0"
+}

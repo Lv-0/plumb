@@ -28,9 +28,9 @@ enum UpdateResult {
     case error                          // 网络错误 / appcast 解析失败
 }
 
-/// appcast URL（随发版提交到 repo main 分支）。
+/// appcast URL（随发版提交到 repo main 分支根目录）。
 enum UpdateConfig {
-    static let appcastURL = URL(string: "https://raw.githubusercontent.com/Lv-0/plumb/main/dist/appcast.json")!
+    static let appcastURL = URL(string: "https://raw.githubusercontent.com/Lv-0/plumb/main/appcast.json")!
 }
 
 /// 生产环境 fetcher：URLSession 拉取 appcast。

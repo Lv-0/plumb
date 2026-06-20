@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish a GitHub Release and upload dist/Plumb.dmg.
+# Publish a GitHub Release and upload dist/Plumb.dmg + dist/Plumb-{VERSION}.zip,
+# then commit appcast.json so in-app OTA sees the new version.
 #
 # Usage:
-#   GITHUB_TOKEN=... scripts/publish_release.sh v0.1.4
+#   GITHUB_TOKEN=... VERSION=1.0.6 scripts/publish_release.sh v1.0.6
 #
 # Notes:
 # - Does not embed tokens anywhere; relies on $GITHUB_TOKEN from the environment.
-# - Release notes intentionally exclude installation steps (per project requirement).
+# - VERSION must match the tag's numeric version (used for the zip asset name).
 
 TAG="${1:-}"
 if [[ -z "${TAG}" ]]; then
-  echo "Usage: GITHUB_TOKEN=... $0 <tag>  (e.g. v0.1.4)"
+  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.6 $0 <tag>  (e.g. v1.0.6)"
   exit 1
 fi
 
@@ -21,12 +22,17 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   exit 1
 fi
 
+VERSION="${VERSION:-${TAG#v}}"   # strip leading 'v' from tag as a fallback
 REPO="${GITHUB_REPOSITORY:-Lv-0/plumb}"
-ASSET_PATH="dist/Plumb.dmg"
-ASSET_NAME="$(basename "${ASSET_PATH}")"
+DMG_PATH="dist/Plumb.dmg"
+ZIP_PATH="dist/Plumb-${VERSION}.zip"
 
-if [[ ! -f "${ASSET_PATH}" ]]; then
-  echo "Missing asset: ${ASSET_PATH}"
+if [[ ! -f "${DMG_PATH}" ]]; then
+  echo "Missing asset: ${DMG_PATH}"
+  exit 1
+fi
+if [[ ! -f "${ZIP_PATH}" ]]; then
+  echo "Missing asset: ${ZIP_PATH} (run scripts/create_zip.sh first)"
   exit 1
 fi
 
@@ -46,19 +52,43 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
+# Upload (or replace) one asset by name. Usage: upload_asset <release_id> <assets_json> <path> <name>
+upload_asset() {
+  local release_id="$1"
+  local assets="$2"
+  local path="$3"
+  local name="$4"
+
+  local existing_id
+  existing_id="$(echo "${assets}" | jq -r ".[] | select(.name==\"${name}\") | .id" | head -n 1)"
+  if [[ -n "${existing_id}" ]]; then
+    api -X DELETE "https://api.github.com/repos/${REPO}/releases/assets/${existing_id}" >/dev/null
+  fi
+
+  local upload_url
+  upload_url="$(api "https://api.github.com/repos/${REPO}/releases/${release_id}" | jq -r '.upload_url' | sed 's/{?name,label}//')"
+  echo "  uploading ${name}..."
+  curl -sS \
+    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @"${path}" \
+    "${upload_url}?name=${name}" \
+    >/dev/null
+}
+
 RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.4
+## v1.0.6
 
 ### ✨ New
-- **UI now follows the system language automatically**: supports **中文 / English / Español / Français / 日本語**. Switches automatically based on the system's preferred language — no manual setting; other languages fall back to English.
-- **README defaults to English**: the repo landing page now renders in English, with one-click switching at the top/bottom to 简体中文 / Español / Français / 日本語.
+- **Permissions now survive updates**: Plumb is signed with a stable identity, so your Accessibility / Screen Recording grants persist across version upgrades — no more "delete and re-grant" after each update. (If upgrading from an older ad-hoc release, re-grant **once**; after that, grants are preserved automatically.)
+- **In-app automatic updates**: Plumb now checks for updates on launch and via "Check for Updates…" in the menu bar. Update with one click — no manual DMG download.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
-- This release's DMG is unsigned / unnotarized; if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
+- This release DMG is self-signed (not Developer-ID-notarized); if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
 EOF
 )
 
@@ -74,37 +104,50 @@ payload=$(
 EOF
 )
 
-echo "[1/3] Create release ${TAG} on ${REPO}"
+echo "[1/5] Create release ${TAG} on ${REPO}"
 create_resp="$(api -X POST "https://api.github.com/repos/${REPO}/releases" -d "${payload}" || true)"
 
 release_id="$(echo "${create_resp}" | jq -r '.id // empty')"
-upload_url="$(echo "${create_resp}" | jq -r '.upload_url // empty' | sed 's/{?name,label}//')"
 
-if [[ -z "${release_id}" || -z "${upload_url}" ]]; then
+if [[ -z "${release_id}" ]]; then
   echo "Release may already exist, fetching by tag..."
   get_resp="$(api "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")"
   release_id="$(echo "${get_resp}" | jq -r '.id')"
-  upload_url="$(echo "${get_resp}" | jq -r '.upload_url' | sed 's/{?name,label}//')"
 fi
 
-if [[ -z "${release_id}" || -z "${upload_url}" ]]; then
+if [[ -z "${release_id}" ]]; then
   echo "Failed to create or fetch release for tag: ${TAG}"
   exit 1
 fi
 
-echo "[2/3] Ensure no duplicate asset: ${ASSET_NAME}"
+echo "[2/5] Refresh release assets list"
 assets="$(api "https://api.github.com/repos/${REPO}/releases/${release_id}/assets")"
-existing_id="$(echo "${assets}" | jq -r ".[] | select(.name==\"${ASSET_NAME}\") | .id" | head -n 1)"
-if [[ -n "${existing_id}" ]]; then
-  api -X DELETE "https://api.github.com/repos/${REPO}/releases/assets/${existing_id}" >/dev/null
+
+echo "[3/5] Upload DMG asset"
+upload_asset "${release_id}" "${assets}" "${DMG_PATH}" "$(basename "${DMG_PATH}")"
+
+echo "[4/5] Upload ZIP asset (for OTA)"
+upload_asset "${release_id}" "${assets}" "${ZIP_PATH}" "$(basename "${ZIP_PATH}")"
+
+echo "[5/5] Publish appcast.json to main (so OTA picks up the new version)"
+# Update appcast version/url to match this release, then commit + push.
+export OTA_VERSION="${VERSION}" \
+       OTA_URL="https://github.com/${REPO}/releases/download/${TAG}/$(basename "${ZIP_PATH}")" \
+       OTA_SHA="$(shasum -a 256 "${ZIP_PATH}" | awk '{print $1}')"
+python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path("appcast.json")
+m = json.loads(p.read_text())
+m["version"] = os.environ["OTA_VERSION"]
+m["url"] = os.environ["OTA_URL"]
+m["sha256"] = os.environ["OTA_SHA"]
+p.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+PY
+
+if [[ -n "$(git status --porcelain appcast.json)" ]]; then
+  git add appcast.json
+  git commit -m "chore(release): appcast.json for ${TAG}" >/dev/null
+  git push origin main >/dev/null 2>&1 || echo "  (git push skipped — push manually if needed)"
 fi
 
-echo "[3/3] Upload asset: ${ASSET_NAME}"
-curl -sS \
-  -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @"${ASSET_PATH}" \
-  "${upload_url}?name=${ASSET_NAME}" \
-  >/dev/null
-
-echo "Release published: ${TAG} (asset: ${ASSET_NAME})"
+echo "Release published: ${TAG} (assets: $(basename "${DMG_PATH}"), $(basename "${ZIP_PATH}"))"
