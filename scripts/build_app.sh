@@ -80,11 +80,23 @@ EOF
 
 echo "APPL????" > "${APP_DIR}/Contents/PkgInfo"
 
-# The release binary carries an ad-hoc linker signature that predates the bundle resources
-# (icons, Info.plist). Without re-signing after resources are in place, the resource seal is
-# broken and codesign --verify fails — which can surface as a "damaged" app on a clean Mac.
-# Re-sign the whole bundle ad-hoc so the resource directory is properly sealed.
-# (Distribution builds replace this with a Developer ID signature via sign_and_notarize.sh.)
-codesign --force --deep --sign - "${APP_DIR}" >/dev/null
+# Re-sign the whole bundle so the resource directory (icons, Info.plist) is properly
+# sealed — otherwise codesign --verify fails and the app reads as "damaged" on a clean Mac.
+#
+# Prefer a stable self-signed identity so TCC permissions (Accessibility / Screen Recording)
+# survive updates. An ad-hoc signature's designated requirement is cdhash-bound, which makes
+# every rebuild look like a brand-new app to TCC. Generate the identity once with
+# scripts/make_signing_cert.sh. (Distribution builds replace this with a Developer ID
+# signature via sign_and_notarize.sh — same stable-identity mechanism, no code change needed.)
+SIGN_IDENTITY="${PLUMB_SIGNING_IDENTITY:-Plumb Local Signer}"
+if security find-identity -v | grep -q "\"${SIGN_IDENTITY}\""; then
+  codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_DIR}" >/dev/null
+  echo "  签名身份: ${SIGN_IDENTITY}（稳定，TCC 权限可跨更新保留）"
+else
+  echo "  ⚠️  未找到签名身份 '${SIGN_IDENTITY}'，回退到 ad-hoc 签名。"
+  echo "      → 此构建的 TCC 权限将无法跨更新保留。"
+  echo "      → 运行 scripts/make_signing_cert.sh 生成稳定签名身份（一次性，需管理员授权）。"
+  codesign --force --deep --sign - "${APP_DIR}" >/dev/null
+fi
 
 echo "[4/4] 完成: ${APP_DIR}"
