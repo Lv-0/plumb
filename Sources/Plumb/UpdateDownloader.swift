@@ -52,12 +52,17 @@ struct UpdateDownloader: Sendable {
     }
 
     /// 解压 zip 到新临时目录，返回其中的 Plumb.app 路径。失败抛 unzipFailed / appNotFoundInArchive。
+    ///
+    /// 重要：必须用 `ditto -x -k` 解压（与 create_zip.sh 的 `ditto -c -k` 打包对称），而不是通用 `unzip`。
+    /// .app 带有资源叉/扩展属性（如 com.apple.provenance），ditto 打包时会把它们编码进 zip。
+    /// 若用通用 unzip 解压，资源叉无法正确还原 → 资源树与 ad-hoc 签名 seal 不一致 →
+    /// codesign 校验 "a sealed resource is missing or invalid" → 安装后 macOS 报"应用已损坏"无法打开。
     func unzip(_ zip: URL) throws -> URL {
         let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        proc.arguments = ["-o", "-q", zip.path, "-d", dest.path]
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        proc.arguments = ["-x", "-k", zip.path, dest.path]
         do {
             try proc.run()
             proc.waitUntilExit()
