@@ -84,8 +84,9 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         defaults.removeObject(forKey: UpdateConfig.installerAppPathKey)
     }
 
-    /// 通过 AppleScript 提权执行 shell 命令；用户取消密码框抛 authorizationDenied。
-    /// 返回子进程 exit code。
+    /// 通过 AppleScript 提权执行 shell 命令。
+    /// 用户取消密码框（-128）抛 authorizationDenied；其它失败（密码错误、命令失败等）抛 replaceFailed。
+    /// 成功则返回子进程 exit code。
     @discardableResult
     private func runPrivileged(shellScript: String) throws -> Int {
         // 转义脚本中的反斜杠与双引号，安全嵌入 AppleScript 字符串。
@@ -98,8 +99,13 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         """
         var errorInfo: NSDictionary?
         guard let result = NSAppleScript(source: appleScript)?.executeAndReturnError(&errorInfo) else {
-            // 用户取消密码框 → errorInfo 含 NSAppleScriptErrorMessage 等。
-            throw InstallError.authorizationDenied
+            // 区分"用户主动取消"（error number -128）和其它失败（密码错误、超时、命令失败等）。
+            // 只有点"取消"按钮才是 authorizationDenied，其余都归为 replaceFailed，避免误导用户。
+            let errNumber = errorInfo?["NSAppleScriptErrorNumber"] as? Int ?? 0
+            if errNumber == -128 {
+                throw InstallError.authorizationDenied
+            }
+            throw InstallError.replaceFailed(status: errNumber)
         }
         // 解析 "echo $?" 输出的最后一行数字作为 exit code。
         let out = result.stringValue ?? ""

@@ -125,22 +125,41 @@ final class UpdateCoordinator {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: UpdateConfig.installerModeKey)
         defaults.set(newApp.path, forKey: UpdateConfig.installerAppPathKey)
-        // 关键：不能用 NSApp.terminate（会杀整个 session 包括子进程）也不能用 `open`（app 刚退出时
-        // LaunchServices 静默忽略重启请求，返回 0 但不启动）。实测唯一可靠的方式：
-        // 用 nohup + disown 启动一个独立 shell，sleep 后直接执行 app 二进制（绕过 LaunchServices），
-        // 然后用 exit(0) 退出当前进程（exit 不发 session 清理信号，nohup 子进程能存活）。
-        // 直接执行二进制而非 `open`：绕过 LS 的"刚退出的 app 不重启"机制，新实例真实启动为安装器。
-        guard let execURL = Bundle.main.executableURL else { exit(0) }
+        let appURL = Bundle.main.bundleURL
+        // 可靠 relaunch 方案（经多轮实测确定）：
+        // 写一个独立 shell 脚本到临时位置，内容是 `sleep; open <app>`。
+        // 用 Process 启动这个脚本（重定向 stdio 到 /dev/null），脚本作为独立进程运行，
+        // 不受当前 app 的 NSApplication session 约束。当前 app exit(0) 后，脚本继续执行 open，
+        // LaunchServices 从这个独立进程收到 open 请求，能正常启动新实例（有完整 GUI 会话，
+        // 安装器的密码框能正常显示）。
+        //
+        // 之前失败的方案（都不可靠）：
+        //   - NSWorkspace.openApplication + terminate → -609 connectionInvalid
+        //   - openApplication completion handler → 仍被 terminate 取消
+        //   - nohup 直接执行二进制 → 能启动但无 GUI 会话，密码框不显示
+        //   - nohup + open → app 的子 session，LS 拒绝
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plumb-relaunch-\(UUID().uuidString).sh")
+        let script = "#!/bin/bash\nsleep 2\n/usr/bin/open \(appURL.path)\n"
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            // 设可执行权限
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            exit(0)
+        }
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
-        proc.arguments = ["-c", #"nohup /bin/sh -c "sleep 1.0 && '\#(execURL.path)'" >/dev/null 2>&1 & disown"#]
+        proc.executableURL = scriptURL
+        proc.standardInput = FileHandle(forWritingAtPath: "/dev/null")
+        proc.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
+        proc.standardError = FileHandle(forWritingAtPath: "/dev/null")
         do {
             try proc.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 exit(0)
             }
         } catch {
-            // 兜底：稍等后直接退出，安全网会处理 installerMode。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 exit(0)
             }
