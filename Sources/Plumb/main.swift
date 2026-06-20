@@ -121,12 +121,23 @@ if selfTestUI {
 // Installer mode: triggered when the normal-mode app writes installerMode=true and
 // relaunches itself. Runs a minimal privileged installer that replaces
 // /Applications/Plumb.app, then relaunches the new version.
+//
+// 安全网：若 installerMode=true 但待安装源文件已被清理（系统定期清 /var/folders 临时目录）
+// 或路径无效，则清零标志并降级为正常启动，而不是带着坏状态进入安装器导致 app 无法打开。
+// 这覆盖 relaunchIntoInstaller 竞态（-609）后 installerMode 永久卡死的情况。
 if UserDefaults.standard.bool(forKey: UpdateConfig.installerModeKey) {
-    UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)  // cleared here too for safety
-    app.setActivationPolicy(.regular)
-    app.delegate = UpdateInstallerDelegate()
-    app.run()
-    exit(0)
+    let installerSrc = UserDefaults.standard.string(forKey: UpdateConfig.installerAppPathKey) ?? ""
+    if FileManager.default.fileExists(atPath: installerSrc) {
+        UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)  // cleared here too for safety
+        app.setActivationPolicy(.regular)
+        app.delegate = UpdateInstallerDelegate()
+        app.run()
+        exit(0)
+    } else {
+        // 源文件已丢失：清零标志，落入下方正常启动分支，避免永久卡死。
+        UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)
+        UserDefaults.standard.removeObject(forKey: UpdateConfig.installerAppPathKey)
+    }
 }
 
 let delegate = AppDelegate()

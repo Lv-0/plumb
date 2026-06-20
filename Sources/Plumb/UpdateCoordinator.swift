@@ -113,13 +113,21 @@ final class UpdateCoordinator {
     }
 
     /// 写 installerMode + 待安装路径，以 Launch Services 重开自身，然后退出当前进程。
+    ///
+    /// 重要：必须用带 completion handler 的 openApplication，等新实例确认打开后再 terminate。
+    /// 旧实现 openApplication 后立即 terminate，新进程连接尚未建立就失去旧进程引用，
+    /// 触发 LaunchServices `-609 connectionInvalid` → 安装器无法启动 → installerMode 永久卡死 → app 无法打开。
     private func relaunchIntoInstaller(with newApp: URL) {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: UpdateConfig.installerModeKey)
         defaults.set(newApp.path, forKey: UpdateConfig.installerAppPathKey)
         let appURL = Bundle.main.bundleURL
-        NSWorkspace.shared.openApplication(at: appURL, configuration: .init())
-        NSApp.terminate(nil)
+        let config = NSWorkspace.OpenConfiguration()
+        // 加入队列后立即在后台启动新实例；completion 回调（无论成功失败）才退出当前进程，
+        // 确保 LaunchServices 完成连接切换，不再竞态。
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, _ in
+            NSApp.terminate(nil)
+        }
     }
 
     private func alert(title: String, message: String) {
