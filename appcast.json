@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.4/Plumb-1.0.4.zip",
   "sha256": "REPLACE_AT_RELEASE_TIME",
   "notes": {
-    "en": "In-app updates + permissions now survive updates.",
-    "zh": "软件内更新 + 权限现在可跨更新保留。",
-    "es": "Actualizaciones desde la app y los permisos ya se conservan entre actualizaciones.",
-    "fr": "Mises à jour depuis l'app et les permissions sont désormais conservées entre les mises à jour.",
-    "ja": "アプリ内アップデートと、アップデート後も権限が維持されるようになりました。"
+    "en": "In-app automatic updates are here: update Plumb with one click via the menu bar. Also adds a Launch-at-Login toggle.",
+    "zh": "新增软件内自动更新：通过菜单栏一键更新 Plumb。另增加「登录时启动」开关。",
+    "es": "Novedad: actualizaciones automáticas desde la app, con un clic desde la barra de menú. También añade un interruptor de inicio de sesión.",
+    "fr": "Nouveauté : mises à jour automatiques depuis l'app, en un clic depuis la barre de menus. Ajoute aussi un bouton d'ouverture de session.",
+    "ja": "新機能：メニューバーからワンクリックでアプリ内自動更新。ログイン時の起動トグルも追加。"
   },
   "minOS": "26.0"
 }
