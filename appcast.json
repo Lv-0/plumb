@@ -1,7 +1,7 @@
 {
   "version": "1.0.5",
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.5/Plumb-1.0.5.zip",
-  "sha256": "REPLACE_AT_RELEASE_TIME",
+  "sha256": "d9f0aefb1c0ea57398fd04b889b9c812e0c3fcf1b6c7ce9852dd13c068fb72b1",
   "notes": {
     "en": "In-app automatic updates are here: update Plumb with one click via the menu bar. Also adds a Launch-at-Login toggle.",
     "zh": "新增软件内自动更新：通过菜单栏一键更新 Plumb。另增加「登录时启动」开关。",
