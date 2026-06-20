@@ -16,7 +16,7 @@ import Foundation
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// appcast 字节来源抽象。生产用 URLSessionManifestFetcher，测试用 Mock。
-protocol ManifestFetcher {
+protocol ManifestFetcher: Sendable {
     func fetch() async throws -> Data
 }
 
@@ -43,7 +43,7 @@ struct URLSessionManifestFetcher: ManifestFetcher {
     }
 }
 
-struct UpdateChecker {
+struct UpdateChecker: Sendable {
     let fetcher: ManifestFetcher
 
     init(fetcher: ManifestFetcher = URLSessionManifestFetcher()) {

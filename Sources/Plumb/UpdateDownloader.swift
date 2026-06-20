@@ -23,7 +23,7 @@ enum DownloadError: Error {
     case appNotFoundInArchive
 }
 
-struct UpdateDownloader {
+struct UpdateDownloader: Sendable {
     /// 校验 Data 的 sha256 是否等于预期十六进制串（大小写不敏感）。非法 hex 或不匹配返回 false。
     static func verifySHA256(data: Data, expectedHex: String) -> Bool {
         let digest = SHA256.hash(data: data)

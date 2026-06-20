@@ -6,7 +6,7 @@ import Foundation
 struct UpdateCheckerTests {
 
     /// 固定返回给定 Data 的 fetcher，用于注入（测试不触网）。
-    private struct MockFetcher: ManifestFetcher {
+    private struct MockFetcher: ManifestFetcher, Sendable {
         let data: Data?
         let error: Error?
         init(data: Data?, error: Error? = nil) {
