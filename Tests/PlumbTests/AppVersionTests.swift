@@ -59,4 +59,13 @@ struct AppVersionTests {
         #expect(!AppVersion(major: 1, minor: 0, patch: 5).isNewerThan(current))   // equal → not newer
         #expect(!AppVersion(major: 1, minor: 0, patch: 4).isNewerThan(current))   // older → not newer
     }
+
+    // MARK: - formatted (UI display)
+
+    @Test("formatted renders as major.minor.patch string")
+    func formattedRendersTriple() {
+        #expect(AppVersion(major: 1, minor: 0, patch: 6).formatted == "1.0.6")
+        #expect(AppVersion(major: 2, minor: 13, patch: 0).formatted == "2.13.0")
+        #expect(AppVersion(major: 0, minor: 0, patch: 0).formatted == "0.0.0")
+    }
 }

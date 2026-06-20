@@ -25,6 +25,9 @@ struct AppVersion: Comparable, Equatable, Codable {
         self.patch = patch
     }
 
+    /// "major.minor.patch" 字符串形式，用于 UI 展示（如设置「关于」标签页的版本号）。
+    var formatted: String { "\(major).\(minor).\(patch)" }
+
     /// 从字符串解析；支持可选前导 'v'，接受 2 段（major.minor，patch=0）或 3 段。
     /// 非数字段或含非数字字符则返回 nil。
     init?(parsing raw: String) {
