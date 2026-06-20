@@ -90,6 +90,21 @@ enum L10n {
         case errUnableToReadWindowFrame
         case errUnableToWriteWindowSize
         case errUnableToWriteWindowPosition
+        // OTA 更新
+        case otaCheckForUpdates
+        case otaUpToDate
+        case otaCheckFailed
+        case otaCheckFailedHint
+        case otaNewVersionTitle
+        case otaUpdateNow
+        case otaCancel
+        case otaDownloadFailed
+        case otaDownloadFailedHint
+        case otaInstallingTitle
+        case otaInstallingMessage
+        case otaInstallDone
+        case otaInstallCanceled
+        case otaInstallFailed
     }
 
     // MARK: - 翻译表
@@ -135,6 +150,20 @@ enum L10n {
             .errUnableToReadWindowFrame: "Unable to read window position or size.",
             .errUnableToWriteWindowSize: "Unable to set window size (the window may not be resizable).",
             .errUnableToWriteWindowPosition: "Unable to set window position (the window may not be movable).",
+            .otaCheckForUpdates: "Check for Updates…",
+            .otaUpToDate: "You're up to date.",
+            .otaCheckFailed: "Update check failed.",
+            .otaCheckFailedHint: "Check your network connection and try again.",
+            .otaNewVersionTitle: "Plumb %@ is available",
+            .otaUpdateNow: "Update Now",
+            .otaCancel: "Cancel",
+            .otaDownloadFailed: "Download failed.",
+            .otaDownloadFailedHint: "The update package may be damaged. Try again later or download manually from GitHub.",
+            .otaInstallingTitle: "Installing Update",
+            .otaInstallingMessage: "Replacing Plumb…",
+            .otaInstallDone: "Done. Relaunching…",
+            .otaInstallCanceled: "Installation canceled. The previous version was kept.",
+            .otaInstallFailed: "Installation failed. The previous version was kept.",
         ],
         .es: [
             .menuSubtitle: "Centrado de ventanas · Mosaico",
@@ -176,6 +205,20 @@ enum L10n {
             .errUnableToReadWindowFrame: "No se pudo leer la posición o el tamaño de la ventana.",
             .errUnableToWriteWindowSize: "No se pudo establecer el tamaño de la ventana (puede que no sea redimensionable).",
             .errUnableToWriteWindowPosition: "No se pudo establecer la posición de la ventana (puede que no se pueda mover).",
+            .otaCheckForUpdates: "Buscar actualizaciones…",
+            .otaUpToDate: "Ya tienes la última versión.",
+            .otaCheckFailed: "Error al comprobar actualizaciones.",
+            .otaCheckFailedHint: "Comprueba tu conexión de red e inténtalo de nuevo.",
+            .otaNewVersionTitle: "Plumb %@ está disponible",
+            .otaUpdateNow: "Actualizar ahora",
+            .otaCancel: "Cancelar",
+            .otaDownloadFailed: "Error en la descarga.",
+            .otaDownloadFailedHint: "El paquete puede estar dañado. Inténtalo más tarde o descárgalo manualmente desde GitHub.",
+            .otaInstallingTitle: "Instalando actualización",
+            .otaInstallingMessage: "Reemplazando Plumb…",
+            .otaInstallDone: "Listo. Reiniciando…",
+            .otaInstallCanceled: "Instalación cancelada. Se mantuvo la versión anterior.",
+            .otaInstallFailed: "Error en la instalación. Se mantuvo la versión anterior.",
         ],
         .fr: [
             .menuSubtitle: "Centrage de fenêtre · Mosaïque",
@@ -217,6 +260,20 @@ enum L10n {
             .errUnableToReadWindowFrame: "Impossible de lire la position ou la taille de la fenêtre.",
             .errUnableToWriteWindowSize: "Impossible de définir la taille de la fenêtre (elle n'est peut-être pas redimensionnable).",
             .errUnableToWriteWindowPosition: "Impossible de définir la position de la fenêtre (elle n'est peut-être pas déplaçable).",
+            .otaCheckForUpdates: "Rechercher des mises à jour…",
+            .otaUpToDate: "Vous êtes à jour.",
+            .otaCheckFailed: "Échec de la vérification des mises à jour.",
+            .otaCheckFailedHint: "Vérifiez votre connexion réseau et réessayez.",
+            .otaNewVersionTitle: "Plumb %@ est disponible",
+            .otaUpdateNow: "Mettre à jour",
+            .otaCancel: "Annuler",
+            .otaDownloadFailed: "Échec du téléchargement.",
+            .otaDownloadFailedHint: "Le paquet est peut-être endommagé. Réessayez plus tard ou téléchargez-le manuellement depuis GitHub.",
+            .otaInstallingTitle: "Installation de la mise à jour",
+            .otaInstallingMessage: "Remplacement de Plumb…",
+            .otaInstallDone: "Terminé. Redémarrage…",
+            .otaInstallCanceled: "Installation annulée. La version précédente a été conservée.",
+            .otaInstallFailed: "Échec de l'installation. La version précédente a été conservée.",
         ],
         .zh: [
             .menuSubtitle: "窗口居中 · 平铺",
@@ -258,6 +315,20 @@ enum L10n {
             .errUnableToReadWindowFrame: "无法读取窗口位置或尺寸。",
             .errUnableToWriteWindowSize: "无法设置窗口尺寸（窗口可能不支持调整大小）。",
             .errUnableToWriteWindowPosition: "无法设置窗口位置（窗口可能不可移动）。",
+            .otaCheckForUpdates: "检查更新…",
+            .otaUpToDate: "已是最新版本。",
+            .otaCheckFailed: "检查更新失败。",
+            .otaCheckFailedHint: "请检查网络连接后重试。",
+            .otaNewVersionTitle: "Plumb %@ 已发布",
+            .otaUpdateNow: "立即更新",
+            .otaCancel: "取消",
+            .otaDownloadFailed: "下载失败。",
+            .otaDownloadFailedHint: "更新包可能已损坏。请稍后重试，或前往 GitHub 手动下载。",
+            .otaInstallingTitle: "正在安装更新",
+            .otaInstallingMessage: "正在替换 Plumb…",
+            .otaInstallDone: "完成，正在重启…",
+            .otaInstallCanceled: "安装已取消，已保留原版本。",
+            .otaInstallFailed: "安装失败，已保留原版本。",
         ],
         .ja: [
             .menuSubtitle: "ウィンドウ中央寄せ · タイル",
@@ -299,6 +370,20 @@ enum L10n {
             .errUnableToReadWindowFrame: "ウィンドウの位置またはサイズを読み取れません。",
             .errUnableToWriteWindowSize: "ウィンドウサイズを設定できません（サイズ変更不可の可能性があります）。",
             .errUnableToWriteWindowPosition: "ウィンドウ位置を設定できません（移動不可の可能性があります）。",
+            .otaCheckForUpdates: "更新を確認…",
+            .otaUpToDate: "最新です。",
+            .otaCheckFailed: "更新の確認に失敗しました。",
+            .otaCheckFailedHint: "ネットワーク接続を確認して再試行してください。",
+            .otaNewVersionTitle: "Plumb %@ が利用可能です",
+            .otaUpdateNow: "今すぐ更新",
+            .otaCancel: "キャンセル",
+            .otaDownloadFailed: "ダウンロードに失敗しました。",
+            .otaDownloadFailedHint: "パッケージが破損している可能性があります。後で再試行するか、GitHub から手動でダウンロードしてください。",
+            .otaInstallingTitle: "更新をインストール中",
+            .otaInstallingMessage: "Plumb を置き換えています…",
+            .otaInstallDone: "完了。再起動中…",
+            .otaInstallCanceled: "インストールがキャンセルされました。以前のバージョンを維持します。",
+            .otaInstallFailed: "インストールに失敗しました。以前のバージョンを維持します。",
         ],
     ]
 
@@ -343,6 +428,20 @@ enum L10n {
     static var errUnableToReadWindowFrame: String { tr(.errUnableToReadWindowFrame) }
     static var errUnableToWriteWindowSize: String { tr(.errUnableToWriteWindowSize) }
     static var errUnableToWriteWindowPosition: String { tr(.errUnableToWriteWindowPosition) }
+    static var otaCheckForUpdates: String { tr(.otaCheckForUpdates) }
+    static var otaUpToDate: String { tr(.otaUpToDate) }
+    static var otaCheckFailed: String { tr(.otaCheckFailed) }
+    static var otaCheckFailedHint: String { tr(.otaCheckFailedHint) }
+    static var otaNewVersionTitle: String { tr(.otaNewVersionTitle) }
+    static var otaUpdateNow: String { tr(.otaUpdateNow) }
+    static var otaCancel: String { tr(.otaCancel) }
+    static var otaDownloadFailed: String { tr(.otaDownloadFailed) }
+    static var otaDownloadFailedHint: String { tr(.otaDownloadFailedHint) }
+    static var otaInstallingTitle: String { tr(.otaInstallingTitle) }
+    static var otaInstallingMessage: String { tr(.otaInstallingMessage) }
+    static var otaInstallDone: String { tr(.otaInstallDone) }
+    static var otaInstallCanceled: String { tr(.otaInstallCanceled) }
+    static var otaInstallFailed: String { tr(.otaInstallFailed) }
 
     // MARK: - 访问器（带参）
 
