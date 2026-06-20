@@ -78,6 +78,12 @@ enum L10n {
         case openSettings
         case launchAtLogin
         case launchAtLoginHint
+        // 关于段
+        case tabAbout
+        case aboutVersion
+        case aboutGitHub
+        case aboutGitHubHint
+        case aboutViewOnGitHub
         // 开关 / 无障碍
         case toggleSwitch
         case on, off
@@ -139,6 +145,11 @@ enum L10n {
             .openSettings: "Open Settings…",
             .launchAtLogin: "Launch at Login",
             .launchAtLoginHint: "Automatically launch Plumb when your Mac starts.",
+            .tabAbout: "About",
+            .aboutVersion: "Version",
+            .aboutGitHub: "GitHub",
+            .aboutGitHubHint: "View source code and report issues.",
+            .aboutViewOnGitHub: "View on GitHub",
             .toggleSwitch: "Switch",
             .on: "On",
             .off: "Off",
@@ -194,6 +205,11 @@ enum L10n {
             .openSettings: "Abrir ajustes…",
             .launchAtLogin: "Abrir al iniciar sesión",
             .launchAtLoginHint: "Inicia Plumb automáticamente al encender el Mac.",
+            .tabAbout: "Acerca de",
+            .aboutVersion: "Versión",
+            .aboutGitHub: "GitHub",
+            .aboutGitHubHint: "Ver código fuente y reportar problemas.",
+            .aboutViewOnGitHub: "Ver en GitHub",
             .toggleSwitch: "Interruptor",
             .on: "Activado",
             .off: "Desactivado",
@@ -249,6 +265,11 @@ enum L10n {
             .openSettings: "Ouvrir les réglages…",
             .launchAtLogin: "Lancer à la connexion",
             .launchAtLoginHint: "Lance Plumb automatiquement au démarrage du Mac.",
+            .tabAbout: "À propos",
+            .aboutVersion: "Version",
+            .aboutGitHub: "GitHub",
+            .aboutGitHubHint: "Voir le code source et signaler des problèmes.",
+            .aboutViewOnGitHub: "Voir sur GitHub",
             .toggleSwitch: "Interrupteur",
             .on: "Activé",
             .off: "Désactivé",
@@ -304,6 +325,11 @@ enum L10n {
             .openSettings: "打开设置…",
             .launchAtLogin: "开机自启动",
             .launchAtLoginHint: "Mac 开机后自动启动 Plumb。",
+            .tabAbout: "关于",
+            .aboutVersion: "版本",
+            .aboutGitHub: "GitHub",
+            .aboutGitHubHint: "查看源代码与提交问题。",
+            .aboutViewOnGitHub: "在 GitHub 上查看",
             .toggleSwitch: "开关",
             .on: "开",
             .off: "关",
@@ -359,6 +385,11 @@ enum L10n {
             .openSettings: "設定を開く…",
             .launchAtLogin: "ログイン時に起動",
             .launchAtLoginHint: "Mac 起動時に Plumb を自動的に起動します。",
+            .tabAbout: "について",
+            .aboutVersion: "バージョン",
+            .aboutGitHub: "GitHub",
+            .aboutGitHubHint: "ソースコードの確認と問題の報告。",
+            .aboutViewOnGitHub: "GitHub で見る",
             .toggleSwitch: "スイッチ",
             .on: "オン",
             .off: "オフ",
@@ -417,6 +448,11 @@ enum L10n {
     static var openSettings: String { tr(.openSettings) }
     static var launchAtLogin: String { tr(.launchAtLogin) }
     static var launchAtLoginHint: String { tr(.launchAtLoginHint) }
+    static var tabAbout: String { tr(.tabAbout) }
+    static var aboutVersion: String { tr(.aboutVersion) }
+    static var aboutGitHub: String { tr(.aboutGitHub) }
+    static var aboutGitHubHint: String { tr(.aboutGitHubHint) }
+    static var aboutViewOnGitHub: String { tr(.aboutViewOnGitHub) }
     static var toggleSwitch: String { tr(.toggleSwitch) }
     static var on: String { tr(.on) }
     static var off: String { tr(.off) }
