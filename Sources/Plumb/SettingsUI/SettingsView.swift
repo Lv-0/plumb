@@ -34,12 +34,13 @@ struct SettingsView: View {
     @State private var workspaceObserver: NSObjectProtocol?
 
     enum Section: Hashable, CaseIterable {
-        case centering, tiling, permissions
+        case centering, tiling, permissions, about
         var title: String {
             switch self {
             case .centering: return L10n.tabCentering
             case .tiling: return L10n.tabTiling
             case .permissions: return L10n.tabPermissions
+            case .about: return L10n.tabAbout
             }
         }
         var symbol: String {
@@ -47,6 +48,7 @@ struct SettingsView: View {
             case .centering: return "scope"
             case .tiling: return "square.grid.2x2"
             case .permissions: return "checkmark.shield"
+            case .about: return "info.circle"
             }
         }
     }
@@ -161,6 +163,8 @@ struct SettingsView: View {
             TilingSection(settings: $settings, apps: apps)
         case .permissions:
             PermissionsSection()
+        case .about:
+            AboutSection()
         }
     }
 }
