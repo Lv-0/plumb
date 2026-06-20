@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.8/Plumb-1.0.8.zip",
   "sha256": "7b49313c9582992063fdfc7e79ec1b16222c70399c364c601c7b6f97d9d54d0d",
   "notes": {
-    "en": "Adds an About tab in Settings showing the current app version and a button to open the GitHub repository page.",
-    "zh": "设置界面新增「关于」标签页，显示当前软件版本号，并提供打开 GitHub 仓库地址的按钮。",
-    "es": "Añade una pestaña Acerca de en Ajustes que muestra la versión actual y un botón para abrir la página del repositorio en GitHub.",
-    "fr": "Ajoute un onglet À propos dans les Réglages affichant la version actuelle et un bouton pour ouvrir la page du dépôt GitHub.",
-    "ja": "設定に「について」タブを追加し、現在のバージョンと GitHub リポジトリページを開くボタンを表示します。"
+    "en": "Fixes a bug where the in-app update could leave Plumb unable to open (the relaunch race has been fixed, and a stale installer now self-heals).",
+    "zh": "修复应用内更新后可能导致 Plumb 无法打开的问题（重启竞态已修复，失效的安装器现可自动恢复）。",
+    "es": "Corrige un error por el que la actualización integrada podía dejar Plumb sin poder abrirse (corregida la carrera de reinicio; el instalador obsoleto ahora se recupera solo).",
+    "fr": "Corrige un bug où la mise à jour intégrée pouvait empêcher Plumb de s'ouvrir (la course au relancement est corrigée ; un installateur périmé se rétablit désormais seul).",
+    "ja": "アプリ内アップデート後に Plumb が開けなくなるバグを修正（再起動の競合を解消し、古いインストーラは自動で回復するようになりました）。"
   },
   "minOS": "26.0"
 }
