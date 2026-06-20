@@ -83,7 +83,7 @@ BODY=$(
 ## v1.0.7
 
 ### ✨ Added
-- **About tab in Settings**: the settings window now has a 4th tab ("About") showing the current app version number and a button that opens the GitHub repository page (https://github.com/Lv-0/plumb) in your default browser. Useful for checking which version you're on and reaching the source/issues.
+- **About tab in Settings**: the settings window now has a 4th tab ("About") showing the current app version number and a button that opens the GitHub repository page (https://github.com/Lv-0/plumb) in your default browser.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
