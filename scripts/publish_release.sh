@@ -80,15 +80,16 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.6
+## v1.0.4
 
 ### ✨ New
-- **Permissions now survive updates**: Plumb is signed with a stable identity, so your Accessibility / Screen Recording grants persist across version upgrades — no more "delete and re-grant" after each update. (If upgrading from an older ad-hoc release, re-grant **once**; after that, grants are preserved automatically.)
-- **In-app automatic updates**: Plumb now checks for updates on launch and via "Check for Updates…" in the menu bar. Update with one click — no manual DMG download.
+- **In-app automatic updates**: Plumb now checks for updates on launch and via "Check for Updates…" in the menu bar. Update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` (it asks for your password once, since writing to `/Applications` requires it).
+- **Launch at login**: new "Launch at Login" toggle in Settings → Permissions.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
-- This release DMG is self-signed (not Developer-ID-notarized); if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
+- This release is self-signed (not Developer-ID-notarized); if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
+- **About permissions across updates**: this build is ad-hoc signed, so Accessibility / Screen Recording grants still need to be re-given after each update (same as before). The OTA update feature is in place; permission persistence across updates requires a Developer-ID-signed build, which is tracked separately. The groundwork (stable-signing scripts + a verify gate) is included for when a trusted signing identity is available.
 EOF
 )
 

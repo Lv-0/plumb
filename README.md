@@ -141,13 +141,11 @@ See [Build locally](#build-locally).
 
 ### Why permissions may need re-granting (and how this is fixed)
 
-macOS keys Accessibility and Screen Recording grants on an app's **stable signing identity** (its designated requirement). Early Plumb releases were signed *ad-hoc* — a signature whose identity is just the binary's hash (`cdhash`), which changes on every rebuild. The result: each update looked like a brand-new app to macOS, so its grants were discarded.
+macOS keys Accessibility and Screen Recording grants on an app's **stable signing identity** (its designated requirement). Plumb is currently signed *ad-hoc* — a signature whose identity is just the binary's hash (`cdhash`), which changes on every rebuild. The result: **each update looks like a brand-new app to macOS, so its grants are discarded and must be re-given after every update.**
 
-From this release on, Plumb is signed with a **stable self-signed certificate**, so the designated requirement is bound to the certificate identity rather than to a per-build hash. Grants now persist across updates — grant once, keep across upgrades.
+We want grants to persist across updates. The mechanism is a **stable signing identity** (a certificate rather than a per-build hash). This requires a Developer-ID-signed build (Apple's official path) or a locally-trusted self-signed certificate. The repo includes the groundwork for that (`scripts/make_signing_cert.sh` + a verify gate), and permission persistence will arrive with a Developer-ID-signed release. Until then, re-grant the two permissions once after each update.
 
-**One-time note for users upgrading from an ad-hoc release:** because the old grants were keyed to the old hash, you will need to re-grant Accessibility / Screen Recording **one last time** when upgrading to this version. After that, future updates preserve your grants automatically.
-
-**Limitation — building from source with a bare executable:** the permission-stability guarantee only applies to the signed `.app` bundle produced by `scripts/build_app.sh`. A bare executable from `swift build` / `swift run` has no `.app` bundle and no stable signing identity, so its TCC grants are keyed to `cdhash` and reset on every rebuild. Use the `.app` build for day-to-day testing of permission-dependent features.
+**Limitation — building from source with a bare executable:** a bare executable from `swift build` / `swift run` has no `.app` bundle and no stable signing identity, so its TCC grants are keyed to `cdhash` and reset on every rebuild. Use the `.app` build (via `scripts/build_app.sh`) for day-to-day testing of permission-dependent features.
 
 ### Launch at Login
 
@@ -231,10 +229,9 @@ Or go to `System Settings → Privacy & Security` and click "Open Anyway" at the
 <details>
 <summary><b>Permissions reset every time I rebuild from source?</b></summary>
 
-You're running the bare executable (`swift run`) or an ad-hoc `.app`. Both have an unstable signing identity, so macOS treats each build as a new app. To get stable permissions locally:
+You're running the bare executable (`swift run`) or an ad-hoc `.app`. Both have an unstable signing identity, so macOS treats each build as a new app. Re-grant the two permissions (Accessibility, Screen Recording) after each rebuild.
 
-1. Run `scripts/make_signing_cert.sh` once (it asks for your password once to trust the certificate).
-2. Build the app with `scripts/build_app.sh`. It will print `签名身份: Plumb Local Signer` and your grants will now persist across rebuilds.
+Persisting grants across rebuilds requires a trusted signing identity. `scripts/make_signing_cert.sh` exists as groundwork (a self-signed identity generator), but on some macOS versions the trust step does not take effect from the command line, so it may not produce a stable identity on every machine. The reliable long-term fix is a Developer-ID-signed build.
 
 </details>
 
