@@ -155,6 +155,10 @@ From this release on, Plumb is signed with a **stable self-signed certificate**,
 - **How**: Registered as a native macOS login item via `SMAppService.mainApp` (no background daemons, no LaunchAgent hacks). The toggle reads the **real** system state, so it stays in sync even if you change it from `System Settings → General → Login Items`.
 - **Note**: Requires running as a signed `.app`. The bare `swift build` executable cannot register a login item.
 
+### Automatic updates
+
+Plumb checks for updates on launch (at most once every 6 hours) and via **Check for Updates…** in the menu bar. When a newer version is available, you can update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` (it asks for your password once, since writing to `/Applications` requires it). Your Accessibility / Screen Recording permissions are preserved across updates (see [Why permissions may need re-granting](#why-permissions-may-need-re-granting-and-how-this-is-fixed)).
+
 ## Requirements
 
 - **macOS 26+** (built on the macOS 26 SDK with the Liquid Glass UI; older versions are not supported)
