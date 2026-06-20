@@ -5,7 +5,7 @@ set -euo pipefail
 # then commit appcast.json so in-app OTA sees the new version.
 #
 # Usage:
-#   GITHUB_TOKEN=... VERSION=1.0.7 scripts/publish_release.sh v1.0.7
+#   GITHUB_TOKEN=... VERSION=1.0.8 scripts/publish_release.sh v1.0.8
 #
 # Notes:
 # - Does not embed tokens anywhere; relies on $GITHUB_TOKEN from the environment.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 TAG="${1:-}"
 if [[ -z "${TAG}" ]]; then
-  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.7 $0 <tag>  (e.g. v1.0.7)"
+  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.8 $0 <tag>  (e.g. v1.0.8)"
   exit 1
 fi
 
@@ -80,10 +80,10 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.7
+## v1.0.8
 
-### ✨ Added
-- **About tab in Settings**: the settings window now has a 4th tab ("About") showing the current app version number and a button that opens the GitHub repository page (https://github.com/Lv-0/plumb) in your default browser.
+### 🐛 Fixed
+- **In-app update no longer leaves the app unable to open**: the OTA relaunch had a race (`openApplication` immediately followed by `terminate`) causing macOS `-609 connectionInvalid`, so the installer never started. With a missing safety net this left `installerMode` stuck on and macOS eventually reported the app "can no longer be opened". Now the relaunch waits for launch completion before terminating, and a stale installer source self-heals into normal startup.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
