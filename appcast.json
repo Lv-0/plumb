@@ -1,13 +1,13 @@
 {
-  "version": "1.0.5",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.5/Plumb-1.0.5.zip",
-  "sha256": "d9f0aefb1c0ea57398fd04b889b9c812e0c3fcf1b6c7ce9852dd13c068fb72b1",
+  "version": "1.0.6",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.6/Plumb-1.0.6.zip",
+  "sha256": "REPLACE_AT_RELEASE_TIME",
   "notes": {
-    "en": "In-app automatic updates are here: update Plumb with one click via the menu bar. Also adds a Launch-at-Login toggle.",
-    "zh": "新增软件内自动更新：通过菜单栏一键更新 Plumb。另增加「登录时启动」开关。",
-    "es": "Novedad: actualizaciones automáticas desde la app, con un clic desde la barra de menú. También añade un interruptor de inicio de sesión.",
-    "fr": "Nouveauté : mises à jour automatiques depuis l'app, en un clic depuis la barre de menus. Ajoute aussi un bouton d'ouverture de session.",
-    "ja": "新機能：メニューバーからワンクリックでアプリ内自動更新。ログイン時の起動トグルも追加。"
+    "en": "Fixes a bug where the in-app update would install a version that macOS reported as 'damaged' / 'can't be opened'.",
+    "zh": "修复软件内更新安装后 macOS 报「应用已损坏 / 无法打开」的问题。",
+    "es": "Corrige un error por el que la actualización desde la app instalaba una versión que macOS mostraba como 'dañada' / 'no se puede abrir'.",
+    "fr": "Corrige un bogue où la mise à jour depuis l'app installait une version que macOS signalait comme 'endommagée' / 'impossible à ouvrir'.",
+    "ja": "アプリ内アップデートでインストールしたバージョンが macOS で「破損している / 開けない」と報告されるバグを修正しました。"
   },
   "minOS": "26.0"
 }

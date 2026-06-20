@@ -80,16 +80,15 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.5
+## v1.0.6
 
-### ✨ New
-- **In-app automatic updates**: Plumb now checks for updates on launch and via "Check for Updates…" in the menu bar. Update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` (it asks for your password once, since writing to `/Applications` requires it).
-- **Launch at login**: new "Launch at Login" toggle in Settings → Permissions.
+### 🐛 Fixed
+- **In-app update no longer installs a "damaged" app**: the update downloader now extracts the update package with `ditto` (Mac-aware) instead of generic `unzip`. Previously the resource forks in the `.app` were dropped during extraction, breaking the code-signing seal and causing macOS to report the installed app as "damaged" / "can't be opened".
 
 ### ℹ️ Notes
 - Requires macOS 26+.
-- This release is self-signed (not Developer-ID-notarized); if Gatekeeper blocks it on first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
-- **About permissions across updates**: this build is ad-hoc signed, so Accessibility / Screen Recording grants still need to be re-given after each update (same as before). The OTA update feature is in place; permission persistence across updates requires a Developer-ID-signed build, which is tracked separately. The groundwork (stable-signing scripts + a verify gate) is included for when a trusted signing identity is available.
+- Self-signed (not Developer-ID-notarized); if Gatekeeper blocks first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
+- Accessibility / Screen Recording grants still need re-giving after each update (ad-hoc signing); stable signing is groundwork pending a Developer-ID build.
 EOF
 )
 
