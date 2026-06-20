@@ -1,7 +1,7 @@
 {
   "version": "1.0.8",
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.8/Plumb-1.0.8.zip",
-  "sha256": "ee049248506265e6cd92a6a9c060482769c0ea64f0eb9c1e91f437a9543aa6ac",
+  "sha256": "523740307cbed58596cece8128086f3080d1edec5349408c7f0bff5240c9fffb",
   "notes": {
     "en": "Fixes a bug where the in-app update could leave Plumb unable to open (the relaunch race has been fixed, and a stale installer now self-heals).",
     "zh": "修复应用内更新后可能导致 Plumb 无法打开的问题（重启竞态已修复，失效的安装器现可自动恢复）。",
