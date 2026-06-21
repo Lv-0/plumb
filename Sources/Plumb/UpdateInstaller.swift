@@ -93,14 +93,13 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         let escaped = shellScript
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        let appleScript = """
-        do shell script "\(escaped) ; echo $?"
-        with administrator privileges
-        """
+        // 关键：必须单行。多行格式（"..." 换行 with administrator privileges）能通过
+        // compileAndReturnError 但在 executeAndReturnError 时报 -2741
+        // "Expected timeout or transaction but found identifier"。
+        let appleScript = "do shell script \"\(escaped) ; echo $?\" with administrator privileges"
         var errorInfo: NSDictionary?
         guard let result = NSAppleScript(source: appleScript)?.executeAndReturnError(&errorInfo) else {
             // 区分"用户主动取消"（error number -128）和其它失败（密码错误、超时、命令失败等）。
-            // 只有点"取消"按钮才是 authorizationDenied，其余都归为 replaceFailed，避免误导用户。
             let errNumber = errorInfo?["NSAppleScriptErrorNumber"] as? Int ?? 0
             if errNumber == -128 {
                 throw InstallError.authorizationDenied
