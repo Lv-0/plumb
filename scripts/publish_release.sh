@@ -5,7 +5,7 @@ set -euo pipefail
 # then commit appcast.json so in-app OTA sees the new version.
 #
 # Usage:
-#   GITHUB_TOKEN=... VERSION=1.0.9 scripts/publish_release.sh v1.0.9
+#   GITHUB_TOKEN=... VERSION=1.0.10 scripts/publish_release.sh v1.0.10
 #
 # Notes:
 # - Does not embed tokens anywhere; relies on $GITHUB_TOKEN from the environment.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 TAG="${1:-}"
 if [[ -z "${TAG}" ]]; then
-  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.9 $0 <tag>  (e.g. v1.0.9)"
+  echo "Usage: GITHUB_TOKEN=... VERSION=1.0.10 $0 <tag>  (e.g. v1.0.10)"
   exit 1
 fi
 
@@ -80,20 +80,20 @@ RELEASE_NAME="${TAG#v}"
 
 BODY=$(
   cat <<'EOF' | json_escape
-## v1.0.9
+## v1.0.10
 
 ### 🐛 Fixed
-- **In-app updates now actually install** (this is the real fix for the "installation failed" / "installation canceled" errors seen on every OTA attempt). The privileged AppleScript that replaces `/Applications/Plumb.app` was built as a multi-line string; it compiled fine but `executeAndReturnError` rejected it with `-2741`, so the admin password prompt never appeared. Rebuilt as a single line (the standard documented form), the prompt shows and the install completes.
-- **More robust update relaunch**: relaunch-into-installer now uses a detached helper script + `open` instead of terminating the running app mid-handoff, and a stale installer source self-heals into normal startup instead of leaving the app unable to open.
-- **Clearer error messages**: a cancelled password prompt vs. a genuine install failure now show distinct text.
-
-### 📝 Docs
-- Corrected the "Automatic updates" section: Accessibility / Screen Recording permissions are NOT preserved across updates under ad-hoc signing (need re-granting), and the app may not auto-relaunch after an update — open it manually if needed.
+- **In-app updates now actually install — for real this time.** The root cause of every failed OTA update was architectural, not the AppleScript syntax: after downloading and verifying the new version, the app relaunched the **old** app bundle (`/Applications/Plumb.app`) into installer mode. That meant the *old binary's* installer code ran — so any installer bug (like the `-2741` AppleScript error) could never be fixed by shipping a newer appcast, because the broken old binary was always the one performing the replace. Installed machines were stranded.
+  - **The fix:** `relaunchIntoInstaller` now launches the **new** (just-downloaded, sha256-verified) app into installer mode. The new app then replaces `/Applications/Plumb.app` with itself. Because the *new* binary always performs the install, any installer fix takes effect immediately — the update path is self-healing.
+  - **Defense in depth:** the installer source path now falls back to `Bundle.main.bundlePath` (the running new app) when the UserDefaults flag is missing or its temp path was already purged by macOS, so the install can no longer get stuck on `missingAppPath`.
+  - **Regression tests:** 12 new unit tests pin the installer invariants — the AppleScript is always single-line (guards the `-2741` regression), source resolution prefers UserDefaults then falls back to the bundle path, and shell/AppleScript quoting is correct for paths containing quotes/backslashes.
+- Installer entry (`main.swift`) now uses the same source-resolution logic, so a stale `installerAppPath` no longer forces a silent fallback to normal startup while the new app is a valid source.
 
 ### ℹ️ Notes
 - Requires macOS 26+.
 - Self-signed (not Developer-ID-notarized); if Gatekeeper blocks first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
 - Accessibility / Screen Recording grants still need re-giving after each update (ad-hoc signing); stable signing is groundwork pending a Developer-ID build.
+- **If you are on v1.0.7 or earlier:** this OTA update will install correctly. After it completes, open Plumb manually if it doesn't relaunch on its own.
 EOF
 )
 

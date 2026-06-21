@@ -119,15 +119,23 @@ if selfTestUI {
 }
 
 // Installer mode: triggered when the normal-mode app writes installerMode=true and
-// relaunches itself. Runs a minimal privileged installer that replaces
-// /Applications/Plumb.app, then relaunches the new version.
+// relaunches the NEW app (see UpdateCoordinator.relaunchIntoInstaller). The installer
+// replaces /Applications/Plumb.app, then relaunches the new version.
 //
-// 安全网：若 installerMode=true 但待安装源文件已被清理（系统定期清 /var/folders 临时目录）
-// 或路径无效，则清零标志并降级为正常启动，而不是带着坏状态进入安装器导致 app 无法打开。
-// 这覆盖 relaunchIntoInstaller 竞态（-609）后 installerMode 永久卡死的情况。
+// 源路径解析：优先用 UserDefaults 里记录的临时解压路径；若该路径已被系统清理
+// （macOS 定期回收 /var/folders）或缺失，则回退到当前进程自身的 bundle 路径
+// （coordinator 现在直接启动新 app 进安装器模式，此时 Bundle.main 就是新 app，
+// 自己就是合法源）。回退由 UpdateInstallerCommand.resolveSourcePath 统一处理，
+// 这里只需判断"是否存在任意可用源"。
+//
+// 安全网：若 installerMode=true 但**任何**源路径都不存在（既无 UserDefaults 路径，
+// 当前 bundle 也读不到——理论上不该发生），则清零标志并降级为正常启动，避免带着
+// 坏状态永久卡在安装器分支导致 app 无法打开。
 if UserDefaults.standard.bool(forKey: UpdateConfig.installerModeKey) {
-    let installerSrc = UserDefaults.standard.string(forKey: UpdateConfig.installerAppPathKey) ?? ""
-    if FileManager.default.fileExists(atPath: installerSrc) {
+    let defaultsSrc = UserDefaults.standard.string(forKey: UpdateConfig.installerAppPathKey)
+    if UpdateInstallerCommand.resolveSourcePath(
+        defaultsPath: defaultsSrc,
+        bundlePathFallback: Bundle.main.bundlePath) != nil {
         UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)  // cleared here too for safety
         app.setActivationPolicy(.regular)
         app.delegate = UpdateInstallerDelegate()

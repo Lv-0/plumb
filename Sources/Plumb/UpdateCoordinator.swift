@@ -112,25 +112,37 @@ final class UpdateCoordinator {
         }
     }
 
-    /// 写 installerMode + 待安装路径，以 Launch Services 重开自身，然后退出当前进程。
+    /// 写 installerMode + 待安装路径，启动**新 app**进入安装器模式，然后退出当前进程。
     ///
-    /// 重要：必须用独立的 shell 进程（`/usr/bin/open`）启动新实例，而非 NSWorkspace.openApplication。
-    /// 旧实现（及 completion-handler 版）从正在退出的 app 内部调用 openApplication：
-    ///   - 旧版：openApplication 后立即 terminate，竞态 → -609 connectionInvalid
-    ///   - completion 版：terminate 放在 completion 里仍被 macOS 取消（app 关闭序列会丢弃
-    ///     自身的 LaunchServices 启动请求），新实例依然不启动
-    /// 用 `/usr/bin/open` 经独立 shell 进程启动：该进程不归当前 app 管，terminate 当前 app
-    /// 不会取消它，新实例可靠启动为安装器。延迟 0.4s 再 terminate，给 open 命令执行时间。
+    /// ## 关键修复（本次）：启动新 app，而不是重开旧 app。
+    ///
+    /// 历史实现启动的是 `Bundle.main.bundleURL`（即 /Applications/Plumb.app，**旧** app）。
+    /// 这导致安装器逻辑跑的是**旧二进制**：旧版本里的安装器 bug（如 -2741 AppleScript
+    /// 多行语法错误）会一直存在，旧版 app 永远无法自我更新——即使 appcast 指向的新版
+    /// 已经修好了 bug，因为执行替换的根本不是新版。
+    ///
+    /// 现在：直接 `open` 已下载、已 sha256 校验、已解压的 **newApp**（临时位置的全新 bundle）。
+    /// 新 app 以安装器模式启动 → 跑**自己**的安装器逻辑 → 把自己 cp 到 /Applications。
+    /// 这样任何已修复的安装器代码都能立即生效，修复对旧版本是"自愈"的。
+    ///
+    /// 仍把 newApp.path 写进 UserDefaults 作为冗余源路径（向后兼容 + 双保险）；
+    /// 安装器侧 (UpdateInstallerCommand.resolveSourcePath) 优先读它，缺失时回退到
+    /// Bundle.main.bundlePath（新 app 启动后即等于 newApp.path）。
+    ///
+    /// ## 重启机制（保留，经实测稳定）
+    /// 用独立 shell 脚本 `sleep; open -n <newApp>` 启动：脚本作为独立进程，
+    /// 当前 app exit(0) 不会取消它；`-n` 强制 LaunchServices 开新实例（即便旧 app
+    /// 还在退出序列中也照开）。delay 给旧 app 留出退出时间，避免新旧实例同时持有
+    /// /Applications/Plumb.app 导致 cp 冲突。
     private func relaunchIntoInstaller(with newApp: URL) {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: UpdateConfig.installerModeKey)
         defaults.set(newApp.path, forKey: UpdateConfig.installerAppPathKey)
-        let appURL = Bundle.main.bundleURL
-        // 可靠 relaunch 方案（经多轮实测确定）：
-        // 写一个独立 shell 脚本到临时位置，内容是 `sleep; open <app>`。
+
+        // 写一个独立 shell 脚本到临时位置，内容是 `sleep; open -n <newApp>`。
         // 用 Process 启动这个脚本（重定向 stdio 到 /dev/null），脚本作为独立进程运行，
         // 不受当前 app 的 NSApplication session 约束。当前 app exit(0) 后，脚本继续执行 open，
-        // LaunchServices 从这个独立进程收到 open 请求，能正常启动新实例（有完整 GUI 会话，
+        // LaunchServices 从这个独立进程收到 open 请求，能正常启动新 app（有完整 GUI 会话，
         // 安装器的密码框能正常显示）。
         //
         // 之前失败的方案（都不可靠）：
@@ -140,7 +152,8 @@ final class UpdateCoordinator {
         //   - nohup + open → app 的子 session，LS 拒绝
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("plumb-relaunch-\(UUID().uuidString).sh")
-        let script = "#!/bin/bash\nsleep 2\n/usr/bin/open \(appURL.path)\n"
+        // 用 -n 强制新实例；sleep 2 给当前 app 充分时间退出（避免新旧同时占用 /Applications）。
+        let script = "#!/bin/bash\nsleep 2\n/usr/bin/open -n \(newApp.path)\n"
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             // 设可执行权限
