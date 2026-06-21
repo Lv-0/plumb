@@ -83,12 +83,15 @@ BODY=$(
 ## v1.0.8
 
 ### 🐛 Fixed
-- **In-app update no longer leaves the app unable to open**: the OTA relaunch had a race (`openApplication` immediately followed by `terminate`) causing macOS `-609 connectionInvalid`, so the installer never started. With a missing safety net this left `installerMode` stuck on and macOS eventually reported the app "can no longer be opened". Now the relaunch waits for launch completion before terminating, and a stale installer source self-heals into normal startup.
+- **In-app update now installs successfully**: every OTA update failed at the final install step with a cryptic error. The root cause was the privileged AppleScript that performs the `/Applications` replacement — it was built as a multi-line string, and although it compiled, `executeAndReturnError` rejected it with `-2741` ("Expected timeout or transaction but found identifier"), so the admin password prompt never appeared and installation aborted. The script is now built as a single line, the standard documented form.
+- **More robust update relaunch**: the relaunch-into-installer step now uses a detached helper script + `open` (instead of terminating the running app mid-handoff), and a stale/missing installer source self-heals into normal startup instead of leaving the app unable to open.
+- **Clearer error messages**: a cancelled password prompt vs. a real install failure now show distinct text instead of both reading "canceled".
 
 ### ℹ️ Notes
 - Requires macOS 26+.
 - Self-signed (not Developer-ID-notarized); if Gatekeeper blocks first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
 - Accessibility / Screen Recording grants still need re-giving after each update (ad-hoc signing); stable signing is groundwork pending a Developer-ID build.
+- After an OTA update the app may not auto-relaunch; just open it manually if needed.
 EOF
 )
 
