@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.9/Plumb-1.0.9.zip",
   "sha256": "c2d43a47efe5ecfa4e9cc4170e9334154880e3d95d7792063db5e50e0d99ed25",
   "notes": {
-    "en": "Fixes a bug where the in-app update could leave Plumb unable to open (the relaunch race has been fixed, and a stale installer now self-heals).",
-    "zh": "修复应用内更新后可能导致 Plumb 无法打开的问题（重启竞态已修复，失效的安装器现可自动恢复）。",
-    "es": "Corrige un error por el que la actualización integrada podía dejar Plumb sin poder abrirse (corregida la carrera de reinicio; el instalador obsoleto ahora se recupera solo).",
-    "fr": "Corrige un bug où la mise à jour intégrée pouvait empêcher Plumb de s'ouvrir (la course au relancement est corrigée ; un installateur périmé se rétablit désormais seul).",
-    "ja": "アプリ内アップデート後に Plumb が開けなくなるバグを修正（再起動の競合を解消し、古いインストーラは自動で回復するようになりました）。"
+    "en": "Fixes in-app updates so they actually install (the AppleScript -2741 syntax error that blocked every OTA update is resolved). More robust relaunch, clearer error messages, and corrected docs about permission re-granting.",
+    "zh": "修复应用内更新——OTA 升级现在能真正完成安装（解决了阻碍每次更新的 AppleScript -2741 语法错误）。更健壮的重启逻辑、更清晰的错误提示，并修正了关于权限重新授权的文档说明。",
+    "es": "Las actualizaciones integradas ahora se instalan correctamente (resuelto el error de sintaxis -2741 de AppleScript que bloqueaba cada OTA). Relanzamiento más robusto, mensajes de error más claros y documentación corregida sobre la renovación de permisos.",
+    "fr": "Les mises à jour intégrées s'installent désormais réellement (résolution de l'erreur de syntaxe AppleScript -2741 qui bloquait chaque OTA). Relancement plus robuste, messages d'erreur plus clairs, et documentation corrigée sur la ré-attribution des permissions.",
+    "ja": "アプリ内アップデートが実際にインストールされるよう修正（毎回の OTA を妨げていた AppleScript -2741 構文エラーを解決）。より堅牢な再起動、より明確なエラーメッセージ、権限の再付与に関するドキュメントを修正。"
   },
   "minOS": "26.0"
 }
