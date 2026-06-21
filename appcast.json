@@ -1,7 +1,7 @@
 {
-  "version": "1.0.9",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.9/Plumb-1.0.9.zip",
-  "sha256": "c2d43a47efe5ecfa4e9cc4170e9334154880e3d95d7792063db5e50e0d99ed25",
+  "version": "1.0.10",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.10/Plumb-1.0.10.zip",
+  "sha256": "a4a33b3c67de89d845ccecabb29e6f70ba94b6b19cb669975d31124208e0ed79",
   "notes": {
     "en": "Fixes in-app updates so they actually install (the AppleScript -2741 syntax error that blocked every OTA update is resolved). More robust relaunch, clearer error messages, and corrected docs about permission re-granting.",
     "zh": "修复应用内更新——OTA 升级现在能真正完成安装（解决了阻碍每次更新的 AppleScript -2741 语法错误）。更健壮的重启逻辑、更清晰的错误提示，并修正了关于权限重新授权的文档说明。",
