@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.10/Plumb-1.0.10.zip",
   "sha256": "a4a33b3c67de89d845ccecabb29e6f70ba94b6b19cb669975d31124208e0ed79",
   "notes": {
-    "en": "Fixes in-app updates so they actually install (the AppleScript -2741 syntax error that blocked every OTA update is resolved). More robust relaunch, clearer error messages, and corrected docs about permission re-granting.",
-    "zh": "修复应用内更新——OTA 升级现在能真正完成安装（解决了阻碍每次更新的 AppleScript -2741 语法错误）。更健壮的重启逻辑、更清晰的错误提示，并修正了关于权限重新授权的文档说明。",
-    "es": "Las actualizaciones integradas ahora se instalan correctamente (resuelto el error de sintaxis -2741 de AppleScript que bloqueaba cada OTA). Relanzamiento más robusto, mensajes de error más claros y documentación corregida sobre la renovación de permisos.",
-    "fr": "Les mises à jour intégrées s'installent désormais réellement (résolution de l'erreur de syntaxe AppleScript -2741 qui bloquait chaque OTA). Relancement plus robuste, messages d'erreur plus clairs, et documentation corrigée sur la ré-attribution des permissions.",
-    "ja": "アプリ内アップデートが実際にインストールされるよう修正（毎回の OTA を妨げていた AppleScript -2741 構文エラーを解決）。より堅牢な再起動、より明確なエラーメッセージ、権限の再付与に関するドキュメントを修正。"
+    "en": "In-app updates now actually install. Root cause: the app relaunched the OLD bundle into installer mode, so the old binary's installer bugs could never be fixed by shipping a newer version. Now the just-downloaded NEW app runs the install and replaces itself. If you're on an older version, this update will install correctly — after it finishes, open Plumb manually if it doesn't relaunch.",
+    "zh": "应用内更新现在能真正完成安装了。根因：此前应用会用旧版 bundle 进入安装器模式，导致旧二进制的安装器 bug 永远无法通过发布新版本来修复。现在改由刚下载的新版应用执行安装并替换自身。如果你运行的是旧版本，这次更新能正常安装——完成后如果应用没有自动重启，请手动打开 Plumb。",
+    "es": "Las actualizaciones integradas ahora se instalan correctamente. Causa raíz: la app relanzaba el bundle ANTIGUO en modo instalador, por lo que los bugs del instalador del binario antiguo nunca podían corregirse publicando una versión más nueva. Ahora la app NUEVA recién descargada ejecuta la instalación y se reemplaza a sí misma. Si estás en una versión anterior, esta actualización se instalará correctamente; al terminar, abre Plumb manualmente si no se reinicia.",
+    "fr": "Les mises à jour intégrées s'installent désormais réellement. Cause racine : l'appli relançait l'ANCIEN bundle en mode installeur, donc les bugs de l'installeur de l'ancien binaire ne pouvaient jamais être corrigés en publiant une version plus récente. Désormais, la NOUVELLE appli téléchargée exécute l'installation et se remplace elle-même. Si vous êtes sur une ancienne version, cette mise à jour s'installera correctement ; une fois terminée, ouvrez Plumb manuellement s'il ne redémarre pas.",
+    "ja": "アプリ内アップデートが実際にインストールされるようになりました。根本原因：アプリが古いバンドルをインストーラモードで再起動していたため、古いバイナリのインストーラのバグは新しいバージョンを公開しても修正できませんでした。現在は、ダウンロードしたばかりの新しいアプリがインストールを実行し、自身を置き換えます。旧バージョンをお使いの場合、今回のアップデートは正常にインストールされます。完了後に自動再起動しない場合は、Plumb を手動で開いてください。"
   },
   "minOS": "26.0"
 }
