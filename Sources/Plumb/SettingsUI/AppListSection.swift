@@ -24,6 +24,9 @@ struct AppListSection: View {
     /// 可选：判定某行是否应被置灰禁用（不可勾选 + 行内提示）。默认 nil = 全部可勾选。
     /// 用于「文档类 App」页：未加入平铺白名单的 App 置灰，因其选择器感知仅在平铺时才生效。
     var isRowDisabled: ((InstalledAppInfo) -> Bool)? = nil
+    /// 是否显示「全部打开 / 全部关闭」批量操作行。默认 false，仅居中段传 true。
+    /// 平铺白名单页与文档类 App 页不传，保持原样（零回归）。
+    var showsBulkActions: Bool = false
 
     @State private var query: String = ""
     /// 搜索框焦点：显式 @FocusState。用于：
