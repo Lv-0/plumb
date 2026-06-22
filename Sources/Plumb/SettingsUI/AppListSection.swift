@@ -57,6 +57,12 @@ struct AppListSection: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
 
+            // 批量操作行（仅居中段显示）：作用于当前搜索过滤后的可见列表。
+            // 全部打开 = 并入可见 ID；全部关闭 = 移除可见 ID。空列表时两按钮置灰。
+            if showsBulkActions {
+                bulkActionsBar
+            }
+
             // 搜索框：极淡半透明作 ZStack 底层（allowsHitTesting(false)），文本框在顶层独立
             // 获得焦点。不用 .glassEffect：窗口本身已是晶莹液态玻璃，这里再叠 glass 会变成
             // 磨砂糊状；仅用一层很淡的填充区分搜索框区域，保留窗口单一折射。
@@ -121,6 +127,32 @@ struct AppListSection: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
     }
+
+    /// 批量操作行：「全部打开 / 全部关闭」两个胶囊按钮，作用于当前可见列表。
+    /// 视觉与 SubTabPill 未选中态一致（极淡半透明胶囊），保持 Liquid Glass 语言统一。
+    /// 按钮无选中态（一次性动作），固定用 .medium 字重。
+    private var bulkActionsBar: some View {
+        let visibleEmpty = sortedFilteredApps.isEmpty
+        return HStack(spacing: 8) {
+            BulkActionButton(title: L10n.bulkSelectAll) {
+                let ids = sortedFilteredApps.map(\.bundleID)
+                withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
+                    selected.formUnion(ids)
+                }
+            }
+            .disabled(visibleEmpty)
+
+            BulkActionButton(title: L10n.bulkDeselectAll) {
+                let ids = Set(sortedFilteredApps.map(\.bundleID))
+                withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
+                    selected.subtract(ids)
+                }
+            }
+            .disabled(visibleEmpty)
+
+            Spacer(minLength: 0)
+        }
+    }
 }
 
 /// 应用列表搜索过滤 + 排序的纯函数命名空间（无 MainActor 隔离，便于单测）。
@@ -174,5 +206,33 @@ struct CenteringSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - BulkActionButton
+//
+// 批量操作胶囊按钮：视觉与 SubTabPill 未选中态一致（极淡半透明填充 + .medium 字重），
+// 不叠 .glassEffect（窗口已是液态玻璃，叠 glass 会变磨砂）。一次性动作，无选中态。
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct BulkActionButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        }
     }
 }
