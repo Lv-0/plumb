@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.2/Plumb-1.1.2.zip",
   "sha256": "05eef35472da8f06156af6ac40416e7b78c4ac331c72f108166023bcf870b986",
   "notes": {
-    "en": "Menu bar dropdown slimmed down: removed the app name header, the \"window centering · tiling\" subtitle, and the two permission shortcuts. Permissions are still requested automatically on launch, and remain adjustable in Settings.",
-    "zh": "精简菜单栏下拉菜单：移除应用名标题、「窗口居中·平铺」副标题及两个权限快捷项。权限仍会在启动时自动申请，并可在设置中调整。",
-    "es": "Menú de la barra superior más limpio: se eliminaron el encabezado con el nombre de la app, el subtítulo «centrado · mosaico» y los dos accesos directos a permisos. Los permisos siguen solicitándose al iniciar y pueden ajustarse en Ajustes.",
-    "fr": "Menu de la barre plus épuré : retrait du titre de l'app, du sous-titre « centrage · mosaïque » et des deux raccourcis de permissions. Les permissions sont toujours demandées au lancement et restent réglables dans les Réglages.",
-    "ja": "メニューバーのドロップダウンをすっきり：アプリ名ヘッダー、「中央寄せ・タイル配置」のサブタイトル、2つの権限ショートカットを削除。権限は起動時にこれまで通り自動で要求され、設定で引き続き調整できます。"
+    "en": "Document apps (Pages, Numbers, Word, Excel) now tile correctly: the template/file picker is centered but not tiled, and only the opened document gets tiled. New \"Document Apps\" section added under Tiling Settings.",
+    "zh": "文档类 App（Pages、Numbers、Word、Excel）现在能正确平铺：模板/文件选择器只居中不平铺，只有打开的文档才会被平铺。平铺设置下新增「文档类 App」分区。",
+    "es": "Las apps de documentos (Pages, Numbers, Word, Excel) ahora se colocan en mosaico correctamente: el selector de plantillas/archivos se centra pero no se coloca en mosaico; solo el documento abierto se coloca en mosaico. Nueva sección «Apps de documentos» en Ajustes de mosaico.",
+    "fr": "Les apps de documents (Pages, Numbers, Word, Excel) se placent maintenant correctement en mosaïque : le sélecteur de modèles/fichiers est centré mais pas en mosaïque ; seul le document ouvert est placé en mosaïque. Nouvelle section « Apps de documents » dans les Réglages de mosaïque.",
+    "ja": "書類アプリ（Pages、Numbers、Word、Excel）が正しくタイル化されるようになりました：テンプレートやファイル選択画面は中央寄せのみでタイル化せず、開いた書類のみタイル化します。タイリング設定に「書類アプリ」セクションを追加。"
   },
   "minOS": "26.0"
 }
