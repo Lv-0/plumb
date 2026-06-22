@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.8/Plumb-1.1.8.zip",
   "sha256": "0128dd5a2273364cf46f983f616c32525f7b7de43581211abc7254dd8172d576",
   "notes": {
-    "en": "Fixed: the template/file picker of Pages/Numbers/Word/Excel is no longer tiled, and opened documents now tile correctly in all locales. Chooser detection now relies solely on the document attribute instead of unreliable window-title matching.",
-    "zh": "修复：Pages/Numbers/Word/Excel 的模板/文件列表不再被平铺，打开的文档现在能正确平铺（所有语言下生效）。选择器识别改为只看文档属性，不再依赖不可靠的窗口标题匹配。",
-    "es": "Corregido: el selector de plantillas/archivos de Pages/Numbers/Word/Excel ya no se coloca en mosaico, y los documentos abiertos ahora se colocan en mosaico correctamente en todos los idiomas. La detección del selector ahora se basa únicamente en el atributo del documento en lugar de en la coincidencia poco fiable del título de la ventana.",
-    "fr": "Corrigé : le sélecteur de modèles/fichiers de Pages/Numbers/Word/Excel n'est plus placé en mosaïque, et les documents ouverts sont maintenant correctement placés en mosaïque dans toutes les langues. La détection du sélecteur repose désormais uniquement sur l'attribut du document au lieu d'une correspondance de titre de fenêtre peu fiable.",
-    "ja": "修正：Pages/Numbers/Word/Excel のテンプレート/ファイル選択画面がタイル化されなくなり、開いた書類がすべての言語で正しくタイル化されるようになりました。選択画面の検出は、信頼性の低いウィンドウタイトル一致ではなく、書類属性のみに依存するようになりました。"
+    "en": "Diagnostic build: adds detailed logging across the settings persistence and update pipeline to investigate why app lists can disappear after an in-app update. No behavior change. If you hit that issue, run `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` and share the log.",
+    "zh": "诊断版本：在设置持久化与更新流程中添加详细日志，用于排查「App 内更新后应用列表消失」的问题。无行为变化。如遇到该问题，可运行 `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` 并提供日志。",
+    "es": "Versión de diagnóstico: añade registro detallado en la persistencia de ajustes y el flujo de actualización para investigar por qué las listas de apps pueden desaparecer tras una actualización desde la app. Sin cambios de comportamiento. Si te ocurre, ejecuta `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` y comparte el registro.",
+    "fr": "Version de diagnostic : ajoute une journalisation détaillée de la persistance des réglages et du flux de mise à jour pour comprendre pourquoi les listes d'apps peuvent disparaître après une mise à jour depuis l'app. Aucun changement de comportement. Si cela se produit, lancez `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` et partagez le journal.",
+    "ja": "診断ビルド：アプリ内アップデート後にアプリリストが消える原因を調査するため、設定の永続化と更新フロー全体に詳細ログを追加します。動作変更はありません。問題が起きた場合は `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` を実行し、ログを共有してください。"
   },
   "minOS": "26.0"
 }
