@@ -1,7 +1,7 @@
 {
-  "version": "1.1.8",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.8/Plumb-1.1.8.zip",
-  "sha256": "0128dd5a2273364cf46f983f616c32525f7b7de43581211abc7254dd8172d576",
+  "version": "1.1.9",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.9/Plumb-1.1.9.zip",
+  "sha256": "cc395c1457e1ca7459ae44d40c028f13345f37447ec49245db8bf4fbc80d47d7",
   "notes": {
     "en": "Diagnostic build: adds detailed logging across the settings persistence and update pipeline to investigate why app lists can disappear after an in-app update. No behavior change. If you hit that issue, run `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` and share the log.",
     "zh": "诊断版本：在设置持久化与更新流程中添加详细日志，用于排查「App 内更新后应用列表消失」的问题。无行为变化。如遇到该问题，可运行 `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` 并提供日志。",
