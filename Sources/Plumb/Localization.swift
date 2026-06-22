@@ -62,6 +62,8 @@ enum L10n {
         // 居中段
         case centeringFootnote
         case searchApps
+        case bulkSelectAll
+        case bulkDeselectAll
         // 平铺段
         case enableAutoTiling
         case enableAutoTilingHint
@@ -140,6 +142,8 @@ enum L10n {
             .tabPermissions: "Permissions",
             .centeringFootnote: "Empty list = center all apps; toggle on to center only selected apps.",
             .searchApps: "Search Apps",
+            .bulkSelectAll: "Select All",
+            .bulkDeselectAll: "Deselect All",
             .enableAutoTiling: "Enable Auto-Tiling",
             .enableAutoTilingHint: "When enabled, checked apps below are auto-tiled onto the screen.",
             .margin: "Margin",
@@ -206,6 +210,8 @@ enum L10n {
             .tabPermissions: "Permisos",
             .centeringFootnote: "Lista vacía = centrar todas las apps; activa el interruptor para centrar solo las apps seleccionadas.",
             .searchApps: "Buscar apps",
+            .bulkSelectAll: "Seleccionar todo",
+            .bulkDeselectAll: "Deseleccionar todo",
             .enableAutoTiling: "Activar mosaico automático",
             .enableAutoTilingHint: "Cuando está activado, las apps marcadas abajo se colocan en mosaico en la pantalla automáticamente.",
             .margin: "Margen",
@@ -272,6 +278,8 @@ enum L10n {
             .tabPermissions: "Permissions",
             .centeringFootnote: "Liste vide = centrer toutes les apps ; activez l'interrupteur pour ne centrer que les apps sélectionnées.",
             .searchApps: "Rechercher des apps",
+            .bulkSelectAll: "Tout sélectionner",
+            .bulkDeselectAll: "Tout désélectionner",
             .enableAutoTiling: "Activer la mosaïque automatique",
             .enableAutoTilingHint: "Lorsque c'est activé, les apps cochées ci-dessous sont placées en mosaïque à l'écran automatiquement.",
             .margin: "Marge",
@@ -338,6 +346,8 @@ enum L10n {
             .tabPermissions: "权限",
             .centeringFootnote: "空列表 = 居中所有应用；打开开关即仅居中所选应用。",
             .searchApps: "搜索应用",
+            .bulkSelectAll: "全部打开",
+            .bulkDeselectAll: "全部关闭",
             .enableAutoTiling: "启用自动平铺",
             .enableAutoTilingHint: "开启后，勾选下方应用时会自动平铺到屏幕。",
             .margin: "边距",
@@ -404,6 +414,8 @@ enum L10n {
             .tabPermissions: "権限",
             .centeringFootnote: "空のリスト = すべてのアプリを中央寄せ。オンにすると選択したアプリのみ中央寄せします。",
             .searchApps: "アプリを検索",
+            .bulkSelectAll: "すべて選択",
+            .bulkDeselectAll: "すべて解除",
             .enableAutoTiling: "自動タイルを有効化",
             .enableAutoTilingHint: "オンにすると、下のチェックしたアプリが自動的に画面にタイル配置されます。",
             .margin: "余白",
@@ -473,6 +485,8 @@ enum L10n {
     static var tabPermissions: String { tr(.tabPermissions) }
     static var centeringFootnote: String { tr(.centeringFootnote) }
     static var searchApps: String { tr(.searchApps) }
+    static var bulkSelectAll: String { tr(.bulkSelectAll) }
+    static var bulkDeselectAll: String { tr(.bulkDeselectAll) }
     static var enableAutoTiling: String { tr(.enableAutoTiling) }
     static var enableAutoTilingHint: String { tr(.enableAutoTilingHint) }
     static var margin: String { tr(.margin) }
