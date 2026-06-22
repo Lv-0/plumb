@@ -1,7 +1,7 @@
 {
-  "version": "1.1.7",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.7/Plumb-1.1.7.zip",
-  "sha256": "f8821ac434ea051143a4b7f2c782eeb3f27e19a6d7db8003568be2e1ad06239b",
+  "version": "1.1.8",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.8/Plumb-1.1.8.zip",
+  "sha256": "0128dd5a2273364cf46f983f616c32525f7b7de43581211abc7254dd8172d576",
   "notes": {
     "en": "Fixed: the template/file picker of Pages/Numbers/Word/Excel is no longer tiled, and opened documents now tile correctly in all locales. Chooser detection now relies solely on the document attribute instead of unreliable window-title matching.",
     "zh": "修复：Pages/Numbers/Word/Excel 的模板/文件列表不再被平铺，打开的文档现在能正确平铺（所有语言下生效）。选择器识别改为只看文档属性，不再依赖不可靠的窗口标题匹配。",
