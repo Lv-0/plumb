@@ -31,8 +31,10 @@ func documentChooserRoundTripAndNormalization() async throws {
         return
     }
     defaults.removePersistentDomain(forName: suiteName)
-
-    let store = AppTilingSettingsStore(defaults: defaults)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
 
     let input = AppTilingSettings(
         isEnabled: true,
@@ -64,12 +66,16 @@ func documentChooserBackwardCompatWhenKeyAbsent() async throws {
     // 仅写入旧的平铺键（不含 documentChooserBundleIDs）。
     defaults.set(true, forKey: "tiling.enabled")
     defaults.set(16.0, forKey: "tiling.edgeMargin")
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
-    let store = AppTilingSettingsStore(defaults: defaults)
     let loaded = store.load()
     #expect(loaded.documentChooserBundleIDs == AppTilingSettings.default.documentChooserBundleIDs)
-
-    defaults.removePersistentDomain(forName: suiteName)
 }
 
 @Test

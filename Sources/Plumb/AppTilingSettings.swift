@@ -17,13 +17,17 @@ import Foundation
 //   - shouldTile / shouldCenter / isDocumentChooserApp：统一的判定语义，bundle id 做归一化（trim+小写）。
 //
 // 存储 AppTilingSettingsStore：
-//   - 持久化到 UserDefaults，键前缀 tiling.* / centering.*。
-//   - load() 在缺少键时回退默认值（向后兼容旧版本），save() 写入前归一化。
+//   - 主存储为签名无关的文件 `~/Library/Application Support/Plumb/settings.json`，
+//     文件路径仅取决于 bundle id 字符串，不依赖签名身份 → OTA 更新即使签名身份变化，
+//     设置也不会丢失（cfprefsd 域会因签名身份漂移而失效，文件不会）。
+//   - UserDefaults 作为镜像双写：保持向后兼容（旧版本/外部工具仍可读）。
+//   - load()：优先读文件；文件缺失时读 UserDefaults 并一次性迁移写入文件；都缺则默认。
+//   - save()：先写文件、再写 UserDefaults（双写）。
 //
 // 不变量：margin 在 [minimumEdgeMargin, maximumEdgeMargin] 内；bundle id 永远归一化存储。
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct AppTilingSettings: Equatable {
+struct AppTilingSettings: Equatable, Codable {
     static let defaultEdgeMargin: CGFloat = 16
     static let minimumEdgeMargin: CGFloat = 0
     static let maximumEdgeMargin: CGFloat = 400
@@ -127,12 +131,71 @@ final class AppTilingSettingsStore {
     }
 
     private let defaults: UserDefaults
+    /// 签名无关的设置文件。默认指向 `~/Library/Application Support/Plumb/settings.json`，
+    /// 仅取决于 bundle id 字符串，不依赖签名身份 → OTA 更新后设置不会丢失。
+    /// 测试可注入临时路径。
+    private let settingsFileURL: URL
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, settingsFileURL: URL? = nil) {
         self.defaults = defaults
+        if let settingsFileURL {
+            self.settingsFileURL = settingsFileURL
+        } else {
+            let appSupport = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first
+                ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+            let dir = appSupport.appendingPathComponent("Plumb", isDirectory: true)
+            // 确保目录存在（幂等）。
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            self.settingsFileURL = dir.appendingPathComponent("settings.json")
+        }
     }
 
     func load() -> AppTilingSettings {
+        // 1) 优先读文件（签名无关、跨更新稳定）。
+        if let fileSettings = readFromFile() {
+            return fileSettings
+        }
+
+        // 2) 文件缺失/损坏 → 读 UserDefaults。
+        let userDefaultsSettings = loadFromUserDefaults()
+
+        // 3) 一次性迁移：UserDefaults 有非默认数据时，写入文件，之后文件为准。
+        //    （UserDefaults 全空 → 返回的就是 .default，不写文件，保持首次启动干净。）
+        if userDefaultsSettings != .default {
+            writeToFile(userDefaultsSettings)
+        }
+        return userDefaultsSettings
+    }
+
+    func save(_ settings: AppTilingSettings) {
+        let normalized = settings.normalized()
+        // 先写文件（主存储），再写 UserDefaults（镜像，向后兼容）。
+        // 任一失败不阻塞另一个：文件写失败仍写 UserDefaults（降级），UserDefaults 写失败不影响文件。
+        writeToFile(normalized)
+        saveToUserDefaults(normalized)
+    }
+
+    // MARK: - File persistence（主存储，签名无关）
+
+    private func readFromFile() -> AppTilingSettings? {
+        guard let data = try? Data(contentsOf: settingsFileURL) else { return nil }
+        return try? JSONDecoder().decode(AppTilingSettings.self, from: data)
+    }
+
+    private func writeToFile(_ settings: AppTilingSettings) {
+        // 编码失败或目录不可写时静默降级（save 仍会写 UserDefaults）。
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        let dir = settingsFileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 原子写：避免写入中途崩溃导致文件损坏。
+        try? data.write(to: settingsFileURL, options: [.atomic])
+    }
+
+    // MARK: - UserDefaults（镜像，向后兼容）
+
+    private func loadFromUserDefaults() -> AppTilingSettings {
         let hasEnabled = defaults.object(forKey: Keys.enabled) != nil
         let hasMargin = defaults.object(forKey: Keys.edgeMargin) != nil
         let hasBundleIDs = defaults.object(forKey: Keys.bundleIDs) != nil
@@ -168,9 +231,7 @@ final class AppTilingSettingsStore {
         ).normalized()
     }
 
-    func save(_ settings: AppTilingSettings) {
-        let normalized = settings.normalized()
-
+    private func saveToUserDefaults(_ normalized: AppTilingSettings) {
         defaults.set(normalized.isEnabled, forKey: Keys.enabled)
         defaults.set(Double(normalized.edgeMargin), forKey: Keys.edgeMargin)
         defaults.set(Array(normalized.tiledBundleIDs).sorted(), forKey: Keys.bundleIDs)

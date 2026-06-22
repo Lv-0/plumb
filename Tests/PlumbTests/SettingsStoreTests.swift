@@ -10,16 +10,20 @@ func settingsStoreDefaultValues() async throws {
         return
     }
     defaults.removePersistentDomain(forName: suiteName)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
-    let store = AppTilingSettingsStore(defaults: defaults)
     let settings = store.load()
 
     #expect(settings == .default)
     // 居中默认开启、列表为空（=> 全部居中，向后兼容）。
     #expect(settings.centerEnabled == true)
     #expect(settings.centeredBundleIDs.isEmpty)
-
-    defaults.removePersistentDomain(forName: suiteName)
 }
 
 @Test
@@ -30,8 +34,13 @@ func settingsStoreRoundTripAndNormalization() async throws {
         return
     }
     defaults.removePersistentDomain(forName: suiteName)
-
-    let store = AppTilingSettingsStore(defaults: defaults)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
     let input = AppTilingSettings(
         isEnabled: true,
@@ -53,8 +62,6 @@ func settingsStoreRoundTripAndNormalization() async throws {
     #expect(loaded.centerEnabled == true)
     #expect(loaded.centeredBundleIDs == ["com.center.app"])
     #expect(loaded.documentChooserBundleIDs == ["com.microsoft.word", "com.microsoft.excel"])
-
-    defaults.removePersistentDomain(forName: suiteName)
 }
 
 @Test
@@ -65,8 +72,13 @@ func settingsStoreCenteringRoundTrip() async throws {
         return
     }
     defaults.removePersistentDomain(forName: suiteName)
-
-    let store = AppTilingSettingsStore(defaults: defaults)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
     let input = AppTilingSettings(
         isEnabled: false,
@@ -92,8 +104,6 @@ func settingsStoreCenteringRoundTrip() async throws {
     let loaded2 = store.load()
     #expect(loaded2.centerEnabled == true)
     #expect(loaded2.centeredBundleIDs.isEmpty)
-
-    defaults.removePersistentDomain(forName: suiteName)
 }
 
 @Test
@@ -143,15 +153,22 @@ func settingsStoreBackwardCompatWhenCenterKeysAbsent() async throws {
         return
     }
     defaults.removePersistentDomain(forName: suiteName)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
-    // 仅写入旧的平铺键。
+    // 仅写入旧的平铺键（UserDefaults）。
     defaults.set(true, forKey: "tiling.enabled")
     defaults.set(16.0, forKey: "tiling.edgeMargin")
 
-    let store = AppTilingSettingsStore(defaults: defaults)
+    // 文件不存在 → 应回退 UserDefaults 并迁移。
     let loaded = store.load()
     #expect(loaded.centerEnabled == AppTilingSettings.default.centerEnabled)
     #expect(loaded.centeredBundleIDs == AppTilingSettings.default.centeredBundleIDs)
-
-    defaults.removePersistentDomain(forName: suiteName)
+    // 迁移后文件应已生成（含从 UserDefaults 读到的数据）。
+    #expect(FileManager.default.fileExists(atPath: fileURL.path))
 }
