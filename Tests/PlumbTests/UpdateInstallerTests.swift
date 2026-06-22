@@ -176,4 +176,130 @@ struct UpdateInstallerTests {
         #expect(apple.contains("with administrator privileges"))
         #expect(apple.contains(bundle.path))
     }
+
+    // MARK: canReplaceWithoutPrivileges（双路径核心：与 Sparkle 无密码启发式一致）
+    //
+    // 决定安装器走"无提权快路径"还是"AppleScript 提权路径"。
+    // 逻辑（纯函数，依赖注入 owner/writable/uid，可单测全部分支）：
+    //   - 目标存在：仅当目标 owner == 当前 uid 才可无提权替换；
+    //   - 目标不存在：仅当父目录当前 uid 可写才可无提权创建。
+    // 用注入形式避免在单测里构造 root-owned 真实文件（单测进程非 root）。
+
+    @Test("canReplaceWithoutPrivileges: admin-owned target → true (fast path)")
+    func canReplaceAdminOwnedTarget() {
+        // 目标 .app 存在，owner 是当前用户（admin 组）→ 无需提权即可 rm + cp。
+        let r = UpdateInstallerCommand.canReplaceWithoutPrivileges(
+            destination: "/Applications/Plumb.app",
+            destinationExists: true,
+            destinationOwnerUID: 501,
+            parentDirectoryWritable: true,
+            currentUID: 501)
+        #expect(r == true)
+    }
+
+    @Test("canReplaceWithoutPrivileges: root-owned target → false (needs privileges)")
+    func canReplaceRootOwnedTarget() {
+        // 目标 .app 存在但 owner=root(0)，当前用户=501 → 必须提权（当前机器的真实状态）。
+        let r = UpdateInstallerCommand.canReplaceWithoutPrivileges(
+            destination: "/Applications/Plumb.app",
+            destinationExists: true,
+            destinationOwnerUID: 0,
+            parentDirectoryWritable: true,
+            currentUID: 501)
+        #expect(r == false)
+    }
+
+    @Test("canReplaceWithoutPrivileges: missing target + writable parent → true")
+    func canReplaceMissingTargetWritableParent() {
+        // 目标不存在（新装），父目录 /Applications 当前用户可写 → 直接 mv，无需提权。
+        let r = UpdateInstallerCommand.canReplaceWithoutPrivileges(
+            destination: "/Applications/Plumb.app",
+            destinationExists: false,
+            destinationOwnerUID: 0,
+            parentDirectoryWritable: true,
+            currentUID: 501)
+        #expect(r == true)
+    }
+
+    @Test("canReplaceWithoutPrivileges: missing target + non-writable parent → false")
+    func canReplaceMissingTargetNonWritableParent() {
+        // 目标不存在且父目录不可写（如受限的 /Applications）→ 需提权。
+        let r = UpdateInstallerCommand.canReplaceWithoutPrivileges(
+            destination: "/Applications/Plumb.app",
+            destinationExists: false,
+            destinationOwnerUID: 0,
+            parentDirectoryWritable: false,
+            currentUID: 501)
+        #expect(r == false)
+    }
+
+    @Test("canReplaceWithoutPrivileges: admin-owned but uid mismatch → false")
+    func canReplaceOwnedByOtherUser() {
+        // 目标存在，owner 是别的非 root 用户（如 502），当前用户 501 无权删 → 需提权。
+        let r = UpdateInstallerCommand.canReplaceWithoutPrivileges(
+            destination: "/Applications/Plumb.app",
+            destinationExists: true,
+            destinationOwnerUID: 502,
+            parentDirectoryWritable: true,
+            currentUID: 501)
+        #expect(r == false)
+    }
+
+    // MARK: 快路径替换语义（无提权 rm + mv，纯 FileManager，无 shell 注入面）
+    //
+    // 快路径与提权路径的等价性：都把 source 完整放到 destination。
+    // 用真实临时目录验证 FileManager 替换语义（rm 旧 + mv 新），覆盖"目标已存在"
+    // 与"目标不存在"两种情况——这正是 admin-owned 目标走快路径时的真实行为。
+
+    @Test("replaceWithoutPrivileges: missing destination → mv source into place")
+    func replaceMissingDestination() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plumb-replace-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // source: 一个假的 .app 目录（含一个文件，模拟 bundle 内容）
+        let src = tmp.appendingPathComponent("Source.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try "binary".write(to: src.appendingPathComponent("Plumb"), atomically: true, encoding: .utf8)
+
+        let dest = tmp.appendingPathComponent("Plumb.app")
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+
+        try UpdateInstallerCommand.replaceWithoutPrivileges(
+            source: src.path, destination: dest.path)
+
+        // 替换后 dest 存在，且内容来自 source。
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+        let moved = try String(contentsOf: dest.appendingPathComponent("Plumb"), encoding: .utf8)
+        #expect(moved == "binary")
+        // source 应已被 mv 走（不再在原位）。
+        #expect(!FileManager.default.fileExists(atPath: src.path))
+    }
+
+    @Test("replaceWithoutPrivileges: existing destination → rm old + mv new")
+    func replaceExistingDestination() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plumb-replace-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // source（新版本内容）
+        let src = tmp.appendingPathComponent("Source.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try "new-binary".write(to: src.appendingPathComponent("Plumb"), atomically: true, encoding: .utf8)
+
+        // destination（旧版本，存在且内容不同）
+        let dest = tmp.appendingPathComponent("Plumb.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        try "old-binary".write(to: dest.appendingPathComponent("Plumb"), atomically: true, encoding: .utf8)
+
+        try UpdateInstallerCommand.replaceWithoutPrivileges(
+            source: src.path, destination: dest.path)
+
+        // 替换后 dest 内容是新版本。
+        let moved = try String(contentsOf: dest.appendingPathComponent("Plumb"), encoding: .utf8)
+        #expect(moved == "new-binary")
+        #expect(!FileManager.default.fileExists(atPath: src.path))
+    }
 }

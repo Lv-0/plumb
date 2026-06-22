@@ -23,6 +23,7 @@ enum InstallError: Error {
     case missingAppPath
     case authorizationDenied       // 用户取消密码框
     case replaceFailed(status: Int)
+    case unprivilegedReplaceFailed // 快路径无提权替换失败（调用方据此回退提权路径或报错）
     case relaunchFailed
 }
 
@@ -82,6 +83,73 @@ enum UpdateInstallerCommand {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
+    // MARK: 双路径核心 —— 无提权快路径可行性判定（与 Sparkle 无密码启发式一致）
+    //
+    // 安装器替换 /Applications/Plumb.app 有两条路径：
+    //   - 快路径：当前进程能无提权替换（FileManager 直接 mv/rm），零密码、零 AppleScript。
+    //   - 提权路径：AppleScript `with administrator privileges`（弹系统密码框）。
+    //
+    // 触发快路径的条件（与 Sparkle 一致）：
+    //   - 目标 .app 不存在：父目录当前 uid 可写即可直接创建；
+    //   - 目标 .app 存在：仅当其 owner == 当前 uid，当前用户才有权 rm -rf 它再 cp。
+    // 任一不满足 → 返回 false → 安装器走提权路径。
+    //
+    // 这是纯函数（依赖全注入），可在单测里覆盖 root-owned / admin-owned / 不存在 等
+    // 全部分支，无需在测试进程里构造真实 root 文件。
+
+    /// 判定当前进程能否无提权替换目标。纯函数版本：所有外部状态以参数注入，可单测。
+    static func canReplaceWithoutPrivileges(
+        destination: String,
+        destinationExists: Bool,
+        destinationOwnerUID: uid_t,
+        parentDirectoryWritable: Bool,
+        currentUID: uid_t
+    ) -> Bool {
+        if destinationExists {
+            // 目标存在：只有当目标归当前用户所有时，才能无提权删除替换。
+            return destinationOwnerUID == currentUID
+        }
+        // 目标不存在：能否无提权创建取决于父目录是否当前用户可写。
+        return parentDirectoryWritable
+    }
+
+    /// 判定当前进程能否无提权替换目标的便捷重载：从真实文件系统读取状态。
+    /// 读不到属性（理论上不应发生）→ 保守返回 false，走提权路径兜底。
+    static func canReplaceWithoutPrivileges(destination: String) -> Bool {
+        let fm = FileManager.default
+        let exists = fm.fileExists(atPath: destination)
+        let parent = (destination as NSString).deletingLastPathComponent
+        let parentWritable = fm.isWritableFile(atPath: parent)
+        let ownerUID: uid_t
+        if exists {
+            ownerUID = (try? fm.attributesOfItem(atPath: destination)[.ownerAccountID] as? uid_t) ?? uid_t.max
+        } else {
+            ownerUID = uid_t.max   // 不存在时不参与判定
+        }
+        return canReplaceWithoutPrivileges(
+            destination: destination,
+            destinationExists: exists,
+            destinationOwnerUID: ownerUID,
+            parentDirectoryWritable: parentWritable,
+            currentUID: getuid())
+    }
+
+    /// 无提权替换：rm 旧（若存在）+ mv 新到目标位。纯 FileManager，无 shell、无注入面。
+    ///
+    /// 仅在 `canReplaceWithoutPrivileges(destination:) == true` 时调用。
+    /// 用 FileManager 而非 shell：跨卷时 moveItem 自动 fall back 到 copy+delete，
+    /// 同卷（APFS 常见）走瞬时 rename，且全程不经过 /bin/sh，无注入风险。
+    /// 失败（权限、磁盘满等）抛错，调用方据此回退提权路径或报失败。
+    static func replaceWithoutPrivileges(source: String, destination: String) throws {
+        let fm = FileManager.default
+        let srcURL = URL(fileURLWithPath: source)
+        let destURL = URL(fileURLWithPath: destination)
+        if fm.fileExists(atPath: destination) {
+            try fm.removeItem(at: destURL)
+        }
+        try fm.moveItem(at: srcURL, to: destURL)
+    }
+
     /// 把 shell 命令包成单行 AppleScript：`do shell script "… ; echo $?" with administrator privileges`。
     ///
     /// 关键不变量：**生成的 AppleScript 必须是单行**（不含 `\n`）。多行形式
@@ -138,7 +206,10 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 提权原子替换 /Applications/Plumb.app。
+    /// 原子替换 /Applications/Plumb.app。双路径分流（与 Sparkle 无密码启发式一致）：
+    ///   - 快路径：目标可无提权替换 → FileManager 直接 rm+mv，零密码、零 AppleScript。
+    ///   - 提权路径：AppleScript `with administrator privileges`（弹系统密码框）。
+    /// 快路径失败时回退提权路径（兜底，不丢功能）。
     private func performInstall() throws {
         let defaults = UserDefaults.standard
         // 源路径解析：优先用 coordinator 写入的临时解压路径；缺失则回退到当前
@@ -150,6 +221,23 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         ) else {
             throw InstallError.missingAppPath
         }
+
+        // 快路径：当前用户可无提权替换目标（admin-owned 或新装到可写父目录）。
+        if UpdateInstallerCommand.canReplaceWithoutPrivileges(destination: UpdateInstallerCommand.destination) {
+            do {
+                try UpdateInstallerCommand.replaceWithoutPrivileges(
+                    source: srcPath, destination: UpdateInstallerCommand.destination)
+                // 快路径成功：清标志，结束（无需提权，无密码框）。
+                defaults.set(false, forKey: UpdateConfig.installerModeKey)
+                defaults.removeObject(forKey: UpdateConfig.installerAppPathKey)
+                return
+            } catch {
+                // 快路径失败（权限、磁盘满等）→ 回退提权路径兜底，不抛错中断。
+                // 保留 installerMode 标志，让提权路径执行后再清。
+            }
+        }
+
+        // 提权路径：AppleScript with administrator privileges。
         let shellScript = UpdateInstallerCommand.buildShellScript(source: srcPath)
         let status = try runPrivileged(shellScript: shellScript)
         guard status == 0 else { throw InstallError.replaceFailed(status: status) }
@@ -181,11 +269,44 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         return exitCode
     }
 
+    /// 安装完成后可靠重启新版本。
+    ///
+    /// 用独立 shell 脚本（detached process）`sleep; open -n <dest>` 重启 —— 与
+    /// `UpdateCoordinator.relaunchIntoInstaller` 同一套经过验证的机制（commit 08aae07）。
+    /// 之前的 `NSWorkspace.openApplication { _, _ in exit(0) }` 在某些时序下，completion
+    /// 会在 LaunchServices 真正拉起 app 之前就 fire，导致安装器过早 exit、新 app 未启动
+    /// （README 历史 hedge「如果应用没有自动重启，请手动打开」的根因）。
+    ///
+    /// detached 脚本作为独立进程，安装器 exit(0) 不会取消它；`sleep 1` 给安装器留退出
+    /// 时间，`open -n` 强制 LaunchServices 开新实例。这样安装器→新 app 的过渡与
+    /// coordinator→安装器的过渡用同一机制，消除不一致。
     private func finishAndRelaunch() {
         statusLabel?.stringValue = L10n.otaInstallDone
-        let dest = URL(fileURLWithPath: "/Applications/Plumb.app")
-        NSWorkspace.shared.openApplication(at: dest, configuration: .init()) { _, _ in
+        let dest = UpdateInstallerCommand.destination
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plumb-relaunch-\(UUID().uuidString).sh")
+        let script = UpdateRelaunchCommand.buildScript(appPath: dest, delaySeconds: 1)
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
             exit(0)
+        }
+        let proc = Process()
+        proc.executableURL = scriptURL
+        proc.standardInput = FileHandle(forWritingAtPath: "/dev/null")
+        proc.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
+        proc.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        do {
+            try proc.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                exit(0)
+            }
+        } catch {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                exit(0)
+            }
         }
     }
 

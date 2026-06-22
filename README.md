@@ -155,7 +155,7 @@ We want grants to persist across updates. The mechanism is a **stable signing id
 
 ### Automatic updates
 
-Plumb checks for updates on launch (at most once every 6 hours) and via **Check for Updates…** in the menu bar. When a newer version is available, you can update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` (it asks for your password once, since writing to `/Applications` requires it). After the update completes the app may not auto-relaunch; just open it manually if needed. Until Plumb is Developer-ID signed, your Accessibility / Screen Recording permissions will need re-granting after each update (see [Why permissions may need re-granting](#why-permissions-may-need-re-granting-and-how-this-is-fixed)).
+Plumb checks for updates on launch (at most once every 6 hours) and via **Check for Updates…** in the menu bar. When a newer version is available, you can update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` and restarts the app automatically. If the app bundle is owned by you (e.g. installed by dragging from the DMG), the installer replaces it silently with no password prompt; otherwise it asks for your password once. Until Plumb is Developer-ID signed, your Accessibility / Screen Recording permissions will need re-granting after each update unless you've created a stable signing identity (see [Why permissions may need re-granting](#why-permissions-may-need-re-granting-and-how-this-is-fixed)).
 
 ## Requirements
 
