@@ -78,24 +78,35 @@ upload_asset() {
 
 RELEASE_NAME="${TAG#v}"
 
-BODY=$(
-  cat <<'EOF' | json_escape
-## v1.0.10
+# Release notes are read from a file to avoid a macOS bash 3.2 heredoc-parsing
+# quirk that bites when the body contains backticks + apostrophes on the same line.
+# Prefer a file-based body: set RELEASE_NOTES_FILE to a path, otherwise use the
+# built-in default below.
+RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-}"
+if [[ -z "${RELEASE_NOTES_FILE}" ]]; then
+  RELEASE_NOTES_FILE="$(mktemp)"
+  trap 'rm -f "${RELEASE_NOTES_FILE}"' EXIT
+  cat > "${RELEASE_NOTES_FILE}" <<'NOTES_EOF'
+## What's new
 
-### 🐛 Fixed
-- **In-app updates now actually install — for real this time.** The root cause of every failed OTA update was architectural, not the AppleScript syntax: after downloading and verifying the new version, the app relaunched the **old** app bundle (`/Applications/Plumb.app`) into installer mode. That meant the *old binary's* installer code ran — so any installer bug (like the `-2741` AppleScript error) could never be fixed by shipping a newer appcast, because the broken old binary was always the one performing the replace. Installed machines were stranded.
-  - **The fix:** `relaunchIntoInstaller` now launches the **new** (just-downloaded, sha256-verified) app into installer mode. The new app then replaces `/Applications/Plumb.app` with itself. Because the *new* binary always performs the install, any installer fix takes effect immediately — the update path is self-healing.
-  - **Defense in depth:** the installer source path now falls back to `Bundle.main.bundlePath` (the running new app) when the UserDefaults flag is missing or its temp path was already purged by macOS, so the install can no longer get stuck on `missingAppPath`.
-  - **Regression tests:** 12 new unit tests pin the installer invariants — the AppleScript is always single-line (guards the `-2741` regression), source resolution prefers UserDefaults then falls back to the bundle path, and shell/AppleScript quoting is correct for paths containing quotes/backslashes.
-- Installer entry (`main.swift`) now uses the same source-resolution logic, so a stale `installerAppPath` no longer forces a silent fallback to normal startup while the new app is a valid source.
+### Silent updates with no permission re-grants
+- **Dual-path installer.** When the app bundle is owned by you (e.g. installed by dragging from the DMG), updates now replace it silently with no password prompt, mirroring Sparkle's no-password heuristic. Only apps owned by root still ask for your password once.
+- **Permissions now survive updates.** Plumb is now signed with a stable local certificate (Plumb Local Signer) instead of ad-hoc. Because macOS TCC keys on the signing identity (not the per-build cdhash), your Accessibility / Screen Recording grants are preserved across updates after the first stable-signed version. This is a build/signing fix with no app behavior change.
+- **Reliable auto-relaunch.** The installer now relaunches the new version via the same detached-process mechanism already proven in the update coordinator, so the app restarts itself after an update instead of sometimes needing to be opened manually.
 
-### ℹ️ Notes
+### Fixed
+- **Root cause of TCC reset every update:** the self-signed signing certificate was generated without the codeSigning extended key usage, so codesign silently refused to use it and every build fell back to ad-hoc. make_signing_cert.sh now emits a proper code-signing certificate.
+
+### Tests
+- 98 unit tests pass (7 new: dual-path installer feasibility detection across admin-owned / root-owned / missing-target cases, plus the unprivileged replace semantics).
+
+### Notes
 - Requires macOS 26+.
-- Self-signed (not Developer-ID-notarized); if Gatekeeper blocks first open as "damaged", run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see README FAQ).
-- Accessibility / Screen Recording grants still need re-giving after each update (ad-hoc signing); stable signing is groundwork pending a Developer-ID build.
-- **If you are on v1.0.7 or earlier:** this OTA update will install correctly. After it completes, open Plumb manually if it doesn't relaunch on its own.
-EOF
-)
+- Self-signed (not Developer-ID-notarized); if Gatekeeper blocks first open as "damaged", run xattr -dr com.apple.quarantine /Applications/Plumb.app (see README FAQ).
+- To enable permission preservation on a machine, run scripts/make_signing_cert.sh once (requires one admin password entry to trust the cert), then all subsequent builds use the stable identity automatically.
+NOTES_EOF
+fi
+BODY="$(json_escape < "${RELEASE_NOTES_FILE}")"
 
 payload=$(
   cat <<EOF
