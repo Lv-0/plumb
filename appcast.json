@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.6/Plumb-1.1.6.zip",
   "sha256": "da20c3f4521e3e1d7d2ddcacd18458e32d6947fe1d56428b1e01ea0cf131120f",
   "notes": {
-    "en": "Fixed: your centering/tiling app lists no longer disappear after an in-app update. Settings are now persisted to a signing-independent file, so they survive OTA updates. Existing data is migrated automatically on first launch.",
-    "zh": "修复：App 内更新后，居中/平铺的应用列表不再消失。设置现在持久化到与签名无关的文件，OTA 更新后也能保留。首次启动会自动迁移已有数据。",
-    "es": "Corregido: las listas de apps de centrado/mosaico ya no desaparecen tras una actualización desde la app. Los ajustes ahora se guardan en un archivo independiente de la firma, por lo que sobreviven a las actualizaciones OTA. Los datos existentes se migran automáticamente en el primer inicio.",
-    "fr": "Corrigé : vos listes d'apps de centrage/mosaïque ne disparaissent plus après une mise à jour depuis l'app. Les réglages sont désormais stockés dans un fichier indépendant de la signature, donc ils survivent aux mises à jour OTA. Les données existantes sont migrées automatiquement au premier lancement.",
-    "ja": "修正：アプリ内アップデート後に中央寄せ・タイル化のアプリリストが消えなくなりました。設定は署名に依存しないファイルに保存され、OTAアップデート後も保持されます。初回起動時に既存データを自動移行します。"
+    "en": "Fixed: the template/file picker of Pages/Numbers/Word/Excel is no longer tiled, and opened documents now tile correctly in all locales. Chooser detection now relies solely on the document attribute instead of unreliable window-title matching.",
+    "zh": "修复：Pages/Numbers/Word/Excel 的模板/文件列表不再被平铺，打开的文档现在能正确平铺（所有语言下生效）。选择器识别改为只看文档属性，不再依赖不可靠的窗口标题匹配。",
+    "es": "Corregido: el selector de plantillas/archivos de Pages/Numbers/Word/Excel ya no se coloca en mosaico, y los documentos abiertos ahora se colocan en mosaico correctamente en todos los idiomas. La detección del selector ahora se basa únicamente en el atributo del documento en lugar de en la coincidencia poco fiable del título de la ventana.",
+    "fr": "Corrigé : le sélecteur de modèles/fichiers de Pages/Numbers/Word/Excel n'est plus placé en mosaïque, et les documents ouverts sont maintenant correctement placés en mosaïque dans toutes les langues. La détection du sélecteur repose désormais uniquement sur l'attribut du document au lieu d'une correspondance de titre de fenêtre peu fiable.",
+    "ja": "修正：Pages/Numbers/Word/Excel のテンプレート/ファイル選択画面がタイル化されなくなり、開いた書類がすべての言語で正しくタイル化されるようになりました。選択画面の検出は、信頼性の低いウィンドウタイトル一致ではなく、書類属性のみに依存するようになりました。"
   },
   "minOS": "26.0"
 }
