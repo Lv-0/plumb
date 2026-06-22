@@ -1,7 +1,7 @@
 {
-  "version": "1.1.5",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.5/Plumb-1.1.5.zip",
-  "sha256": "0d620dd187779e2705da0e545b79c79d3c2f2ba909a49949384b541362f48c46",
+  "version": "1.1.6",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.6/Plumb-1.1.6.zip",
+  "sha256": "da20c3f4521e3e1d7d2ddcacd18458e32d6947fe1d56428b1e01ea0cf131120f",
   "notes": {
     "en": "Fixed: your centering/tiling app lists no longer disappear after an in-app update. Settings are now persisted to a signing-independent file, so they survive OTA updates. Existing data is migrated automatically on first launch.",
     "zh": "修复：App 内更新后，居中/平铺的应用列表不再消失。设置现在持久化到与签名无关的文件，OTA 更新后也能保留。首次启动会自动迁移已有数据。",
