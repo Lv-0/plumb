@@ -202,8 +202,13 @@ struct CenteringSection: View {
 
     var body: some View {
         ScrollView {
-            AppListSection(footnote: footnote, selected: $selected, apps: apps)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            AppListSection(
+                footnote: footnote,
+                selected: $selected,
+                apps: apps,
+                showsBulkActions: true
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
     }
