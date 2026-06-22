@@ -1,7 +1,7 @@
 {
-  "version": "1.0.13",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.13/Plumb-1.0.13.zip",
-  "sha256": "71402abafdb4738bdc4eddc66b893be47f769cbcadb6af802d698c9bf9c6168a",
+  "version": "1.0.14",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.0.14/Plumb-1.0.14.zip",
+  "sha256": "ad4911fd390b4663a85aa380c704d39c66cd275a6b65c362d7baa96db6e6781b",
   "notes": {
     "en": "In-app updates now actually install. Root cause: the app relaunched the OLD bundle into installer mode, so the old binary's installer bugs could never be fixed by shipping a newer version. Now the just-downloaded NEW app runs the install and replaces itself. If you're on an older version, this update will install correctly — after it finishes, open Plumb manually if it doesn't relaunch.",
     "zh": "应用内更新现在能真正完成安装了。根因：此前应用会用旧版 bundle 进入安装器模式，导致旧二进制的安装器 bug 永远无法通过发布新版本来修复。现在改由刚下载的新版应用执行安装并替换自身。如果你运行的是旧版本，这次更新能正常安装——完成后如果应用没有自动重启，请手动打开 Plumb。",
