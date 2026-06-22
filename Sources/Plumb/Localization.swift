@@ -73,6 +73,9 @@ enum L10n {
         case documentChooserTitle
         case documentChooserFootnote
         case documentChooserEmptyHint
+        // 平铺子标签（双页切换）
+        case tilingSubtabAllowlist
+        case tilingSubtabDocument
         // 权限段
         case permissionsIntro
         case accessibility
@@ -144,6 +147,8 @@ enum L10n {
             .documentChooserTitle: "Document Apps",
             .documentChooserFootnote: "These apps show a template/file picker first — it's centered but not tiled; only the opened document gets tiled.",
             .documentChooserEmptyHint: "Add an app to the tiling list above to configure it here.",
+            .tilingSubtabAllowlist: "Tiling Apps",
+            .tilingSubtabDocument: "Document Apps",
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
@@ -207,6 +212,8 @@ enum L10n {
             .documentChooserTitle: "Apps de documentos",
             .documentChooserFootnote: "Estas apps muestran primero un selector de plantillas/archivos: se centra pero no se coloca en mosaico; solo el documento abierto se coloca en mosaico.",
             .documentChooserEmptyHint: "Añade una app a la lista de mosaico de arriba para configurarla aquí.",
+            .tilingSubtabAllowlist: "Apps en mosaico",
+            .tilingSubtabDocument: "Apps de documentos",
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
@@ -270,6 +277,8 @@ enum L10n {
             .documentChooserTitle: "Apps de documents",
             .documentChooserFootnote: "Ces apps affichent d'abord un sélecteur de modèles/fichiers : il est centré mais pas en mosaïque ; seul le document ouvert est placé en mosaïque.",
             .documentChooserEmptyHint: "Ajoutez une app à la liste de mosaïque ci-dessus pour la configurer ici.",
+            .tilingSubtabAllowlist: "Apps en mosaïque",
+            .tilingSubtabDocument: "Apps de documents",
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
@@ -333,6 +342,8 @@ enum L10n {
             .documentChooserTitle: "文档类 App",
             .documentChooserFootnote: "这些 App 打开模板或文件列表时仅居中、不平铺；只有打开的文档窗口才会被平铺。",
             .documentChooserEmptyHint: "先将 App 加入上方平铺列表，才能在此配置。",
+            .tilingSubtabAllowlist: "平铺应用列表",
+            .tilingSubtabDocument: "文档类 App",
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
@@ -396,6 +407,8 @@ enum L10n {
             .documentChooserTitle: "書類アプリ",
             .documentChooserFootnote: "これらのアプリはテンプレートやファイル選択画面を先に表示します。選択画面は中央寄せのみでタイル化せず、開いた書類のみタイル化します。",
             .documentChooserEmptyHint: "上のタイリングリストにアプリを追加すると、ここで設定できます。",
+            .tilingSubtabAllowlist: "タイル対象アプリ",
+            .tilingSubtabDocument: "書類アプリ",
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
@@ -462,6 +475,8 @@ enum L10n {
     static var documentChooserTitle: String { tr(.documentChooserTitle) }
     static var documentChooserFootnote: String { tr(.documentChooserFootnote) }
     static var documentChooserEmptyHint: String { tr(.documentChooserEmptyHint) }
+    static var tilingSubtabAllowlist: String { tr(.tilingSubtabAllowlist) }
+    static var tilingSubtabDocument: String { tr(.tilingSubtabDocument) }
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }

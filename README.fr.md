@@ -13,7 +13,7 @@ Centre et place automatiquement en mosaïque les apps macOS — un bonheur pour 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#configuration-requise)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.1.2-success.svg?style=flat-square)](#téléchargement-et-installation)
+[![Release](https://img.shields.io/badge/release-v1.1.3-success.svg?style=flat-square)](#téléchargement-et-installation)
 
 [English](./README.md) · [简体中文](./README.zh.md) · [Español](./README.es.md) · **Français** · [日本語](./README.ja.md)
 
