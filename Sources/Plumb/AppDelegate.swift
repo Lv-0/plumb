@@ -61,14 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openAccessibilitySettings() {
-        AccessibilityPermission.openSettings()
-    }
-
-    @objc private func openScreenCaptureSettings() {
-        ScreenCapturePermission.openSettings()
-    }
-
     @objc private func openSettings() {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(store: tilingSettingsStore)
@@ -133,13 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // 头部：应用名 + 副标题
-        let header = menu.addItem(withTitle: "Plumb", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        let subtitle = menu.addItem(withTitle: "  " + L10n.menuSubtitle, action: nil, keyEquivalent: "")
-        subtitle.isEnabled = false
-        menu.addItem(.separator())
-
         // 主操作：立即居中
         let centerItem = menu.addItem(withTitle: L10n.centerNow, action: #selector(centerNow), keyEquivalent: "")
         centerItem.target = self
@@ -154,16 +139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let updateItem = menu.addItem(withTitle: L10n.otaCheckForUpdates, action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.target = self
         updateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
-
-        menu.addItem(.separator())
-
-        let accItem = menu.addItem(withTitle: L10n.accessibilityPermission, action: #selector(openAccessibilitySettings), keyEquivalent: "")
-        accItem.target = self
-        accItem.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
-
-        let scrItem = menu.addItem(withTitle: L10n.screenRecordingPermission, action: #selector(openScreenCaptureSettings), keyEquivalent: "")
-        scrItem.target = self
-        scrItem.image = NSImage(systemSymbolName: "rectangle.dashed.badge.record", accessibilityDescription: nil)
 
         menu.addItem(.separator())
         let quitItem = menu.addItem(withTitle: L10n.quitApp, action: #selector(quitApp), keyEquivalent: "q")

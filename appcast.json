@@ -1,13 +1,13 @@
 {
-  "version": "1.1.0",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.0/Plumb-1.1.0.zip",
-  "sha256": "caa09c15dec7c7ee939a674454fdcdc05f6f3d829a02ffe71d3408ae0786c4ef",
+  "version": "1.1.1",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.1/Plumb-1.1.1.zip",
+  "sha256": "67f5e881d4deac25f2eb32b446011dafb36dfb1e32e51b88e4b4f661d1165d90",
   "notes": {
-    "en": "Silent updates: the installer now skips the password prompt when the app is owned by you, relaunches automatically after install, and preserves your Accessibility / Screen Recording permissions across updates (stable signing).",
-    "zh": "静默更新：app 归你所有时安装器跳过密码提示，安装后自动重启，并跨更新保留辅助功能 / 屏幕录制权限（稳定签名）。",
-    "es": "Actualizaciones silenciosas: el instalador ahora omite la contraseña cuando la app es tuya, se reinicia automáticamente tras la instalación y conserva los permisos de Accesibilidad / Grabación de pantalla entre actualizaciones (firma estable).",
-    "fr": "Mises à jour silencieuses : l'installeur ignore le mot de passe lorsque l'app vous appartient, redémarre automatiquement après l'installation et conserve vos autorisations d'Accessibilité / Capture d'écran entre les mises à jour (signature stable).",
-    "ja": "サイレント更新：アプリがあなた所有の場合、インストーラはパスワード入力を省略し、インストール後に自動再起動し、アクセシビリティ / 画面収録の権限を更新後も維持します（安定署名）。"
+    "en": "Menu bar dropdown slimmed down: removed the app name header, the \"window centering · tiling\" subtitle, and the two permission shortcuts. Permissions are still requested automatically on launch, and remain adjustable in Settings.",
+    "zh": "精简菜单栏下拉菜单：移除应用名标题、「窗口居中·平铺」副标题及两个权限快捷项。权限仍会在启动时自动申请，并可在设置中调整。",
+    "es": "Menú de la barra superior más limpio: se eliminaron el encabezado con el nombre de la app, el subtítulo «centrado · mosaico» y los dos accesos directos a permisos. Los permisos siguen solicitándose al iniciar y pueden ajustarse en Ajustes.",
+    "fr": "Menu de la barre plus épuré : retrait du titre de l'app, du sous-titre « centrage · mosaïque » et des deux raccourcis de permissions. Les permissions sont toujours demandées au lancement et restent réglables dans les Réglages.",
+    "ja": "メニューバーのドロップダウンをすっきり：アプリ名ヘッダー、「中央寄せ・タイル配置」のサブタイトル、2つの権限ショートカットを削除。権限は起動時にこれまで通り自動で要求され、設定で引き続き調整できます。"
   },
   "minOS": "26.0"
 }
