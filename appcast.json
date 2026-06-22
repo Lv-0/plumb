@@ -1,7 +1,7 @@
 {
-  "version": "1.1.1",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.1/Plumb-1.1.1.zip",
-  "sha256": "67f5e881d4deac25f2eb32b446011dafb36dfb1e32e51b88e4b4f661d1165d90",
+  "version": "1.1.2",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.2/Plumb-1.1.2.zip",
+  "sha256": "05eef35472da8f06156af6ac40416e7b78c4ac331c72f108166023bcf870b986",
   "notes": {
     "en": "Menu bar dropdown slimmed down: removed the app name header, the \"window centering · tiling\" subtitle, and the two permission shortcuts. Permissions are still requested automatically on launch, and remain adjustable in Settings.",
     "zh": "精简菜单栏下拉菜单：移除应用名标题、「窗口居中·平铺」副标题及两个权限快捷项。权限仍会在启动时自动申请，并可在设置中调整。",
