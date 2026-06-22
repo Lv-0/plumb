@@ -198,10 +198,13 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runInstall() {
+        DiagnosticLog.debug("OTA-installer: runInstall START")
         do {
             try performInstall()
+            DiagnosticLog.debug("OTA-installer: install succeeded, relaunching")
             finishAndRelaunch()
         } catch {
+            DiagnosticLog.debug("OTA-installer: install FAILED: \(error)")
             fail(with: error)
         }
     }
@@ -225,19 +228,23 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         // 快路径：当前用户可无提权替换目标（admin-owned 或新装到可写父目录）。
         if UpdateInstallerCommand.canReplaceWithoutPrivileges(destination: UpdateInstallerCommand.destination) {
             do {
+                DiagnosticLog.debug("OTA-installer: fast path (no privileges) src=\(srcPath)")
                 try UpdateInstallerCommand.replaceWithoutPrivileges(
                     source: srcPath, destination: UpdateInstallerCommand.destination)
                 // 快路径成功：清标志，结束（无需提权，无密码框）。
                 defaults.set(false, forKey: UpdateConfig.installerModeKey)
                 defaults.removeObject(forKey: UpdateConfig.installerAppPathKey)
+                DiagnosticLog.debug("OTA-installer: fast path OK")
                 return
             } catch {
                 // 快路径失败（权限、磁盘满等）→ 回退提权路径兜底，不抛错中断。
                 // 保留 installerMode 标志，让提权路径执行后再清。
+                DiagnosticLog.debug("OTA-installer: fast path FAILED (\(error)), falling back to privileged")
             }
         }
 
         // 提权路径：AppleScript with administrator privileges。
+        DiagnosticLog.debug("OTA-installer: privileged path src=\(srcPath)")
         let shellScript = UpdateInstallerCommand.buildShellScript(source: srcPath)
         let status = try runPrivileged(shellScript: shellScript)
         guard status == 0 else { throw InstallError.replaceFailed(status: status) }
@@ -245,6 +252,7 @@ final class UpdateInstallerDelegate: NSObject, NSApplicationDelegate {
         // 替换成功后清零标志，避免下次启动误进入安装器。
         defaults.set(false, forKey: UpdateConfig.installerModeKey)
         defaults.removeObject(forKey: UpdateConfig.installerAppPathKey)
+        DiagnosticLog.debug("OTA-installer: privileged path OK")
     }
 
     /// 通过 AppleScript 提权执行 shell 命令。

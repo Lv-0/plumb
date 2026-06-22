@@ -147,30 +147,51 @@ final class AppTilingSettingsStore {
                 ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
             let dir = appSupport.appendingPathComponent("Plumb", isDirectory: true)
             // 确保目录存在（幂等）。
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            } catch {
+                DiagnosticLog.debug("SettingsStore: init createDirectory FAILED at \(dir.path): \(error)")
+            }
             self.settingsFileURL = dir.appendingPathComponent("settings.json")
         }
+        // 记录解析出的文件路径，便于排查「路径不一致导致更新后读不到」。
+        DiagnosticLog.debug("SettingsStore: init fileURL=\(self.settingsFileURL.path) exists=\(FileManager.default.fileExists(atPath: self.settingsFileURL.path))")
     }
 
     func load() -> AppTilingSettings {
         // 1) 优先读文件（签名无关、跨更新稳定）。
         if let fileSettings = readFromFile() {
+            DiagnosticLog.debug("SettingsStore: load ← FILE ok \(summary(fileSettings))")
             return fileSettings
         }
 
         // 2) 文件缺失/损坏 → 读 UserDefaults。
         let userDefaultsSettings = loadFromUserDefaults()
+        DiagnosticLog.debug("SettingsStore: load ← UserDefaults (file missing/corrupt) \(summary(userDefaultsSettings))")
 
         // 3) 一次性迁移：UserDefaults 有非默认数据时，写入文件，之后文件为准。
         //    （UserDefaults 全空 → 返回的就是 .default，不写文件，保持首次启动干净。）
         if userDefaultsSettings != .default {
+            DiagnosticLog.debug("SettingsStore: load migrating UserDefaults → file")
             writeToFile(userDefaultsSettings)
+        } else {
+            DiagnosticLog.debug("SettingsStore: load UserDefaults==.default, no migration")
         }
         return userDefaultsSettings
     }
 
+    /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
+    func summary(forLog s: AppTilingSettings) -> String {
+        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count)"
+    }
+
+    private func summary(_ s: AppTilingSettings) -> String {
+        summary(forLog: s)
+    }
+
     func save(_ settings: AppTilingSettings) {
         let normalized = settings.normalized()
+        DiagnosticLog.debug("SettingsStore: save called \(summary(normalized))")
         // 先写文件（主存储），再写 UserDefaults（镜像，向后兼容）。
         // 任一失败不阻塞另一个：文件写失败仍写 UserDefaults（降级），UserDefaults 写失败不影响文件。
         writeToFile(normalized)
@@ -180,17 +201,51 @@ final class AppTilingSettingsStore {
     // MARK: - File persistence（主存储，签名无关）
 
     private func readFromFile() -> AppTilingSettings? {
-        guard let data = try? Data(contentsOf: settingsFileURL) else { return nil }
-        return try? JSONDecoder().decode(AppTilingSettings.self, from: data)
+        let path = settingsFileURL.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            DiagnosticLog.debug("SettingsStore: readFromFile — file does not exist at \(path)")
+            return nil
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: settingsFileURL)
+        } catch {
+            DiagnosticLog.debug("SettingsStore: readFromFile — Data() FAILED at \(path): \(error)")
+            return nil
+        }
+        do {
+            let decoded = try JSONDecoder().decode(AppTilingSettings.self, from: data)
+            DiagnosticLog.debug("SettingsStore: readFromFile — decoded ok from \(path) \(summary(decoded))")
+            return decoded
+        } catch {
+            DiagnosticLog.debug("SettingsStore: readFromFile — JSON decode FAILED at \(path): \(error) rawSize=\(data.count)")
+            return nil
+        }
     }
 
     private func writeToFile(_ settings: AppTilingSettings) {
-        // 编码失败或目录不可写时静默降级（save 仍会写 UserDefaults）。
-        guard let data = try? JSONEncoder().encode(settings) else { return }
+        let path = settingsFileURL.path
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(settings)
+        } catch {
+            DiagnosticLog.debug("SettingsStore: writeToFile — JSON encode FAILED: \(error)")
+            return
+        }
         let dir = settingsFileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            DiagnosticLog.debug("SettingsStore: writeToFile — createDirectory FAILED at \(dir.path): \(error)")
+            return
+        }
         // 原子写：避免写入中途崩溃导致文件损坏。
-        try? data.write(to: settingsFileURL, options: [.atomic])
+        do {
+            try data.write(to: settingsFileURL, options: [.atomic])
+            DiagnosticLog.debug("SettingsStore: writeToFile — wrote \(data.count) bytes to \(path)")
+        } catch {
+            DiagnosticLog.debug("SettingsStore: writeToFile — data.write FAILED at \(path): \(error)")
+        }
     }
 
     // MARK: - UserDefaults（镜像，向后兼容）

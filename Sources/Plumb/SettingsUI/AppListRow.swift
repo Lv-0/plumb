@@ -77,6 +77,9 @@ struct AppListRow: View {
 
     private func toggleWithAnimation() {
         guard !isDisabled else { return }
+        // 记录用户操作步骤：哪个 App 被切换、开/关，便于复现「记录消失」时回溯操作链。
+        let before = isOn
+        DiagnosticLog.debug("SettingsUI: toggle app=\(app.bundleID) name='\(app.name)' \(before ? "ON→OFF" : "OFF→ON")")
         withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
             isOn.toggle()
         }

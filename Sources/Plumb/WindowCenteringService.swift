@@ -65,6 +65,24 @@ enum WindowSelectionPolicy {
     case focusedOrAnyNonFullscreen
 }
 
+/// 窗口尺寸写入的路径与结果。
+///
+/// `resizeWindowWithFallback` 先尝试 `kAXSizeAttribute`；Electron/Chromium 类应用
+/// （如 SiYuan、Apifox）拒绝单独写 kAXSize 但接受 AXFrame，此时回退到 AXFrame
+///（连同当前 origin 一起写回，origin 不变）。返回 `.failed` 表示两条路径都失败。
+/// 该枚举也用于诊断日志，区分窗口最终是通过哪条路径被放大的。
+enum ResizeOutcome {
+    /// kAXSizeAttribute 直接写入成功（标准窗口、大多数原生应用）。
+    case axSize
+    /// 回退到 AXFrame 写入成功（Electron/Chromium 类应用）。
+    case axFrame
+    /// 两条路径都失败（窗口不可调整尺寸或 AX 不可达）。
+    case failed
+
+    /// 尺寸是否被成功改变。
+    var didResize: Bool { self != .failed }
+}
+
 final class WindowCenteringService {
     private enum RawSpace {
         case globalBottomLeft
@@ -358,9 +376,10 @@ final class WindowCenteringService {
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
 
-        let sizeResult = setSizeAttribute(kAXSizeAttribute as CFString, value: targetFrame.size, on: windowElement)
-        if !sizeResult {
+        let sizeResult = resizeWindowWithFallback(windowElement, newSize: targetFrame.size)
+        if !sizeResult.didResize {
             // Tiling requires resize capability; skip windows that cannot be resized.
+            //（覆盖 Electron 应用：kAXSize 写不进但 AXFrame 可写——它们在此不会被判失败。）
             throw WindowCenteringError.unableToWriteWindowSize
         }
 
@@ -559,7 +578,7 @@ final class WindowCenteringService {
                     if self.activeTileTimer === timer { self.activeTileTimer = nil }
                     // 最终强制 pos+size 落到目标。
                     _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
-                    let sizeOK = self.setSizeAttribute(kAXSizeAttribute as CFString, value: endSize, on: windowElement)
+                    let sizeOutcome = self.resizeWindowWithFallback(windowElement, newSize: endSize)
                     if let pid {
                         _ = self.tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
                     }
@@ -581,7 +600,7 @@ final class WindowCenteringService {
                     }
                     let postSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
                     let postPos = self.pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
-                    DiagnosticLog.debug("tile-animator: phase B done pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) sizeOK=\(sizeOK) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
+                    DiagnosticLog.debug("tile-animator: phase B done pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
                     finishActive()
                     completion?()
                     return
@@ -590,7 +609,7 @@ final class WindowCenteringService {
                 let curW = windowSize.width + (endSize.width - windowSize.width) * p
                 let curH = windowSize.height + (endSize.height - windowSize.height) * p
                 let curSize = CGSize(width: curW, height: curH)
-                _ = self.setSizeAttribute(kAXSizeAttribute as CFString, value: curSize, on: windowElement)
+                _ = self.resizeWindowWithFallback(windowElement, newSize: curSize)
             }
             timer.resume()
         }
@@ -803,6 +822,28 @@ final class WindowCenteringService {
             return false
         }
         return AXUIElementSetAttributeValue(element, attribute, axValue) == .success
+    }
+
+    /// 设置窗口尺寸，先试 kAXSizeAttribute；写不进（Electron/Chromium 类应用，如 SiYuan、Apifox）
+    /// 时读取当前 origin 并用 AXFrame 写回 (currentOrigin, newSize)。
+    ///
+    /// 这是平铺阶段 B（以及同步 tileWindowElement）能放大 Electron 应用窗口的关键——这类应用
+    /// 拒绝单独写 kAXSize 但接受 AXFrame（与 Phase A 居中时的 AXFrame fallback 行为一致）。
+    /// 旧实现只试 kAXSize 且丢弃结果，导致 Electron 应用窗口只居中、不放大（用户反馈
+    /// "设置了自动平铺但不生效"的根因）。
+    /// 返回 ResizeOutcome：.axSize（kAXSize 直接成功）/ .axFrame（回退成功，Electron 走这条）/
+    /// .failed（两条都失败）。调用方据此判断是否放大成功，日志也可区分走的是哪条路径。
+    @discardableResult
+    private func resizeWindowWithFallback(_ windowElement: AXUIElement, newSize: CGSize) -> ResizeOutcome {
+        if setSizeAttribute(kAXSizeAttribute as CFString, value: newSize, on: windowElement) {
+            return .axSize
+        }
+        if let pos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement) {
+            if setRectAttribute("AXFrame" as CFString, value: CGRect(origin: pos, size: newSize), on: windowElement) {
+                return .axFrame
+            }
+        }
+        return .failed
     }
 
     private func boolAttribute(_ attribute: CFString, on element: AXUIElement) -> Bool? {

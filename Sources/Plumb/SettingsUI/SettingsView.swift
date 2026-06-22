@@ -73,6 +73,7 @@ struct SettingsView: View {
         .animation(.smooth, value: apps.count)
         .task {
             // 首次出现：加载一次应用列表，并注册 NSWorkspace 观察者。
+            DiagnosticLog.debug("SettingsUI: window OPENED (first task) loaded=\(store.summary(forLog: settings))")
             refreshApps()
             observeWorkspaceAppLaunches()
         }
@@ -80,16 +81,22 @@ struct SettingsView: View {
             // 设置窗口每次显示时重新扫描：AppDelegate 缓存了控制器单例，
             // 重新打开窗口不会再触发 `.task`，因此依赖本通知驱动刷新，
             // 让"打开设置 → 安装新应用 → 关闭再打开设置"能立即看到新应用。
+            DiagnosticLog.debug("SettingsUI: window SHOW (reopen)")
             refreshApps()
         }
         .onDisappear {
             // 窗口关闭时移除观察者，避免泄漏；下次 `.task` 会重新注册。
+            DiagnosticLog.debug("SettingsUI: window CLOSED")
             if let token = workspaceObserver {
                 NSWorkspace.shared.notificationCenter.removeObserver(token)
                 workspaceObserver = nil
             }
         }
+        .onChange(of: section) {
+            DiagnosticLog.debug("SettingsUI: tab switched → '\(section.title)'")
+        }
         .onChange(of: settings) { _, new in
+            DiagnosticLog.debug("SettingsUI: settings changed → save")
             store.save(new)
         }
     }

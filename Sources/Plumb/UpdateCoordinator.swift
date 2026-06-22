@@ -101,16 +101,21 @@ final class UpdateCoordinator {
 
     /// 下载 → 校验 → 解压 → 写标志 → 重开自身进入安装器。
     private func startUpdate(manifest: UpdateManifest) {
+        DiagnosticLog.debug("OTA: update confirmed by user, target=\(manifest.version) starting download")
         Task { [weak self] in
             guard let self else { return }
             do {
                 let zip = try await self.downloader.download(from: manifest.url)
+                DiagnosticLog.debug("OTA: downloaded \(manifest.version)")
                 try self.downloader.verify(file: zip, expectedHex: manifest.sha256)
+                DiagnosticLog.debug("OTA: sha256 verified")
                 let newApp = try self.downloader.unzip(zip)
+                DiagnosticLog.debug("OTA: unzipped → \(newApp.path), relaunching into installer")
                 await MainActor.run {
                     self.relaunchIntoInstaller(with: newApp)
                 }
             } catch {
+                DiagnosticLog.debug("OTA: update FAILED: \(error)")
                 await MainActor.run {
                     self.alert(title: L10n.otaDownloadFailed, message: L10n.otaDownloadFailedHint)
                 }
