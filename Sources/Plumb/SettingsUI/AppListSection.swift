@@ -21,6 +21,9 @@ struct AppListSection: View {
     let footnote: String
     @Binding var selected: Set<String>
     let apps: [InstalledAppInfo]
+    /// 可选：判定某行是否应被置灰禁用（不可勾选 + 行内提示）。默认 nil = 全部可勾选。
+    /// 用于「文档类 App」页：未加入平铺白名单的 App 置灰，因其选择器感知仅在平铺时才生效。
+    var isRowDisabled: ((InstalledAppInfo) -> Bool)? = nil
 
     @State private var query: String = ""
     /// 搜索框焦点：显式 @FocusState。用于：
@@ -100,7 +103,7 @@ struct AppListSection: View {
                             // 触发排序动画
                             withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
                         }
-                    ))
+                    ), isDisabled: isRowDisabled?(app) ?? false)
                 }
             }
             .padding(8)

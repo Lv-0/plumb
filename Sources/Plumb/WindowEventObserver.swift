@@ -290,16 +290,20 @@ final class WindowEventObserver {
             }
 
             // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
-            // 这些 App 启动时先弹出模板/文件列表窗口（kAXDocument 为空），再打开真正文档窗口
-            // （kAXDocument 为 file:// URL）。两者 subrole 都是 AXStandardWindow，仅凭 subrole
-            // 无法区分。对选择器窗口：只居中、不平铺，且【不】锁 processedPIDs —— 让后续重试
-            // 与 kAXWindowCreated 通知继续监听，直到真正文档窗口出现才平铺并锁定。
+            // 这些 App 启动时先弹出模板/文件列表窗口（标题=固定文案、kAXDocument 为空），
+            // 再打开真正文档窗口（标题=文档名、kAXDocument 可能为 file:// 或为空[未保存新文档]）。
+            // 两者 subrole 都是 AXStandardWindow，仅凭 subrole 无法区分。
+            //
+            // 仅当窗口被识别为「已知模板/文件选择器」时：只居中、不平铺，且【不】锁 processedPIDs
+            // —— 让后续重试与 kAXWindowCreated 通知继续监听，直到真正文档窗口出现才平铺并锁定。
+            // 其他所有窗口（含新建未保存文档、已保存文档、其他语言下的选择器）都走下方正常平铺逻辑。
+            //
             // 设计决策：选择器居中不受 shouldCenter 白名单约束——只要该 App 在平铺白名单 +
             // 选择器感知列表内，选择器一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
             if tilingSettings.isDocumentChooserApp(bundleIdentifier: frontmostApp.bundleIdentifier),
-               !windowHasDocument(windowElement)
+               isKnownTemplateChooserWindow(windowElement)
             {
-                DiagnosticLog.debug("handle[\(notification)]: document chooser window (no kAXDocument) — center only, keep PID unlocked pid=\(pid)")
+                DiagnosticLog.debug("handle[\(notification)]: known template chooser window — center only, keep PID unlocked pid=\(pid)")
                 do {
                     try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
                     markCentered(windowElement: windowElement, pid: pid)   // 防同窗口在重试间隔内被反复居中
@@ -625,18 +629,38 @@ final class WindowEventObserver {
         windowElement.axPoint(kAXPositionAttribute as CFString)
     }
 
-    /// 窗口是否已绑定文档（用于区分文档类 App 的"选择器/模板"窗口与真正文档窗口）。
+    /// 窗口是否为「模板/文件选择器」窗口（用于文档类 App 的选择器感知）。
     ///
-    /// 判据：`kAXDocumentAttribute` 非空（通常为 file:// URL）。
-    /// 实测确认（2026-06，macOS 26）：
-    ///   - Word/Excel 的模板选择器（"打开新的和最近使用的文件"）该属性为空；
-    ///   - 打开文档后该属性为 `file:///path/to/file`。
-    /// 两者 subrole 都是 AXStandardWindow，故必须用此属性而非 subrole 区分。
-    /// 若个别 App 不暴露该属性，可在此方法内补"选择器标题"兜底——当前 4 个预置 App 均可靠暴露。
-    private func windowHasDocument(_ window: AXUIElement) -> Bool {
+    /// 判据：窗口既无 `kAXDocumentAttribute`（未绑定文件），标题又匹配已知的「选择器标题」。
+    ///
+    /// 为什么不能只看 kAXDocument：
+    ///   实测（2026-06，macOS 26）发现「新建未保存文档」也没有 kAXDocument（因为还没存盘，
+    ///   没有文件路径）。三种窗口的属性如下：
+    ///     - 模板选择器（启动时）：AXTitle="打开新的和最近使用的文件"（中文）/ 类似本地化文案，kAXDocument 为空
+    ///     - 新建未保存文档：       AXTitle=文档名（如「文档1」「工作簿1」），    kAXDocument 为空
+    ///     - 打开已保存文件：       AXTitle=文件名，                              kAXDocument=file://...
+    ///   若只看 kAXDocument 是否为空，会把「新建未保存文档」误判成选择器 → 只居中不平铺（曾出现的 bug）。
+    ///   两者 subrole 都是 AXStandardWindow，无法用 subrole 区分。
+    ///
+    /// 标题判据的局限：选择器标题随系统语言变化，且该字符串不在 Office 的本地化资源文件里
+    /// （硬编码在 app 代码中），无法从 bundle 提取全部语言文案。当前只内置中文标题
+    /// （实测确认），其他语言下选择器会被当作普通窗口走平铺（可接受的回退——不影响新建文档被平铺）。
+    /// 若日后取得其他语言的选择器标题，加入 `knownChooserTitles` 即可。
+    private func isKnownTemplateChooserWindow(_ window: AXUIElement) -> Bool {
+        // 有 kAXDocument 的一定是真文档（已保存到磁盘），直接排除。
         let doc = window.axString(kAXDocumentAttribute as CFString) ?? ""
-        return !doc.isEmpty
+        if !doc.isEmpty { return false }
+
+        // 无文档时，靠标题识别顶层模板/文件选择器。
+        let title = window.axString(kAXTitleAttribute as CFString) ?? ""
+        return Self.knownChooserTitles.contains(title)
     }
+
+    /// 已知的「模板/文件选择器」窗口标题（按系统语言）。
+    /// 实测确认的中文标题；其他语言待补充（缺失时该语言下选择器会被平铺，不影响新建文档）。
+    private static let knownChooserTitles: Set<String> = [
+        "打开新的和最近使用的文件"   // zh: Word/Excel 启动时的模板/文件选择器
+    ]
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
         windowElement.axSize(kAXSizeAttribute as CFString)

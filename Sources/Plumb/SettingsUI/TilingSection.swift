@@ -214,14 +214,15 @@ private struct SubTabPill: View {
 // 模块角色：平铺标签页右页「文档类 App」内容。
 //
 // 职责：
-//   - 仅渲染【已在平铺白名单内】的 App（tiledBundleIDs ∩ installed apps），
-//     避免给未平铺的 App 配置无意义的"选择器感知"选项。
+//   - 渲染【全部已安装 App】（与左页白名单一致），让 Excel/Word/Numbers/Pages 等
+//     可被搜索与勾选。
+//   - 对未加入平铺白名单的 App：行置灰、开关不可点、显示「先加入平铺列表」提示。
+//     原因：选择器感知仅在 App 被平铺时才生效（handle() 的 shouldTile 前置条件），
+//     故未平铺时开启它无意义；但仍显示出来，便于用户发现并先去左页加入白名单。
 //   - 绑定 settings.documentChooserBundleIDs：勾选的 App 启用"选择器只居中、
 //     文档才平铺"的特殊处理（详见 WindowEventObserver.handle 的选择器分支）。
-//   - 列表为空时（无 App 在平铺白名单）显示脚注 + 引导提示。
-//     注意：页面标题由上方子标签承载，空态不再重复标题。
 //
-// 复用 AppListSection：传入过滤后的 apps 列表，与左页（白名单）的视觉/交互一致。
+// 复用 AppListSection：传入全部 apps + isRowDisabled 谓词，与左页视觉一致。
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DocumentChooserSection: View {
@@ -229,14 +230,9 @@ struct DocumentChooserSection: View {
     let tiledBundleIDs: Set<String>
     let apps: [InstalledAppInfo]
 
-    /// 仅显示已在平铺白名单内的 App（bundle id 已归一化为小写存储）。
-    private var tiledApps: [InstalledAppInfo] {
-        apps.filter { tiledBundleIDs.contains($0.bundleID) }
-    }
-
     var body: some View {
-        if tiledApps.isEmpty {
-            // 无可配置的 App：显示脚注 + 引导提示（标题由子标签承载，不在此重复）。
+        if apps.isEmpty {
+            // 极少见：无任何已安装 App 被扫描到。显示脚注 + 引导提示。
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.documentChooserFootnote)
                     .font(.footnote)
@@ -252,7 +248,9 @@ struct DocumentChooserSection: View {
             AppListSection(
                 footnote: L10n.documentChooserFootnote,
                 selected: $selected,
-                apps: tiledApps
+                apps: apps,
+                // 未加入平铺白名单的 App 置灰（bundle id 已归一化为小写存储）。
+                isRowDisabled: { !tiledBundleIDs.contains($0.bundleID) }
             )
         }
     }

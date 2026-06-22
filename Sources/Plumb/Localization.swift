@@ -76,6 +76,8 @@ enum L10n {
         // 平铺子标签（双页切换）
         case tilingSubtabAllowlist
         case tilingSubtabDocument
+        // 文档类 App 行内置灰提示（未加入平铺白名单时）
+        case documentChooserDisabledHint
         // 权限段
         case permissionsIntro
         case accessibility
@@ -149,6 +151,7 @@ enum L10n {
             .documentChooserEmptyHint: "Add an app to the tiling list above to configure it here.",
             .tilingSubtabAllowlist: "Tiling Apps",
             .tilingSubtabDocument: "Document Apps",
+            .documentChooserDisabledHint: "Add to tiling list first",
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
@@ -214,6 +217,7 @@ enum L10n {
             .documentChooserEmptyHint: "Añade una app a la lista de mosaico de arriba para configurarla aquí.",
             .tilingSubtabAllowlist: "Apps en mosaico",
             .tilingSubtabDocument: "Apps de documentos",
+            .documentChooserDisabledHint: "Añade primero a la lista de mosaico",
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
@@ -279,6 +283,7 @@ enum L10n {
             .documentChooserEmptyHint: "Ajoutez une app à la liste de mosaïque ci-dessus pour la configurer ici.",
             .tilingSubtabAllowlist: "Apps en mosaïque",
             .tilingSubtabDocument: "Apps de documents",
+            .documentChooserDisabledHint: "Ajoutez d'abord à la liste de mosaïque",
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
@@ -344,6 +349,7 @@ enum L10n {
             .documentChooserEmptyHint: "先将 App 加入上方平铺列表，才能在此配置。",
             .tilingSubtabAllowlist: "平铺应用列表",
             .tilingSubtabDocument: "文档类 App",
+            .documentChooserDisabledHint: "先加入平铺列表",
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
@@ -409,6 +415,7 @@ enum L10n {
             .documentChooserEmptyHint: "上のタイリングリストにアプリを追加すると、ここで設定できます。",
             .tilingSubtabAllowlist: "タイル対象アプリ",
             .tilingSubtabDocument: "書類アプリ",
+            .documentChooserDisabledHint: "まずタイリングリストに追加",
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
@@ -477,6 +484,7 @@ enum L10n {
     static var documentChooserEmptyHint: String { tr(.documentChooserEmptyHint) }
     static var tilingSubtabAllowlist: String { tr(.tilingSubtabAllowlist) }
     static var tilingSubtabDocument: String { tr(.tilingSubtabDocument) }
+    static var documentChooserDisabledHint: String { tr(.documentChooserDisabledHint) }
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }

@@ -18,9 +18,14 @@ import SwiftUI
 /// 交互：点击整行（图标/名称区域）切换开关；药丸本身也可独立点击。
 /// 关键：行用 Button 而非 onTapGesture，PillToggle 也用 Button，
 /// 两者各自独立的命中区域不会互相吞点击。
+///
+/// `isDisabled`：置灰且不可切换，名称后显示提示文案。用于「文档类 App」页中
+/// 未加入平铺白名单的 App——选择器感知仅在 App 被平铺时才生效，故未平铺时
+/// 不允许开启，并提示用户先加入平铺列表。默认 false（向后兼容现有调用）。
 struct AppListRow: View {
     let app: InstalledAppInfo
     @Binding var isOn: Bool
+    var isDisabled: Bool = false
     @State private var iconScale: CGFloat = 1.0
     @State private var isHovered: Bool = false
 
@@ -34,23 +39,32 @@ struct AppListRow: View {
                     AppIconView(path: app.path)
                         .scaleEffect(iconScale)
                     Text(app.name)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isDisabled ? .tertiary : .primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    // 置灰行显示依赖提示（如「先加入平铺列表」）。
+                    if isDisabled {
+                        Text(L10n.documentChooserDisabledHint)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 8)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(isDisabled)
 
             // 药丸开关：独立 Button，命中区域仅限药丸本身。
-            PillToggle(isOn: $isOn)
+            PillToggle(isOn: $isOn, isDisabled: isDisabled)
         }
+        .opacity(isDisabled ? 0.55 : 1.0)
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isHovered ? Color.accentColor.opacity(0.08) : Color.clear)
+                .fill(isHovered && !isDisabled ? Color.accentColor.opacity(0.08) : Color.clear)
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
@@ -62,6 +76,7 @@ struct AppListRow: View {
     }
 
     private func toggleWithAnimation() {
+        guard !isDisabled else { return }
         withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
             isOn.toggle()
         }
@@ -71,8 +86,11 @@ struct AppListRow: View {
 /// 药丸形（胶囊）滑动开关：自绘轨道 + 滑块，避免系统 Toggle 在 macOS 上的复选框外观。
 /// 开启时轨道填充强调色，滑块滑到右侧；关闭时轨道为中性玻璃色。
 /// 用 Button 承载点击，命中区域稳定，不被 glassEffect 吞掉。
+///
+/// `isDisabled`：置灰且不可点击（默认 false）。用于依赖未满足时的行（如未平铺的文档类 App）。
 struct PillToggle: View {
     @Binding var isOn: Bool
+    var isDisabled: Bool = false
 
     private let trackWidth: CGFloat = 40
     private let trackHeight: CGFloat = 24
@@ -81,6 +99,7 @@ struct PillToggle: View {
 
     var body: some View {
         Button {
+            guard !isDisabled else { return }
             withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
                 isOn.toggle()
             }
@@ -99,6 +118,7 @@ struct PillToggle: View {
             .contentShape(Capsule())   // 明确命中区域=整个胶囊
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .background(
             // 极淡半透明背景层，allowsHitTesting(false) 彻底排除参与命中测试，
             // 保证 Button 始终能接收点击（修复"开关点击不灵"问题）。
