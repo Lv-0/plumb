@@ -10,6 +10,8 @@ import SwiftUI
 //     范围 minimumEdgeMargin...maximumEdgeMargin），共用一个 Liquid Glass 容器。
 //   - 总开关未开启时滑块置灰、提示文案切换。
 //   - 复用 AppListSection 渲染平铺白名单（selected = settings.tiledBundleIDs）。
+//   - 文档类 App 选择器处理段（DocumentChooserSection）：仅显示已在平铺白名单内的 App，
+//     让用户选择哪些 App 启用"选择器只居中、文档才平铺"的特殊处理。
 //
 // 关键历史：此前 settings.isEnabled 从未绑定到 UI（默认 false），导致 shouldTile()
 // 永远返回 false——这是"平铺功能完全无法使用"的根因。
@@ -78,11 +80,70 @@ struct TilingSection: View {
                     selected: $settings.tiledBundleIDs,
                     apps: apps
                 )
+
+                // 文档类 App 选择器处理段：仅显示已在平铺白名单内的 App。
+                DocumentChooserSection(
+                    selected: $settings.documentChooserBundleIDs,
+                    tiledBundleIDs: settings.tiledBundleIDs,
+                    apps: apps
+                )
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - DocumentChooserSection
+//
+// 模块角色：平铺设置中"文档类 App 选择器处理"段。
+//
+// 职责：
+//   - 仅渲染【已在平铺白名单内】的 App（tiledBundleIDs ∩ installed apps），
+//     避免给未平铺的 App 配置无意义的"选择器感知"选项。
+//   - 绑定 settings.documentChooserBundleIDs：勾选的 App 启用"选择器只居中、
+//     文档才平铺"的特殊处理（详见 WindowEventObserver.handle 的选择器分支）。
+//   - 列表为空时（无 App 在平铺白名单）显示提示文案，引导用户先加入平铺列表。
+//
+// 复用 AppListSection：传入过滤后的 apps 列表，与上方平铺段的视觉/交互一致。
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct DocumentChooserSection: View {
+    @Binding var selected: Set<String>
+    let tiledBundleIDs: Set<String>
+    let apps: [InstalledAppInfo]
+
+    /// 仅显示已在平铺白名单内的 App（bundle id 已归一化为小写存储）。
+    private var tiledApps: [InstalledAppInfo] {
+        apps.filter { tiledBundleIDs.contains($0.bundleID) }
+    }
+
+    var body: some View {
+        if tiledApps.isEmpty {
+            // 无可配置的 App：显示引导提示，不渲染列表（避免空搜索框的困惑）。
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.documentChooserTitle)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(L10n.documentChooserFootnote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text(L10n.documentChooserEmptyHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            AppListSection(
+                footnote: L10n.documentChooserFootnote,
+                selected: $selected,
+                apps: tiledApps
+            )
+        }
     }
 }

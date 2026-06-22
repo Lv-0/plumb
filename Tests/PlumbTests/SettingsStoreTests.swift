@@ -39,7 +39,8 @@ func settingsStoreRoundTripAndNormalization() async throws {
         tiledBundleIDs: [" COM.Example.App ", "com.example.app", "com.example.other"],
         hideSystemAppsInPicker: false,
         centerEnabled: true,
-        centeredBundleIDs: [" COM.Center.App ", "com.center.app"]
+        centeredBundleIDs: [" COM.Center.App ", "com.center.app"],
+        documentChooserBundleIDs: [" COM.Microsoft.Word ", "com.microsoft.excel"]
     )
 
     store.save(input)
@@ -51,6 +52,7 @@ func settingsStoreRoundTripAndNormalization() async throws {
     #expect(loaded.hideSystemAppsInPicker == false)
     #expect(loaded.centerEnabled == true)
     #expect(loaded.centeredBundleIDs == ["com.center.app"])
+    #expect(loaded.documentChooserBundleIDs == ["com.microsoft.word", "com.microsoft.excel"])
 
     defaults.removePersistentDomain(forName: suiteName)
 }
@@ -72,7 +74,8 @@ func settingsStoreCenteringRoundTrip() async throws {
         tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: false,
-        centeredBundleIDs: ["com.apple.Safari", "  COM.GOOGLE.CHROME  "]
+        centeredBundleIDs: ["com.apple.Safari", "  COM.GOOGLE.CHROME  "],
+        documentChooserBundleIDs: AppTilingSettings.defaultDocumentChooserBundleIDs
     )
 
     store.save(input)
@@ -100,7 +103,8 @@ func shouldCenterSemantics() async throws {
         isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: false,
-        centeredBundleIDs: ["com.apple.safari"]
+        centeredBundleIDs: ["com.apple.safari"],
+        documentChooserBundleIDs: []
     )
     #expect(disabled.shouldCenter(bundleIdentifier: "com.apple.safari") == false)
     #expect(disabled.shouldCenter(bundleIdentifier: nil) == false)
@@ -110,7 +114,8 @@ func shouldCenterSemantics() async throws {
         isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
-        centeredBundleIDs: []
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: []
     )
     #expect(empty.shouldCenter(bundleIdentifier: "anything.at.all") == true)
     #expect(empty.shouldCenter(bundleIdentifier: nil) == true)
@@ -120,7 +125,8 @@ func shouldCenterSemantics() async throws {
         isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
-        centeredBundleIDs: ["com.apple.safari", "com.google.chrome"]
+        centeredBundleIDs: ["com.apple.safari", "com.google.chrome"],
+        documentChooserBundleIDs: []
     )
     #expect(allowlist.shouldCenter(bundleIdentifier: "com.apple.Safari") == true)
     #expect(allowlist.shouldCenter(bundleIdentifier: "  COM.GOOGLE.CHROME  ") == true)

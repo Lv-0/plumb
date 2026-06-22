@@ -13,7 +13,7 @@ Auto-centers and tiles macOS apps — a blessing for neat freaks!
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.1.1-success.svg?style=flat-square)](#download--install)
+[![Release](https://img.shields.io/badge/release-v1.1.2-success.svg?style=flat-square)](#download--install)
 
 **English** · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -72,6 +72,7 @@ Open `Tiling Settings…` from the menu bar to enable/disable the feature and ma
 - For allowlisted apps, **tiling has priority** over auto-centering
 - Trigger scope is once per process startup (PID); no repeated tiling within the same process
 - If a window cannot be resized, it is skipped
+- Document apps (Pages, Numbers, Word, Excel) auto-skip the template/file picker — only the opened document is tiled
 
 > Semantics are inspired by Amethyst configuration concepts:
 > - `window-margin-size`: equivalent to tiling margin in this project

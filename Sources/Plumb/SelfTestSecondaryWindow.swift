@@ -138,7 +138,8 @@ final class SelfTestSecondaryWindowDelegate: NSObject, NSApplicationDelegate {
             tiledBundleIDs: ["com.apple.textedit"],
             hideSystemAppsInPicker: true,
             centerEnabled: true,
-            centeredBundleIDs: []
+            centeredBundleIDs: [],
+            documentChooserBundleIDs: []
         )
         store.save(settings)
         self.store = store

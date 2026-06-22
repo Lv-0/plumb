@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#系统要求)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.1.1-success.svg?style=flat-square)](#下载安装)
+[![Release](https://img.shields.io/badge/release-v1.1.2-success.svg?style=flat-square)](#下载安装)
 
 [English](./README.md) · **简体中文** · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -70,6 +70,7 @@
 - 白名单 App 触发时**优先平铺**，不再自动居中
 - 触发粒度为「每个进程首次窗口一次」；同一进程内后续不重复触发
 - 若窗口不支持修改尺寸，则跳过该窗口
+- 文档类 App（Pages、Numbers、Word、Excel）会自动跳过模板/文件选择器，仅对打开的文档窗口平铺
 
 > 语义参考 Amethyst 配置思路：
 > - `window-margin-size`：对应本项目平铺边距

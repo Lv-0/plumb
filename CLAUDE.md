@@ -69,3 +69,4 @@ macOS window position reporting is inconsistent across apps. A single AX positio
 - Only `kAXStandardWindowSubrole` windows are processed — dialogs, panels, and floating windows are skipped.
 - Full-screen detection uses both `AXFullScreen` attribute and geometric comparison (tolerance: 6px).
 - The centered-window cache caps at 200 entries to prevent unbounded growth.
+- Document apps (Pages/Numbers/Word/Excel, configurable via `documentChooserBundleIDs`) show a template/file picker before the real document. Both windows are `AXStandardWindow`, so they are distinguished by `kAXDocumentAttribute` (empty on picker, `file://` URL on document). The picker is centered-only and **does not** lock `processedPIDs`, so the subsequent document window still gets tiled.

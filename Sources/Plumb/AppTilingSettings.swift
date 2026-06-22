@@ -7,10 +7,14 @@ import Foundation
 // 模块角色：平铺与居中的设置模型 + 持久化。
 //
 // 数据模型 AppTilingSettings：
-//   - isEnabled / edgeMargin / tiledBundleIDs  ：平铺总开关、四边距、平铺白名单。
-//   - centerEnabled / centeredBundleIDs        ：居中总开关与居中白名单
+//   - isEnabled / edgeMargin / tiledBundleIDs     ：平铺总开关、四边距、平铺白名单。
+//   - centerEnabled / centeredBundleIDs           ：居中总开关与居中白名单
 //     （空列表 => 居中全部；非空 => 仅列表内；关闭 => 永不自动居中）。
-//   - shouldTile / shouldCenter                 ：统一的判定语义，bundle id 做归一化（trim+小写）。
+//   - documentChooserBundleIDs                    ：启用"文档选择器感知"的 App。
+//     这些文档类 App（Pages/Word/Excel/Numbers 等）启动时常先弹出模板/文件列表窗口，
+//     再打开真正的文档窗口。对其：选择器窗口只居中不平铺、且不锁 processedPIDs，
+//     等真正的文档窗口（kAXDocument 非空）出现后才平铺。
+//   - shouldTile / shouldCenter / isDocumentChooserApp：统一的判定语义，bundle id 做归一化（trim+小写）。
 //
 // 存储 AppTilingSettingsStore：
 //   - 持久化到 UserDefaults，键前缀 tiling.* / centering.*。
@@ -24,6 +28,21 @@ struct AppTilingSettings: Equatable {
     static let minimumEdgeMargin: CGFloat = 0
     static let maximumEdgeMargin: CGFloat = 400
 
+    /// 默认启用"文档选择器感知"的 App 集合。
+    ///
+    /// 这些 App 启动时通常先弹出模板/文件列表窗口（如 Word 的"打开新的和最近使用的文件"），
+    /// 再打开真正的文档窗口。实测确认（2026-06，macOS 26）：
+    ///   - 选择器窗口与文档窗口的 subrole 都是 AXStandardWindow（仅凭 subrole 无法区分）；
+    ///   - 选择器窗口的 kAXDocumentAttribute 为空，文档窗口为 file:// URL；
+    /// 故用 kAXDocument 是否非空区分两者，对选择器只居中、不平铺、不锁 PID，
+    /// 等文档窗口出现后再平铺。
+    static let defaultDocumentChooserBundleIDs: Set<String> = [
+        "com.apple.iwork.pages",      // Pages
+        "com.apple.iwork.numbers",    // Numbers
+        "com.microsoft.word",         // Microsoft Word
+        "com.microsoft.excel"         // Microsoft Excel
+    ]
+
     var isEnabled: Bool
     var edgeMargin: CGFloat
     var tiledBundleIDs: Set<String>
@@ -34,18 +53,25 @@ struct AppTilingSettings: Equatable {
     /// 仅对列表内 app 自动居中；为空时居中全部 app（向后兼容）。
     var centeredBundleIDs: Set<String>
 
+    /// 启用"文档选择器感知"的 App（默认预置 Pages/Numbers/Word/Excel）。
+    /// 语义：仅影响选择器窗口的处理方式，**不影响**该 App 是否会被平铺——后者仍由
+    /// `tiledBundleIDs` 决定。即一个 App 必须同时在 `tiledBundleIDs` 内才会被平铺。
+    var documentChooserBundleIDs: Set<String>
+
     static let `default` = AppTilingSettings(
         isEnabled: false,
         edgeMargin: defaultEdgeMargin,
         tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
-        centeredBundleIDs: []
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: defaultDocumentChooserBundleIDs
     )
 
     func normalized() -> AppTilingSettings {
         let normalizedTileIDs = Set(tiledBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedCenterIDs = Set(centeredBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
+        let normalizedChooserIDs = Set(documentChooserBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedMargin = clamp(edgeMargin, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin)
         return AppTilingSettings(
             isEnabled: isEnabled,
@@ -53,7 +79,8 @@ struct AppTilingSettings: Equatable {
             tiledBundleIDs: normalizedTileIDs,
             hideSystemAppsInPicker: hideSystemAppsInPicker,
             centerEnabled: centerEnabled,
-            centeredBundleIDs: normalizedCenterIDs
+            centeredBundleIDs: normalizedCenterIDs,
+            documentChooserBundleIDs: normalizedChooserIDs
         )
     }
 
@@ -70,6 +97,13 @@ struct AppTilingSettings: Equatable {
         if centeredBundleIDs.isEmpty { return true }
         guard let bundleIdentifier else { return false }
         return centeredBundleIDs.contains(Self.normalizeBundleID(bundleIdentifier))
+    }
+
+    /// 是否启用"文档选择器感知"（仅对这些 App 的选择器窗口做特殊处理）。
+    /// bundle id 归一化后匹配。
+    func isDocumentChooserApp(bundleIdentifier: String?) -> Bool {
+        guard !documentChooserBundleIDs.isEmpty, let bundleIdentifier else { return false }
+        return documentChooserBundleIDs.contains(Self.normalizeBundleID(bundleIdentifier))
     }
 
     static func normalizeBundleID(_ value: String) -> String {
@@ -89,6 +123,7 @@ final class AppTilingSettingsStore {
         static let hideSystemApps = "tiling.hideSystemAppsInPicker"
         static let centerEnabled = "centering.enabled"
         static let centeredBundleIDs = "centering.bundleIDs"
+        static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
     }
 
     private let defaults: UserDefaults
@@ -104,9 +139,10 @@ final class AppTilingSettingsStore {
         let hasHideSystemApps = defaults.object(forKey: Keys.hideSystemApps) != nil
         let hasCenterEnabled = defaults.object(forKey: Keys.centerEnabled) != nil
         let hasCenteredBundleIDs = defaults.object(forKey: Keys.centeredBundleIDs) != nil
+        let hasDocumentChooserBundleIDs = defaults.object(forKey: Keys.documentChooserBundleIDs) != nil
 
         if !hasEnabled, !hasMargin, !hasBundleIDs, !hasHideSystemApps,
-           !hasCenterEnabled, !hasCenteredBundleIDs {
+           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs {
             return .default
         }
 
@@ -116,6 +152,10 @@ final class AppTilingSettingsStore {
         let hideSystemApps = hasHideSystemApps ? defaults.bool(forKey: Keys.hideSystemApps) : AppTilingSettings.default.hideSystemAppsInPicker
         let centerEnabled = hasCenterEnabled ? defaults.bool(forKey: Keys.centerEnabled) : AppTilingSettings.default.centerEnabled
         let centeredBundleIDsArray = defaults.array(forKey: Keys.centeredBundleIDs) as? [String] ?? []
+        // 向后兼容：旧版本无此键时回退到默认预置的 4 个文档类 App。
+        let documentChooserBundleIDsArray = hasDocumentChooserBundleIDs
+            ? (defaults.array(forKey: Keys.documentChooserBundleIDs) as? [String] ?? [])
+            : Array(AppTilingSettings.default.documentChooserBundleIDs)
 
         return AppTilingSettings(
             isEnabled: isEnabled,
@@ -123,7 +163,8 @@ final class AppTilingSettingsStore {
             tiledBundleIDs: Set(bundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             hideSystemAppsInPicker: hideSystemApps,
             centerEnabled: centerEnabled,
-            centeredBundleIDs: Set(centeredBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty })
+            centeredBundleIDs: Set(centeredBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
+            documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty })
         ).normalized()
     }
 
@@ -136,5 +177,6 @@ final class AppTilingSettingsStore {
         defaults.set(normalized.hideSystemAppsInPicker, forKey: Keys.hideSystemApps)
         defaults.set(normalized.centerEnabled, forKey: Keys.centerEnabled)
         defaults.set(Array(normalized.centeredBundleIDs).sorted(), forKey: Keys.centeredBundleIDs)
+        defaults.set(Array(normalized.documentChooserBundleIDs).sorted(), forKey: Keys.documentChooserBundleIDs)
     }
 }

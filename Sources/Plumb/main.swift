@@ -30,6 +30,7 @@ let selfTestSecondary = UserDefaults.standard.bool(forKey: "selftestSecondary")
 let selfTestMultiPhysical = UserDefaults.standard.bool(forKey: "selftestMultiPhysical")
 let selfTestCenterMulti = UserDefaults.standard.bool(forKey: "selftestCenterMulti")
 let selfTestSwitchAbort = UserDefaults.standard.bool(forKey: "selftestSwitchAbort")
+let selfTestDocumentChooser = UserDefaults.standard.bool(forKey: "selftestDocumentChooser")
 
 let app = NSApplication.shared
 
@@ -102,6 +103,17 @@ if selfTestSwitchAbort {
     UserDefaults.standard.set(false, forKey: "selftestSwitchAbort")
     app.setActivationPolicy(.accessory)
     app.delegate = SelfTestSwitchAbortDelegate()
+    app.run()
+    exit(0)
+}
+
+if selfTestDocumentChooser {
+    // Verifies document-chooser awareness (文档类 App 选择器感知): a gallery/template picker
+    // window (kAXDocument empty) is centered but NOT tiled, while a real document gets tiled.
+    // Requires the user to first open Word/Excel/Pages/Numbers to its gallery state.
+    UserDefaults.standard.set(false, forKey: "selftestDocumentChooser")
+    app.setActivationPolicy(.accessory)
+    app.delegate = SelfTestDocumentChooserDelegate()
     app.run()
     exit(0)
 }

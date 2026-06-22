@@ -13,7 +13,7 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#動作環境)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.1.1-success.svg?style=flat-square)](#ダウンロードとインストール)
+[![Release](https://img.shields.io/badge/release-v1.1.2-success.svg?style=flat-square)](#ダウンロードとインストール)
 
 [English](./README.md) · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · **日本語**
 
@@ -70,6 +70,7 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 - ホワイトリストのアプリでは **タイルが優先**、自動中央寄せは行わない
 - トリガ範囲はプロセス起動ごとに1回（PID）。同一プロセス内での繰り返しタイルなし
 - ウィンドウがリサイズ不可の場合はスキップ
+- 書類アプリ（Pages、Numbers、Word、Excel）はテンプレートやファイル選択画面を自動的にスキップし、開いた書類のみタイル化
 
 > 挙動は Amethyst の設定概念を参考にしています：
 > - `window-margin-size`：本プロジェクトのタイルマージンに相当

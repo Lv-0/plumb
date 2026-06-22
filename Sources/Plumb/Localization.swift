@@ -69,6 +69,10 @@ enum L10n {
         case marginHint
         case tilingFootnoteOn
         case tilingFootnoteOff
+        // 文档选择器段
+        case documentChooserTitle
+        case documentChooserFootnote
+        case documentChooserEmptyHint
         // 权限段
         case permissionsIntro
         case accessibility
@@ -137,6 +141,9 @@ enum L10n {
             .marginHint: "Spacing between window and screen edges when tiling.",
             .tilingFootnoteOn: "Check apps to auto-tile; unchecked apps stay centered.",
             .tilingFootnoteOff: "Enable auto-tiling above first.",
+            .documentChooserTitle: "Document Apps",
+            .documentChooserFootnote: "These apps show a template/file picker first — it's centered but not tiled; only the opened document gets tiled.",
+            .documentChooserEmptyHint: "Add an app to the tiling list above to configure it here.",
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
@@ -197,6 +204,9 @@ enum L10n {
             .marginHint: "Espacio entre la ventana y los bordes de la pantalla al colocar en mosaico.",
             .tilingFootnoteOn: "Marca las apps que quieres en mosaico; las no marcadas permanecen centradas.",
             .tilingFootnoteOff: "Activa primero el mosaico automático arriba.",
+            .documentChooserTitle: "Apps de documentos",
+            .documentChooserFootnote: "Estas apps muestran primero un selector de plantillas/archivos: se centra pero no se coloca en mosaico; solo el documento abierto se coloca en mosaico.",
+            .documentChooserEmptyHint: "Añade una app a la lista de mosaico de arriba para configurarla aquí.",
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
@@ -257,6 +267,9 @@ enum L10n {
             .marginHint: "Espace entre la fenêtre et les bords de l'écran lors de la mosaïque.",
             .tilingFootnoteOn: "Cochez les apps à placer en mosaïque ; les apps non cochées restent centrées.",
             .tilingFootnoteOff: "Activez d'abord la mosaïque automatique ci-dessus.",
+            .documentChooserTitle: "Apps de documents",
+            .documentChooserFootnote: "Ces apps affichent d'abord un sélecteur de modèles/fichiers : il est centré mais pas en mosaïque ; seul le document ouvert est placé en mosaïque.",
+            .documentChooserEmptyHint: "Ajoutez une app à la liste de mosaïque ci-dessus pour la configurer ici.",
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
@@ -317,6 +330,9 @@ enum L10n {
             .marginHint: "平铺时窗口与屏幕边缘之间的间距。",
             .tilingFootnoteOn: "勾选希望自动平铺的应用；未勾选的应用保持居中。",
             .tilingFootnoteOff: "请先在上方开启自动平铺。",
+            .documentChooserTitle: "文档类 App",
+            .documentChooserFootnote: "这些 App 打开模板或文件列表时仅居中、不平铺；只有打开的文档窗口才会被平铺。",
+            .documentChooserEmptyHint: "先将 App 加入上方平铺列表，才能在此配置。",
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
@@ -377,6 +393,9 @@ enum L10n {
             .marginHint: "タイル配置時のウィンドウと画面端の間隔。",
             .tilingFootnoteOn: "自動タイルするアプリにチェックを入れてください。未チェックのアプリは中央寄せのままです。",
             .tilingFootnoteOff: "まず上で自動タイルを有効にしてください。",
+            .documentChooserTitle: "書類アプリ",
+            .documentChooserFootnote: "これらのアプリはテンプレートやファイル選択画面を先に表示します。選択画面は中央寄せのみでタイル化せず、開いた書類のみタイル化します。",
+            .documentChooserEmptyHint: "上のタイリングリストにアプリを追加すると、ここで設定できます。",
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
@@ -440,6 +459,9 @@ enum L10n {
     static var marginHint: String { tr(.marginHint) }
     static var tilingFootnoteOn: String { tr(.tilingFootnoteOn) }
     static var tilingFootnoteOff: String { tr(.tilingFootnoteOff) }
+    static var documentChooserTitle: String { tr(.documentChooserTitle) }
+    static var documentChooserFootnote: String { tr(.documentChooserFootnote) }
+    static var documentChooserEmptyHint: String { tr(.documentChooserEmptyHint) }
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }

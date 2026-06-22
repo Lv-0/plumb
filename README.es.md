@@ -13,7 +13,7 @@ Centra y coloca en mosaico las apps de macOS automáticamente — ¡una bendici�
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requisitos)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.1.1-success.svg?style=flat-square)](#descarga-e-instalación)
+[![Release](https://img.shields.io/badge/release-v1.1.2-success.svg?style=flat-square)](#descarga-e-instalación)
 
 [English](./README.md) · [简体中文](./README.zh.md) · **Español** · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -70,6 +70,7 @@ Abre `Ajustes de mosaico…` desde la barra de menús para activar/desactivar la
 - Para las apps permitidas, **el mosaico tiene prioridad** sobre el centrado automático
 - El ámbito de disparo es una vez por inicio de proceso (PID); sin mosaico repetido dentro del mismo proceso
 - Si una ventana no se puede redimensionar, se omite
+- Las apps de documentos (Pages, Numbers, Word, Excel) omiten automáticamente el selector de plantillas/archivos; solo se coloca en mosaico el documento abierto
 
 > La semántica está inspirada en los conceptos de configuración de Amethyst:
 > - `window-margin-size`: equivalente al margen de mosaico de este proyecto

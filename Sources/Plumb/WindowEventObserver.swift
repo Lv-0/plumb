@@ -288,6 +288,28 @@ final class WindowEventObserver {
                 DiagnosticLog.debug("handle[\(notification)]: already tiled pid=\(pid)")
                 return false
             }
+
+            // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
+            // 这些 App 启动时先弹出模板/文件列表窗口（kAXDocument 为空），再打开真正文档窗口
+            // （kAXDocument 为 file:// URL）。两者 subrole 都是 AXStandardWindow，仅凭 subrole
+            // 无法区分。对选择器窗口：只居中、不平铺，且【不】锁 processedPIDs —— 让后续重试
+            // 与 kAXWindowCreated 通知继续监听，直到真正文档窗口出现才平铺并锁定。
+            // 设计决策：选择器居中不受 shouldCenter 白名单约束——只要该 App 在平铺白名单 +
+            // 选择器感知列表内，选择器一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
+            if tilingSettings.isDocumentChooserApp(bundleIdentifier: frontmostApp.bundleIdentifier),
+               !windowHasDocument(windowElement)
+            {
+                DiagnosticLog.debug("handle[\(notification)]: document chooser window (no kAXDocument) — center only, keep PID unlocked pid=\(pid)")
+                do {
+                    try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                    markCentered(windowElement: windowElement, pid: pid)   // 防同窗口在重试间隔内被反复居中
+                    // 注意：不 insert processedPIDs —— 否则真正文档窗口到达时会被第 270 行跳过。
+                    return true
+                } catch {
+                    DiagnosticLog.debug("handle[\(notification)]: chooser center failed pid=\(pid) error=\(error)")
+                    return false
+                }
+            }
             if let tiledWindow = tilePendingWindows(
                 pid: pid,
                 appElement: appElement,
@@ -601,6 +623,19 @@ final class WindowEventObserver {
         // 委托给共享扩展；旧实现用 `as! AXValue` 强转，在 app 返回非 AXValue 类型时会崩溃，
         // 现统一走带 CFGetTypeID 防御的 AXAttributeAccess。
         windowElement.axPoint(kAXPositionAttribute as CFString)
+    }
+
+    /// 窗口是否已绑定文档（用于区分文档类 App 的"选择器/模板"窗口与真正文档窗口）。
+    ///
+    /// 判据：`kAXDocumentAttribute` 非空（通常为 file:// URL）。
+    /// 实测确认（2026-06，macOS 26）：
+    ///   - Word/Excel 的模板选择器（"打开新的和最近使用的文件"）该属性为空；
+    ///   - 打开文档后该属性为 `file:///path/to/file`。
+    /// 两者 subrole 都是 AXStandardWindow，故必须用此属性而非 subrole 区分。
+    /// 若个别 App 不暴露该属性，可在此方法内补"选择器标题"兜底——当前 4 个预置 App 均可靠暴露。
+    private func windowHasDocument(_ window: AXUIElement) -> Bool {
+        let doc = window.axString(kAXDocumentAttribute as CFString) ?? ""
+        return !doc.isEmpty
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
