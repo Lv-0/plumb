@@ -72,6 +72,22 @@ struct UpdateInstallerTests {
         #expect(script == "rm -rf '/tmp/Dst.app' && cp -R '/tmp/Src.app' '/tmp/Dst.app'")
     }
 
+    @Test("buildShellScript escapes single quotes in paths")
+    func shellScriptEscapesSingleQuotes() {
+        let script = UpdateInstallerCommand.buildShellScript(
+            source: "/tmp/O'Connor/Plumb.app",
+            destination: "/Applications/Plumb's Copy.app")
+        #expect(script == "rm -rf '/Applications/Plumb'\\''s Copy.app' && cp -R '/tmp/O'\\''Connor/Plumb.app' '/Applications/Plumb'\\''s Copy.app'")
+    }
+
+    @Test("relaunch script shell-quotes app path")
+    func relaunchScriptQuotesAppPath() {
+        let script = UpdateRelaunchCommand.buildScript(
+            appPath: "/tmp/O'Connor/Test App/Plumb.app",
+            delaySeconds: 0)
+        #expect(script == "#!/bin/bash\nsleep 0\n/usr/bin/open -n -- '/tmp/O'\\''Connor/Test App/Plumb.app'\n")
+    }
+
     // MARK: 源路径解析（本次修复核心：bundle path 回退）
 
     @Test("resolveSourcePath uses UserDefaults path when it exists on disk")

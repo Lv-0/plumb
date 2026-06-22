@@ -72,9 +72,14 @@ enum UpdateInstallerCommand {
     }
 
     /// 构造提权替换的 shell 命令：`rm -rf '<dest>' && cp -R '<src>' '<dest>'`。
-    /// 路径来自已校验位置（resolveSourcePath），不接受外部输入；用单引号包裹。
+    /// 路径来自已校验位置（resolveSourcePath），不接受外部输入；用 shell 单引号包裹。
     static func buildShellScript(source: String, destination: String = destination) -> String {
-        "rm -rf '\(destination)' && cp -R '\(source)' '\(destination)'"
+        "rm -rf \(shellQuoted(destination)) && cp -R \(shellQuoted(source)) \(shellQuoted(destination))"
+    }
+
+    /// POSIX shell 单引号转义。`'` 需要结束当前字符串、写入转义单引号、再重新进入单引号。
+    static func shellQuoted(_ raw: String) -> String {
+        "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     /// 把 shell 命令包成单行 AppleScript：`do shell script "… ; echo $?" with administrator privileges`。

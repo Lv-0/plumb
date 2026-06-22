@@ -26,6 +26,12 @@ extension UpdateConfig {
     static let lastCheckKey = "otaLastCheckTimestamp"
 }
 
+enum UpdateRelaunchCommand {
+    static func buildScript(appPath: String, delaySeconds: Int = 2) -> String {
+        "#!/bin/bash\nsleep \(delaySeconds)\n/usr/bin/open -n -- \(UpdateInstallerCommand.shellQuoted(appPath))\n"
+    }
+}
+
 @MainActor
 final class UpdateCoordinator {
     static let shared = UpdateCoordinator()
@@ -153,7 +159,7 @@ final class UpdateCoordinator {
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("plumb-relaunch-\(UUID().uuidString).sh")
         // 用 -n 强制新实例；sleep 2 给当前 app 充分时间退出（避免新旧同时占用 /Applications）。
-        let script = "#!/bin/bash\nsleep 2\n/usr/bin/open -n \(newApp.path)\n"
+        let script = UpdateRelaunchCommand.buildScript(appPath: newApp.path)
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             // 设可执行权限
