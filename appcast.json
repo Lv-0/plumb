@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.3/Plumb-1.1.3.zip",
   "sha256": "27242622091780138429f4de354cce8374ff7a40025a6d47950931750e6c6c61",
   "notes": {
-    "en": "Document apps (Pages, Numbers, Word, Excel) now tile correctly: the template/file picker is centered but not tiled, and only the opened document gets tiled. New \"Document Apps\" section added under Tiling Settings.",
-    "zh": "文档类 App（Pages、Numbers、Word、Excel）现在能正确平铺：模板/文件选择器只居中不平铺，只有打开的文档才会被平铺。平铺设置下新增「文档类 App」分区。",
-    "es": "Las apps de documentos (Pages, Numbers, Word, Excel) ahora se colocan en mosaico correctamente: el selector de plantillas/archivos se centra pero no se coloca en mosaico; solo el documento abierto se coloca en mosaico. Nueva sección «Apps de documentos» en Ajustes de mosaico.",
-    "fr": "Les apps de documents (Pages, Numbers, Word, Excel) se placent maintenant correctement en mosaïque : le sélecteur de modèles/fichiers est centré mais pas en mosaïque ; seul le document ouvert est placé en mosaïque. Nouvelle section « Apps de documents » dans les Réglages de mosaïque.",
-    "ja": "書類アプリ（Pages、Numbers、Word、Excel）が正しくタイル化されるようになりました：テンプレートやファイル選択画面は中央寄せのみでタイル化せず、開いた書類のみタイル化します。タイリング設定に「書類アプリ」セクションを追加。"
+    "en": "Tiling tab redesigned as two swipeable pages: switch between \"Tiling Apps\" and \"Document Apps\" with capsule sub-tabs and a horizontal slide transition. The enable toggle and margin slider stay fixed at the top.",
+    "zh": "平铺标签页重新设计为左右可切换的两个页面：用胶囊子标签在「平铺应用列表」与「文档类 App」之间切换，带横向滑动过渡。总开关与边距滑块固定在顶部不动。",
+    "es": "Pestaña de mosaico rediseñada como dos páginas deslizables: cambia entre «Apps en mosaico» y «Apps de documentos» con subpestañas tipo cápsula y una transición de deslizamiento horizontal. El interruptor y el margen permanecen fijos arriba.",
+    "fr": "Onglet Mosaïque repensé en deux pages balayables : basculez entre « Apps en mosaïque » et « Apps de documents » avec des sous-onglets en capsule et une transition de glissement horizontal. L'interrupteur et la marge restent fixes en haut.",
+    "ja": "タイリングタブを左右に切り替えられる2ページに再設計：カプセル型サブタブで「タイル対象アプリ」と「書類アプリ」を切り替え、横スライドの切り替えアニメーション付き。有効切り替えとマージンは上部に固定。"
   },
   "minOS": "26.0"
 }
