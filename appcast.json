@@ -1,13 +1,13 @@
 {
-  "version": "1.1.9",
+  "version": "1.2.0",
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.9/Plumb-1.1.9.zip",
   "sha256": "cc395c1457e1ca7459ae44d40c028f13345f37447ec49245db8bf4fbc80d47d7",
   "notes": {
-    "en": "Diagnostic build: adds detailed logging across the settings persistence and update pipeline to investigate why app lists can disappear after an in-app update. No behavior change. If you hit that issue, run `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` and share the log.",
-    "zh": "诊断版本：在设置持久化与更新流程中添加详细日志，用于排查「App 内更新后应用列表消失」的问题。无行为变化。如遇到该问题，可运行 `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` 并提供日志。",
-    "es": "Versión de diagnóstico: añade registro detallado en la persistencia de ajustes y el flujo de actualización para investigar por qué las listas de apps pueden desaparecer tras una actualización desde la app. Sin cambios de comportamiento. Si te ocurre, ejecuta `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` y comparte el registro.",
-    "fr": "Version de diagnostic : ajoute une journalisation détaillée de la persistance des réglages et du flux de mise à jour pour comprendre pourquoi les listes d'apps peuvent disparaître après une mise à jour depuis l'app. Aucun changement de comportement. Si cela se produit, lancez `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` et partagez le journal.",
-    "ja": "診断ビルド：アプリ内アップデート後にアプリリストが消える原因を調査するため、設定の永続化と更新フロー全体に詳細ログを追加します。動作変更はありません。問題が起きた場合は `PLUMB_LOG_FILE=/tmp/plumb.log open -a Plumb` を実行し、ログを共有してください。"
+    "en": "Centering tab now has \"Select All\" / \"Deselect All\" buttons above the app list — toggle every visible app at once. They act on the current (search-filtered) list, so you can select all \"office\" apps after a search. Behavior change: Deselect All empties the centering list, which (by design) means \"center every app\" — see the footnote in the Centering tab.",
+    "zh": "居中标签页新增「全部打开 / 全部关闭」按钮：可一键勾选/取消当前可见的全部应用。按钮作用于当前（搜索过滤后的）列表，例如搜索 \"office\" 后点「全部打开」只勾选 office 相关应用。注：「全部关闭」会清空居中列表，按设计等同于「居中所有应用」——详见居中标签页底部的说明文字。",
+    "es": "La pestaña Centrar ahora tiene botones «Seleccionar todo» / «Deseleccionar todo» sobre la lista de apps: activa todas las apps visibles a la vez. Actúan sobre la lista actual (filtrada por búsqueda), así puedes seleccionar todas las apps de \"office\" tras una búsqueda. Nota: «Deseleccionar todo» vacía la lista, lo que (por diseño) significa «centrar todas las apps»; consulta la nota al pie de la pestaña Centrar.",
+    "fr": "L'onglet Centrer propose désormais des boutons « Tout sélectionner » / « Tout désélectionner » au-dessus de la liste des apps : activez toutes les apps visibles d'un coup. Ils agissent sur la liste actuelle (filtrée par la recherche), donc vous pouvez sélectionner toutes les apps « office » après une recherche. Note : « Tout désélectionner » vide la liste de centrage, ce qui (par conception) signifie « centrer toutes les apps » — voir la note de bas de l'onglet Centrer.",
+    "ja": "中央配置タブにアプリリストの上部に「すべて選択 / すべて解除」ボタンを追加しました。表示中のアプリを一括でオン/オフできます。現在の（検索フィルタ済みの）リストに作用するので、「office」と検索してから「すべて選択」で office 系アプリだけを選択できます。注：「すべて解除」すると中央配置リストが空になりますが、これは設計上「すべてのアプリを中央配置」を意味します（中央配置タブの注記を参照）。"
   },
   "minOS": "26.0"
 }
