@@ -1,7 +1,7 @@
 {
-  "version": "1.1.1",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.1/Plumb-1.1.1.zip",
-  "sha256": "2435e6ea449f9c73fc5057bbcac5036f4afad232da1b634b6d3674a1d18d6f52",
+  "version": "1.1.0",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.0/Plumb-1.1.0.zip",
+  "sha256": "caa09c15dec7c7ee939a674454fdcdc05f6f3d829a02ffe71d3408ae0786c4ef",
   "notes": {
     "en": "Silent updates: the installer now skips the password prompt when the app is owned by you, relaunches automatically after install, and preserves your Accessibility / Screen Recording permissions across updates (stable signing).",
     "zh": "静默更新：app 归你所有时安装器跳过密码提示，安装后自动重启，并跨更新保留辅助功能 / 屏幕录制权限（稳定签名）。",
