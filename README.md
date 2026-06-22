@@ -141,9 +141,9 @@ See [Build locally](#build-locally).
 
 ### Why permissions may need re-granting (and how this is fixed)
 
-macOS keys Accessibility and Screen Recording grants on an app's **stable signing identity** (its designated requirement). Plumb is currently signed *ad-hoc* — a signature whose identity is just the binary's hash (`cdhash`), which changes on every rebuild. The result: **each update looks like a brand-new app to macOS, so its grants are discarded and must be re-given after every update.**
+macOS keys Accessibility and Screen Recording grants on an app's **stable signing identity** (its designated requirement). An ad-hoc signature's identity is just the binary's hash (`cdhash`), which changes on every rebuild — so each update looks like a brand-new app to macOS and its grants are discarded.
 
-We want grants to persist across updates. The mechanism is a **stable signing identity** (a certificate rather than a per-build hash). This requires a Developer-ID-signed build (Apple's official path) or a locally-trusted self-signed certificate. The repo includes the groundwork for that (`scripts/make_signing_cert.sh` + a verify gate), and permission persistence will arrive with a Developer-ID-signed release. Until then, re-grant the two permissions once after each update.
+Plumb is now signed with a **stable local certificate** (`Plumb Local Signer`) instead of ad-hoc. Because the designated requirement is bound to the certificate (not the per-build `cdhash`), your grants persist across updates **after the first stable-signed version**. To enable this on a given machine, run `scripts/make_signing_cert.sh` once (requires one admin password entry to trust the cert); subsequent builds then use the stable identity automatically. On a machine without the trusted cert, builds fall back to ad-hoc and grants will need re-giving after each update.
 
 **Limitation — building from source with a bare executable:** a bare executable from `swift build` / `swift run` has no `.app` bundle and no stable signing identity, so its TCC grants are keyed to `cdhash` and reset on every rebuild. Use the `.app` build (via `scripts/build_app.sh`) for day-to-day testing of permission-dependent features.
 
@@ -155,7 +155,7 @@ We want grants to persist across updates. The mechanism is a **stable signing id
 
 ### Automatic updates
 
-Plumb checks for updates on launch (at most once every 6 hours) and via **Check for Updates…** in the menu bar. When a newer version is available, you can update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` and restarts the app automatically. If the app bundle is owned by you (e.g. installed by dragging from the DMG), the installer replaces it silently with no password prompt; otherwise it asks for your password once. Until Plumb is Developer-ID signed, your Accessibility / Screen Recording permissions will need re-granting after each update unless you've created a stable signing identity (see [Why permissions may need re-granting](#why-permissions-may-need-re-granting-and-how-this-is-fixed)).
+Plumb checks for updates on launch (at most once every 6 hours) and via **Check for Updates…** in the menu bar. When a newer version is available, you can update with one click — Plumb downloads the update, verifies its SHA-256 checksum, then relaunches into a small installer that replaces `/Applications/Plumb.app` and restarts the app automatically. If the app bundle is owned by you (e.g. installed by dragging from the DMG), the installer replaces it silently with no password prompt; otherwise it asks for your password once. With the stable signing identity in place, your Accessibility / Screen Recording permissions survive updates (see [Why permissions may need re-granting](#why-permissions-may-need-re-granting-and-how-this-is-fixed)).
 
 ## Requirements
 
@@ -231,7 +231,7 @@ Or go to `System Settings → Privacy & Security` and click "Open Anyway" at the
 
 You're running the bare executable (`swift run`) or an ad-hoc `.app`. Both have an unstable signing identity, so macOS treats each build as a new app. Re-grant the two permissions (Accessibility, Screen Recording) after each rebuild.
 
-Persisting grants across rebuilds requires a trusted signing identity. `scripts/make_signing_cert.sh` exists as groundwork (a self-signed identity generator), but on some macOS versions the trust step does not take effect from the command line, so it may not produce a stable identity on every machine. The reliable long-term fix is a Developer-ID-signed build.
+Persisting grants across rebuilds requires a trusted signing identity. `scripts/make_signing_cert.sh` generates a self-signed code-signing certificate (with the `codeSigning` extended key usage); once trusted on your machine, `scripts/build_app.sh` uses it automatically and grants survive rebuilds. The cert's trust step writes to the admin trust domain, so on some macOS versions it must be run in an interactive Terminal (the `sudo security add-trusted-cert` step needs an interactive password).
 
 </details>
 
