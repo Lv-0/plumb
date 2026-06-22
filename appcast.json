@@ -1,7 +1,7 @@
 {
-  "version": "1.1.4",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.4/Plumb-1.1.4.zip",
-  "sha256": "3dd85c452a51563f104b6fb7533d5f980ce03bb4fd33e92e0760eebb309beb6c",
+  "version": "1.1.5",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.5/Plumb-1.1.5.zip",
+  "sha256": "c1ac1f23415e352aebdd0f821b80e2eda3096c7c60a5158da7cda8ffc14de4cd",
   "notes": {
     "en": "Fixed: creating or opening a document in Pages/Numbers/Word/Excel now tiles it correctly (previously unsaved new docs were mistaken for the template chooser). Also fixed the Document Apps search so Excel/Word/Numbers/Pages are findable.",
     "zh": "修复：在 Pages/Numbers/Word/Excel 中创建或打开文档现在能正确平铺（此前未保存的新文档被误判为模板选择器）。同时修复文档类 App 页面搜索，Excel/Word/Numbers/Pages 现在可被搜到。",
