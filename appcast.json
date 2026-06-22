@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.4/Plumb-1.1.4.zip",
   "sha256": "3dd85c452a51563f104b6fb7533d5f980ce03bb4fd33e92e0760eebb309beb6c",
   "notes": {
-    "en": "Tiling tab redesigned as two swipeable pages: switch between \"Tiling Apps\" and \"Document Apps\" with capsule sub-tabs and a horizontal slide transition. The enable toggle and margin slider stay fixed at the top.",
-    "zh": "平铺标签页重新设计为左右可切换的两个页面：用胶囊子标签在「平铺应用列表」与「文档类 App」之间切换，带横向滑动过渡。总开关与边距滑块固定在顶部不动。",
-    "es": "Pestaña de mosaico rediseñada como dos páginas deslizables: cambia entre «Apps en mosaico» y «Apps de documentos» con subpestañas tipo cápsula y una transición de deslizamiento horizontal. El interruptor y el margen permanecen fijos arriba.",
-    "fr": "Onglet Mosaïque repensé en deux pages balayables : basculez entre « Apps en mosaïque » et « Apps de documents » avec des sous-onglets en capsule et une transition de glissement horizontal. L'interrupteur et la marge restent fixes en haut.",
-    "ja": "タイリングタブを左右に切り替えられる2ページに再設計：カプセル型サブタブで「タイル対象アプリ」と「書類アプリ」を切り替え、横スライドの切り替えアニメーション付き。有効切り替えとマージンは上部に固定。"
+    "en": "Fixed: creating or opening a document in Pages/Numbers/Word/Excel now tiles it correctly (previously unsaved new docs were mistaken for the template chooser). Also fixed the Document Apps search so Excel/Word/Numbers/Pages are findable.",
+    "zh": "修复：在 Pages/Numbers/Word/Excel 中创建或打开文档现在能正确平铺（此前未保存的新文档被误判为模板选择器）。同时修复文档类 App 页面搜索，Excel/Word/Numbers/Pages 现在可被搜到。",
+    "es": "Corregido: crear o abrir un documento en Pages/Numbers/Word/Excel ahora lo coloca en mosaico correctamente (antes, los documentos nuevos sin guardar se confundían con el selector de plantillas). También se corrigió la búsqueda de Apps de documentos para que Excel/Word/Numbers/Pages sean encontrables.",
+    "fr": "Corrigé : créer ou ouvrir un document dans Pages/Numbers/Word/Excel le place maintenant correctement en mosaïque (auparavant les nouveaux documents non enregistrés étaient confondus avec le sélecteur de modèles). Recherche d'Apps de documents également corrigée pour qu'Excel/Word/Numbers/Pages soient trouvables.",
+    "ja": "修正：Pages/Numbers/Word/Excel で書類を作成・開く際に正しくタイル化されるようになりました（以前は未保存の新規書類がテンプレート選択画面と誤認されていました）。書類アプリの検索も修正し、Excel/Word/Numbers/Pages が検索できるようになりました。"
   },
   "minOS": "26.0"
 }
