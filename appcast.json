@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.5/Plumb-1.1.5.zip",
   "sha256": "c1ac1f23415e352aebdd0f821b80e2eda3096c7c60a5158da7cda8ffc14de4cd",
   "notes": {
-    "en": "Fixed: creating or opening a document in Pages/Numbers/Word/Excel now tiles it correctly (previously unsaved new docs were mistaken for the template chooser). Also fixed the Document Apps search so Excel/Word/Numbers/Pages are findable.",
-    "zh": "修复：在 Pages/Numbers/Word/Excel 中创建或打开文档现在能正确平铺（此前未保存的新文档被误判为模板选择器）。同时修复文档类 App 页面搜索，Excel/Word/Numbers/Pages 现在可被搜到。",
-    "es": "Corregido: crear o abrir un documento en Pages/Numbers/Word/Excel ahora lo coloca en mosaico correctamente (antes, los documentos nuevos sin guardar se confundían con el selector de plantillas). También se corrigió la búsqueda de Apps de documentos para que Excel/Word/Numbers/Pages sean encontrables.",
-    "fr": "Corrigé : créer ou ouvrir un document dans Pages/Numbers/Word/Excel le place maintenant correctement en mosaïque (auparavant les nouveaux documents non enregistrés étaient confondus avec le sélecteur de modèles). Recherche d'Apps de documents également corrigée pour qu'Excel/Word/Numbers/Pages soient trouvables.",
-    "ja": "修正：Pages/Numbers/Word/Excel で書類を作成・開く際に正しくタイル化されるようになりました（以前は未保存の新規書類がテンプレート選択画面と誤認されていました）。書類アプリの検索も修正し、Excel/Word/Numbers/Pages が検索できるようになりました。"
+    "en": "Fixed: your centering/tiling app lists no longer disappear after an in-app update. Settings are now persisted to a signing-independent file, so they survive OTA updates. Existing data is migrated automatically on first launch.",
+    "zh": "修复：App 内更新后，居中/平铺的应用列表不再消失。设置现在持久化到与签名无关的文件，OTA 更新后也能保留。首次启动会自动迁移已有数据。",
+    "es": "Corregido: las listas de apps de centrado/mosaico ya no desaparecen tras una actualización desde la app. Los ajustes ahora se guardan en un archivo independiente de la firma, por lo que sobreviven a las actualizaciones OTA. Los datos existentes se migran automáticamente en el primer inicio.",
+    "fr": "Corrigé : vos listes d'apps de centrage/mosaïque ne disparaissent plus après une mise à jour depuis l'app. Les réglages sont désormais stockés dans un fichier indépendant de la signature, donc ils survivent aux mises à jour OTA. Les données existantes sont migrées automatiquement au premier lancement.",
+    "ja": "修正：アプリ内アップデート後に中央寄せ・タイル化のアプリリストが消えなくなりました。設定は署名に依存しないファイルに保存され、OTAアップデート後も保持されます。初回起動時に既存データを自動移行します。"
   },
   "minOS": "26.0"
 }
