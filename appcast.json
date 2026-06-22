@@ -1,7 +1,7 @@
 {
-  "version": "1.1.3",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.3/Plumb-1.1.3.zip",
-  "sha256": "27242622091780138429f4de354cce8374ff7a40025a6d47950931750e6c6c61",
+  "version": "1.1.4",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.1.4/Plumb-1.1.4.zip",
+  "sha256": "3dd85c452a51563f104b6fb7533d5f980ce03bb4fd33e92e0760eebb309beb6c",
   "notes": {
     "en": "Tiling tab redesigned as two swipeable pages: switch between \"Tiling Apps\" and \"Document Apps\" with capsule sub-tabs and a horizontal slide transition. The enable toggle and margin slider stay fixed at the top.",
     "zh": "平铺标签页重新设计为左右可切换的两个页面：用胶囊子标签在「平铺应用列表」与「文档类 App」之间切换，带横向滑动过渡。总开关与边距滑块固定在顶部不动。",
