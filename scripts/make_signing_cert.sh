@@ -38,10 +38,32 @@ if [[ -n "${existing_hashes}" ]]; then
 fi
 
 # 2) Generate a self-signed cert (10-year validity covers many release cycles).
-echo "生成自签名证书: ${CERT_NAME}"
+#
+# IMPORTANT: the cert MUST carry keyUsage=digitalSignature and
+# extendedKeyUsage=codeSigning. A bare CN-only self-signed cert (the old
+# `openssl req -x509 ... -subj` form) gets basic X.509 trust but is rejected
+# by the codesigning policy — `codesign -s` fails with
+# "this identity cannot be used for signing code" and
+# `find-identity -p codesigning` lists 0 identities. The EKU is what makes
+# macOS treat the identity as a valid *code-signing* identity.
+echo "生成自签名证书（含 codeSigning EKU）: ${CERT_NAME}"
+cat > "$WORKDIR/cert.cnf" <<CNF
+[req]
+distinguished_name = req_dn
+x509_extensions = v3_ca
+prompt = no
+[req_dn]
+CN = ${CERT_NAME}
+[v3_ca]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, keyCertSign, keyEncipherment
+extendedKeyUsage = codeSigning
+CNF
 openssl req -x509 -newkey rsa:2048 \
   -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" \
-  -days 3650 -nodes -subj "/CN=${CERT_NAME}" >/dev/null 2>&1
+  -days 3650 -nodes -config "$WORKDIR/cert.cnf" >/dev/null 2>&1
 
 # 3) Export as p12 with legacy encryption (OpenSSL 3.x default is unreadable by
 #    the macOS `security` tool — import fails with "MAC verification failed").
