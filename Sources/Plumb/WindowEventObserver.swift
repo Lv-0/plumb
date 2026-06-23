@@ -280,6 +280,8 @@ final class WindowEventObserver {
 
         let tilingSettings = tilingSettingsStore.load()
         let shouldTile = tilingSettings.shouldTile(bundleIdentifier: frontmostApp.bundleIdentifier)
+        // per-app 边距：该 app 单独设置过 → 用自定义值；否则回退全局 edgeMargin。
+        let effectiveMargin = tilingSettings.effectiveMargin(for: frontmostApp.bundleIdentifier)
         if shouldTile {
             // 每个"激活周期"内同一窗口只平铺一次：首次平铺后若再收到聚焦/创建通知，
             // 直接跳过，避免重试与重复事件反复触发"先居中再放大"动画，导致窗口被来回
@@ -322,7 +324,7 @@ final class WindowEventObserver {
                 pid: pid,
                 appElement: appElement,
                 primaryWindow: windowElement,
-                edgeMargin: tilingSettings.edgeMargin
+                edgeMargin: effectiveMargin
             ) {
                 markCentered(windowElement: tiledWindow, pid: pid)
                 processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
@@ -330,7 +332,7 @@ final class WindowEventObserver {
                     pid: pid,
                     appElement: appElement,
                     windowElement: tiledWindow,
-                    edgeMargin: tilingSettings.edgeMargin
+                    edgeMargin: effectiveMargin
                 )
                 DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
                 return true

@@ -8,3 +8,11 @@ DerivedData/
 .netrc
 /dist
 .superpowers/
+
+# 本地敏感信息索引（只记录凭据文件路径，不含密钥本身）。永不提交/上传。
+LOCAL_SECRETS.md
+# 兜底：万一任何含密钥的文件被复制进仓库，忽略之。
+setting.txt
+*.secret
+*.secrets
+credentials*.txt

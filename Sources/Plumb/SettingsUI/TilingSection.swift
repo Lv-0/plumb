@@ -134,13 +134,16 @@ struct TilingSection: View {
             ZStack {
                 switch subPage {
                 case .allowlist:
-                    // 平铺应用列表（白名单）。
+                    // 平铺应用列表（白名单）。传入 perAppMargins 绑定，使行可展开边距抽屉。
+                    // 用脚注提示用户：点击 app 可单独设置边距；未设置的使用默认边距。
                     AppListSection(
                         footnote: settings.isEnabled
-                            ? L10n.tilingFootnoteOn
+                            ? L10n.perAppMarginHint
                             : L10n.tilingFootnoteOff,
                         selected: $settings.tiledBundleIDs,
-                        apps: apps
+                        apps: apps,
+                        perAppMargins: $settings.perAppMargins,
+                        defaultMargin: settings.edgeMargin
                     )
                     .transition(lastDirectionForward ? .move(edge: .trailing) : .move(edge: .leading))
                 case .document:

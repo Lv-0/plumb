@@ -27,6 +27,11 @@ struct AppListSection: View {
     /// 是否显示「全部打开 / 全部关闭」批量操作行。默认 false，仅居中段传 true。
     /// 平铺白名单页与文档类 App 页不传，保持原样（零回归）。
     var showsBulkActions: Bool = false
+    /// 可选：per-app 边距抽屉。非 nil 时，列表行使用可展开的 AppListRowExpandable
+    ///（点击 app 下拉出边距滑块），并显示一行 per-app 边距说明脚注。
+    /// 仅平铺白名单页传值；居中/文档页不传 → 仍用原 AppListRow（零回归）。
+    var perAppMargins: Binding<[String: CGFloat]>? = nil
+    var defaultMargin: CGFloat = AppTilingSettings.defaultEdgeMargin
 
     @State private var query: String = ""
     /// 搜索框焦点：显式 @FocusState。用于：
@@ -104,15 +109,34 @@ struct AppListSection: View {
             // 应用列表：选中在前 —— 切换开关时平滑重排。
             LazyVStack(spacing: 2) {
                 ForEach(sortedFilteredApps, id: \.bundleID) { app in
-                    AppListRow(app: app, isOn: Binding(
-                        get: { selected.contains(app.bundleID) },
-                        set: { on in
-                            if on { selected.insert(app.bundleID) }
-                            else { selected.remove(app.bundleID) }
-                            // 触发排序动画
-                            withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
-                        }
-                    ), isDisabled: isRowDisabled?(app) ?? false)
+                    if let perAppMargins {
+                        // 平铺白名单页：可展开边距抽屉的行。
+                        AppListRowExpandable(
+                            app: app,
+                            defaultMargin: defaultMargin,
+                            isOn: Binding(
+                                get: { selected.contains(app.bundleID) },
+                                set: { on in
+                                    if on { selected.insert(app.bundleID) }
+                                    else { selected.remove(app.bundleID) }
+                                    withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
+                                }
+                            ),
+                            perAppMargins: perAppMargins,
+                            isDisabled: isRowDisabled?(app) ?? false
+                        )
+                    } else {
+                        // 默认：原 AppListRow（居中/文档页）。
+                        AppListRow(app: app, isOn: Binding(
+                            get: { selected.contains(app.bundleID) },
+                            set: { on in
+                                if on { selected.insert(app.bundleID) }
+                                else { selected.remove(app.bundleID) }
+                                // 触发排序动画
+                                withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
+                            }
+                        ), isDisabled: isRowDisabled?(app) ?? false)
+                    }
                 }
             }
             .padding(8)

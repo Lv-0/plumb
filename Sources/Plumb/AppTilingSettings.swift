@@ -32,6 +32,49 @@ struct AppTilingSettings: Equatable, Codable {
     static let minimumEdgeMargin: CGFloat = 0
     static let maximumEdgeMargin: CGFloat = 400
 
+    // 自定义 Codable：perAppMargins 是后增字段，旧 settings.json 不含此键 →
+    // 自动合成的 init(from:) 会解码失败。这里用 decodeIfPresent 回退到空字典，
+    // 保证向后兼容（老版本 settings 全部走默认边距）。
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, edgeMargin, tiledBundleIDs, hideSystemAppsInPicker
+        case centerEnabled, centeredBundleIDs, documentChooserBundleIDs
+        case perAppMargins
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        edgeMargin = try c.decodeIfPresent(CGFloat.self, forKey: .edgeMargin) ?? Self.defaultEdgeMargin
+        tiledBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .tiledBundleIDs) ?? []
+        hideSystemAppsInPicker = try c.decodeIfPresent(Bool.self, forKey: .hideSystemAppsInPicker) ?? true
+        centerEnabled = try c.decodeIfPresent(Bool.self, forKey: .centerEnabled) ?? true
+        centeredBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .centeredBundleIDs) ?? []
+        documentChooserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .documentChooserBundleIDs) ?? Self.defaultDocumentChooserBundleIDs
+        perAppMargins = try c.decodeIfPresent([String: CGFloat].self, forKey: .perAppMargins) ?? [:]
+    }
+
+    /// 显式成员初始化器。自定义了 init(from:) 后编译器不再合成默认成员初始化器，
+    /// 故在此显式提供，供 .default、normalized()、持久化层、测试构造使用。
+    init(
+        isEnabled: Bool,
+        edgeMargin: CGFloat,
+        tiledBundleIDs: Set<String>,
+        hideSystemAppsInPicker: Bool,
+        centerEnabled: Bool,
+        centeredBundleIDs: Set<String>,
+        documentChooserBundleIDs: Set<String>,
+        perAppMargins: [String: CGFloat] = [:]
+    ) {
+        self.isEnabled = isEnabled
+        self.edgeMargin = edgeMargin
+        self.tiledBundleIDs = tiledBundleIDs
+        self.hideSystemAppsInPicker = hideSystemAppsInPicker
+        self.centerEnabled = centerEnabled
+        self.centeredBundleIDs = centeredBundleIDs
+        self.documentChooserBundleIDs = documentChooserBundleIDs
+        self.perAppMargins = perAppMargins
+    }
+
     /// 默认启用"文档选择器感知"的 App 集合。
     ///
     /// 这些 App 启动时通常先弹出模板/文件列表窗口（如 Word 的"打开新的和最近使用的文件"），
@@ -62,6 +105,11 @@ struct AppTilingSettings: Equatable, Codable {
     /// `tiledBundleIDs` 决定。即一个 App 必须同时在 `tiledBundleIDs` 内才会被平铺。
     var documentChooserBundleIDs: Set<String>
 
+    /// 每个 app 单独的平铺边距（key = 归一化 bundle id）。
+    /// key 不存在或 bundle id 为 nil → 回退全局 `edgeMargin`（满足"没单独设置用默认"）。
+    /// value 经 `normalized()` 钳制到 `[minimumEdgeMargin, maximumEdgeMargin]`，key 归一化存储。
+    var perAppMargins: [String: CGFloat]
+
     static let `default` = AppTilingSettings(
         isEnabled: false,
         edgeMargin: defaultEdgeMargin,
@@ -69,7 +117,8 @@ struct AppTilingSettings: Equatable, Codable {
         hideSystemAppsInPicker: true,
         centerEnabled: true,
         centeredBundleIDs: [],
-        documentChooserBundleIDs: defaultDocumentChooserBundleIDs
+        documentChooserBundleIDs: defaultDocumentChooserBundleIDs,
+        perAppMargins: [:]
     )
 
     func normalized() -> AppTilingSettings {
@@ -77,6 +126,13 @@ struct AppTilingSettings: Equatable, Codable {
         let normalizedCenterIDs = Set(centeredBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedChooserIDs = Set(documentChooserBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedMargin = clamp(edgeMargin, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin)
+        // per-app 边距：key 归一化、空 key 剔除、value 钳制到合法范围。
+        var normalizedPerApp: [String: CGFloat] = [:]
+        for (rawKey, rawValue) in perAppMargins {
+            let key = Self.normalizeBundleID(rawKey)
+            guard !key.isEmpty else { continue }
+            normalizedPerApp[key] = clamp(rawValue, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin)
+        }
         return AppTilingSettings(
             isEnabled: isEnabled,
             edgeMargin: normalizedMargin,
@@ -84,8 +140,21 @@ struct AppTilingSettings: Equatable, Codable {
             hideSystemAppsInPicker: hideSystemAppsInPicker,
             centerEnabled: centerEnabled,
             centeredBundleIDs: normalizedCenterIDs,
-            documentChooserBundleIDs: normalizedChooserIDs
+            documentChooserBundleIDs: normalizedChooserIDs,
+            perAppMargins: normalizedPerApp
         )
+    }
+
+    /// 该 app 平铺时使用的有效边距。
+    /// - bundle id 不在 `perAppMargins`（或为 nil、归一化后为空）→ 回退全局 `edgeMargin`；
+    /// - 否则返回该 app 的自定义边距（已归一化、钳制）。
+    /// 这是 per-app 平铺边距的核心解析入口，满足"没单独设置用默认"语义。
+    func effectiveMargin(for bundleIdentifier: String?) -> CGFloat {
+        let normalized = bundleIdentifier.map(Self.normalizeBundleID) ?? ""
+        if !normalized.isEmpty, let custom = perAppMargins[normalized] {
+            return custom
+        }
+        return edgeMargin
     }
 
     func shouldTile(bundleIdentifier: String?) -> Bool {
@@ -111,16 +180,18 @@ struct AppTilingSettings: Equatable, Codable {
     }
 
     /// 三个 app 列表是否全部为空。用于 load() 一致性守卫：文件被异常清空时三个列表通常同时变空。
+    /// perAppMargins（app→值映射）的条目计数也纳入判断，保持"文件被清空时各映射同时变空"的守卫语义。
     var allListsEmpty: Bool {
-        tiledBundleIDs.isEmpty && centeredBundleIDs.isEmpty && documentChooserBundleIDs.isEmpty
+        tiledBundleIDs.isEmpty && centeredBundleIDs.isEmpty && documentChooserBundleIDs.isEmpty && perAppMargins.isEmpty
     }
 
     /// 当前设置的列表是否"严格少于"另一份设置。
     /// 用于一致性守卫：当文件全空、而 UserDefaults 镜像里仍有列表条目时，判定文件已被异常清空。
     /// 仅比较列表条目总数（标量开关不参与判断，避免合法的"关开关"误判）。
+    /// perAppMargins 的条目计数一并纳入两侧比较。
     func isEmptierThan(userDefaults other: AppTilingSettings) -> Bool {
-        let mine = tiledBundleIDs.count + centeredBundleIDs.count + documentChooserBundleIDs.count
-        let theirs = other.tiledBundleIDs.count + other.centeredBundleIDs.count + other.documentChooserBundleIDs.count
+        let mine = tiledBundleIDs.count + centeredBundleIDs.count + documentChooserBundleIDs.count + perAppMargins.count
+        let theirs = other.tiledBundleIDs.count + other.centeredBundleIDs.count + other.documentChooserBundleIDs.count + other.perAppMargins.count
         return mine < theirs
     }
 
@@ -142,6 +213,7 @@ final class AppTilingSettingsStore {
         static let centerEnabled = "centering.enabled"
         static let centeredBundleIDs = "centering.bundleIDs"
         static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
+        static let perAppMargins = "tiling.perAppMargins"
     }
 
     private let defaults: UserDefaults
@@ -208,7 +280,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count)"
+        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppMargins=\(s.perAppMargins.count)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -300,6 +372,12 @@ final class AppTilingSettingsStore {
         let documentChooserBundleIDsArray = hasDocumentChooserBundleIDs
             ? (defaults.array(forKey: Keys.documentChooserBundleIDs) as? [String] ?? [])
             : Array(AppTilingSettings.default.documentChooserBundleIDs)
+        // per-app 边距（后增字段）：key 缺失 → 空字典（老版本 settings 全部走默认边距）。
+        // UserDefaults 存为 [String: Double]，读出转 CGFloat。
+        let perAppMarginsRaw = (defaults.dictionary(forKey: Keys.perAppMargins) as? [String: Double]) ?? [:]
+        let perAppMargins = Dictionary(uniqueKeysWithValues: perAppMarginsRaw.map { (k, v) in
+            (AppTilingSettings.normalizeBundleID(k), CGFloat(v))
+        }.filter { !$0.0.isEmpty })
 
         return AppTilingSettings(
             isEnabled: isEnabled,
@@ -308,7 +386,8 @@ final class AppTilingSettingsStore {
             hideSystemAppsInPicker: hideSystemApps,
             centerEnabled: centerEnabled,
             centeredBundleIDs: Set(centeredBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
-            documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty })
+            documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
+            perAppMargins: perAppMargins
         ).normalized()
     }
 
@@ -320,5 +399,8 @@ final class AppTilingSettingsStore {
         defaults.set(normalized.centerEnabled, forKey: Keys.centerEnabled)
         defaults.set(Array(normalized.centeredBundleIDs).sorted(), forKey: Keys.centeredBundleIDs)
         defaults.set(Array(normalized.documentChooserBundleIDs).sorted(), forKey: Keys.documentChooserBundleIDs)
+        // per-app 边距镜像双写：CGFloat → Double（UserDefaults 原生支持）。
+        let perAppDouble = Dictionary(uniqueKeysWithValues: normalized.perAppMargins.map { ($0.key, Double($0.value)) })
+        defaults.set(perAppDouble, forKey: Keys.perAppMargins)
     }
 }

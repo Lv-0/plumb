@@ -80,6 +80,10 @@ enum L10n {
         case tilingSubtabDocument
         // 文档类 App 行内置灰提示（未加入平铺白名单时）
         case documentChooserDisabledHint
+        // per-app 平铺边距（抽屉式 UI）
+        case perAppMarginHint
+        case useDefaultMargin
+        case perAppMarginDefaultBadge
         // 权限段
         case permissionsIntro
         case accessibility
@@ -161,6 +165,9 @@ enum L10n {
             .tilingSubtabAllowlist: "Tiling Apps",
             .tilingSubtabDocument: "Document Apps",
             .documentChooserDisabledHint: "Add to tiling list first",
+            .perAppMarginHint: "Tap an app to set a custom margin; apps without one use the default margin.",
+            .useDefaultMargin: "Use Default",
+            .perAppMarginDefaultBadge: "Default",
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
@@ -233,6 +240,9 @@ enum L10n {
             .tilingSubtabAllowlist: "Apps en mosaico",
             .tilingSubtabDocument: "Apps de documentos",
             .documentChooserDisabledHint: "Añade primero a la lista de mosaico",
+            .perAppMarginHint: "Toca una app para fijar un margen personalizado; las apps sin ajuste usan el margen predeterminado.",
+            .useDefaultMargin: "Usar predeterminado",
+            .perAppMarginDefaultBadge: "Predeterminado",
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
@@ -305,6 +315,9 @@ enum L10n {
             .tilingSubtabAllowlist: "Apps en mosaïque",
             .tilingSubtabDocument: "Apps de documents",
             .documentChooserDisabledHint: "Ajoutez d'abord à la liste de mosaïque",
+            .perAppMarginHint: "Touchez une app pour définir une marge personnalisée ; les apps sans réglage utilisent la marge par défaut.",
+            .useDefaultMargin: "Par défaut",
+            .perAppMarginDefaultBadge: "Par défaut",
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
@@ -377,6 +390,9 @@ enum L10n {
             .tilingSubtabAllowlist: "平铺应用列表",
             .tilingSubtabDocument: "文档类 App",
             .documentChooserDisabledHint: "先加入平铺列表",
+            .perAppMarginHint: "点击应用可单独设置边距；未单独设置的应用使用默认边距。",
+            .useDefaultMargin: "使用默认",
+            .perAppMarginDefaultBadge: "默认",
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
@@ -449,6 +465,9 @@ enum L10n {
             .tilingSubtabAllowlist: "タイル対象アプリ",
             .tilingSubtabDocument: "書類アプリ",
             .documentChooserDisabledHint: "まずタイリングリストに追加",
+            .perAppMarginHint: "アプリをタップして個別の余白を設定できます。設定のないアプリはデフォルトの余白を使います。",
+            .useDefaultMargin: "デフォルトを使用",
+            .perAppMarginDefaultBadge: "デフォルト",
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
@@ -524,6 +543,9 @@ enum L10n {
     static var tilingSubtabAllowlist: String { tr(.tilingSubtabAllowlist) }
     static var tilingSubtabDocument: String { tr(.tilingSubtabDocument) }
     static var documentChooserDisabledHint: String { tr(.documentChooserDisabledHint) }
+    static var perAppMarginHint: String { tr(.perAppMarginHint) }
+    static var useDefaultMargin: String { tr(.useDefaultMargin) }
+    static var perAppMarginDefaultBadge: String { tr(.perAppMarginDefaultBadge) }
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }
