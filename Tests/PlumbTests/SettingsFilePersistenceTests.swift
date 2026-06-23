@@ -147,3 +147,55 @@ func filePersistenceDoubleWrite() async throws {
     // 文件也被写入。
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
 }
+
+@Test
+func filePersistenceReconcilesEmptiedFileAgainstUserDefaults() async throws {
+    // 回归测试：文件被异常清空（如外部工具/历史事故写入空列表），但 UserDefaults 镜像仍有数据时，
+    // load() 应识别出"文件比 UserDefaults 少"并改以 UserDefaults 为准、回写修复文件，
+    // 而不是把空列表当权威返回。
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    // UserDefaults 保留真实数据（模拟双写后镜像依然完好的情况）。
+    defaults.set(true, forKey: "tiling.enabled")
+    defaults.set(["com.apple.safari", "com.apple.mail"], forKey: "tiling.bundleIDs")
+    defaults.set(["com.apple.mail"], forKey: "centering.bundleIDs")
+
+    // 直接把一个"全空"的文件写到磁盘（模拟外部污染）。
+    try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    let emptied = AppTilingSettings.default
+    try? JSONEncoder().encode(emptied).write(to: fileURL, options: [.atomic])
+    #expect(FileManager.default.fileExists(atPath: fileURL.path))
+
+    let loaded = store.load()
+    // 不应返回空列表；应以 UserDefaults 为准。
+    #expect(loaded.tiledBundleIDs == Set(["com.apple.safari", "com.apple.mail"]))
+    #expect(loaded.centeredBundleIDs == Set(["com.apple.mail"]))
+    #expect(loaded.isEnabled == true)
+    // 文件应已被回写修复（不再是空列表）。
+    let reread = try JSONDecoder().decode(AppTilingSettings.self, from: Data(contentsOf: fileURL))
+    #expect(reread.tiledBundleIDs.count == 2)
+}
+
+@Test
+func filePersistenceLegitimateEmptyListsArePreserved() async throws {
+    // 用户合法清空全部列表（经 save 双写：文件与 UserDefaults 同为空）→ load 不应误触发守卫。
+    // 这是守卫的反例保护：判据是"UserDefaults 严格多于文件"，合法清空两者一致，不触发。
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    // 通过正式 save() 路径写入全空列表（双写，文件与 UserDefaults 一致）。
+    var emptied = AppTilingSettings.default
+    emptied.documentChooserBundleIDs = []   // 显式清空（默认本是 4 个）
+    store.save(emptied)
+
+    let loaded = store.load()
+    #expect(loaded.allListsEmpty)
+    #expect(loaded.documentChooserBundleIDs.isEmpty)
+}

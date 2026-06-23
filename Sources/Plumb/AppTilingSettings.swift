@@ -110,6 +110,20 @@ struct AppTilingSettings: Equatable, Codable {
         return documentChooserBundleIDs.contains(Self.normalizeBundleID(bundleIdentifier))
     }
 
+    /// 三个 app 列表是否全部为空。用于 load() 一致性守卫：文件被异常清空时三个列表通常同时变空。
+    var allListsEmpty: Bool {
+        tiledBundleIDs.isEmpty && centeredBundleIDs.isEmpty && documentChooserBundleIDs.isEmpty
+    }
+
+    /// 当前设置的列表是否"严格少于"另一份设置。
+    /// 用于一致性守卫：当文件全空、而 UserDefaults 镜像里仍有列表条目时，判定文件已被异常清空。
+    /// 仅比较列表条目总数（标量开关不参与判断，避免合法的"关开关"误判）。
+    func isEmptierThan(userDefaults other: AppTilingSettings) -> Bool {
+        let mine = tiledBundleIDs.count + centeredBundleIDs.count + documentChooserBundleIDs.count
+        let theirs = other.tiledBundleIDs.count + other.centeredBundleIDs.count + other.documentChooserBundleIDs.count
+        return mine < theirs
+    }
+
     static func normalizeBundleID(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -161,6 +175,18 @@ final class AppTilingSettingsStore {
     func load() -> AppTilingSettings {
         // 1) 优先读文件（签名无关、跨更新稳定）。
         if let fileSettings = readFromFile() {
+            // 一致性守卫：文件解码成功，但其列表条目总数严格少于 UserDefaults 镜像时，
+            // 视文件为被异常清空（历史上发生过的真实事故：单测/外部工具把空列表写进了真实文件），
+            // 改以 UserDefaults 为准并回写修复文件。
+            // 判据是「UserDefaults 严格比文件拥有更多列表条目」，因此：
+            //   - 正常的双写 save() 不会误触发（save 同步写文件+UserDefaults，两者一致）；
+            //   - 用户合法清空列表（save 写入全空）也不会误触发（UserDefaults 镜像同样为空）。
+            let udSettings = loadFromUserDefaults()
+            if fileSettings.isEmptierThan(userDefaults: udSettings) {
+                DiagnosticLog.debug("SettingsStore: load ← FILE lists fewer than UserDefaults → reconciling from UserDefaults \(summary(udSettings))")
+                writeToFile(udSettings)
+                return udSettings
+            }
             DiagnosticLog.debug("SettingsStore: load ← FILE ok \(summary(fileSettings))")
             return fileSettings
         }

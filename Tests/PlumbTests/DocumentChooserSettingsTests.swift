@@ -88,7 +88,15 @@ func documentChooserExplicitEmptyPersists() async throws {
     }
     defaults.removePersistentDomain(forName: suiteName)
 
-    let store = AppTilingSettingsStore(defaults: defaults)
+    // 重要：必须注入独立的 settingsFileURL，否则 store 会回退到生产路径
+    // ~/Library/Application Support/Plumb/settings.json，并用本测试的空列表覆盖用户真实设置。
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
 
     var settings = AppTilingSettings.default
     settings.documentChooserBundleIDs = []
@@ -96,8 +104,6 @@ func documentChooserExplicitEmptyPersists() async throws {
 
     let loaded = store.load()
     #expect(loaded.documentChooserBundleIDs.isEmpty)
-
-    defaults.removePersistentDomain(forName: suiteName)
 }
 
 @Test
