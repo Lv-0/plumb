@@ -1,13 +1,13 @@
 {
-  "version": "1.4.0",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.4.0/Plumb-1.4.0.zip",
-  "sha256": "56ac8efb29e17591a67cdeba27511613bb2190ec4769679bc5fcbecf8d8dc507",
+  "version": "2.0.0",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.0/Plumb-2.0.0.zip",
+  "sha256": "298ce9d0868408d05cc0dd2d69b09c11325078dcfd828a64f45b0dd0d0da7da0",
   "notes": {
-    "en": "Centering tab now has \"Select All\" / \"Deselect All\" buttons above the app list — toggle every visible app at once. They act on the current (search-filtered) list, so you can select all \"office\" apps after a search. Behavior change: Deselect All empties the centering list, which (by design) means \"center every app\" — see the footnote in the Centering tab.",
-    "zh": "居中标签页新增「全部打开 / 全部关闭」按钮：可一键勾选/取消当前可见的全部应用。按钮作用于当前（搜索过滤后的）列表，例如搜索 \"office\" 后点「全部打开」只勾选 office 相关应用。注：「全部关闭」会清空居中列表，按设计等同于「居中所有应用」——详见居中标签页底部的说明文字。",
-    "es": "La pestaña Centrar ahora tiene botones «Seleccionar todo» / «Deseleccionar todo» sobre la lista de apps: activa todas las apps visibles a la vez. Actúan sobre la lista actual (filtrada por búsqueda), así puedes seleccionar todas las apps de \"office\" tras una búsqueda. Nota: «Deseleccionar todo» vacía la lista, lo que (por diseño) significa «centrar todas las apps»; consulta la nota al pie de la pestaña Centrar.",
-    "fr": "L'onglet Centrer propose désormais des boutons « Tout sélectionner » / « Tout désélectionner » au-dessus de la liste des apps : activez toutes les apps visibles d'un coup. Ils agissent sur la liste actuelle (filtrée par la recherche), donc vous pouvez sélectionner toutes les apps « office » après une recherche. Note : « Tout désélectionner » vide la liste de centrage, ce qui (par conception) signifie « centrer toutes les apps » — voir la note de bas de l'onglet Centrer.",
-    "ja": "中央配置タブにアプリリストの上部に「すべて選択 / すべて解除」ボタンを追加しました。表示中のアプリを一括でオン/オフできます。現在の（検索フィルタ済みの）リストに作用するので、「office」と検索してから「すべて選択」で office 系アプリだけを選択できます。注：「すべて解除」すると中央配置リストが空になりますが、これは設計上「すべてのアプリを中央配置」を意味します（中央配置タブの注記を参照）。"
+    "en": "Per-app tiling margin: tap any app in the Tiling list to expand an inline margin drawer. Drag the slider to set a custom margin for just that app; apps without a custom setting keep using the global default margin. A \"Use Default\" button resets an app back to the global value. The global margin slider at the top still controls the fallback for every app. Settings persist across updates (stable signing identity, signing-independent settings file).",
+    "zh": "Per-app 平铺边距：在「平铺应用列表」中点击任意应用，行内下拉出边距抽屉。拖动滑块即可为该应用单独设置平铺边距；未单独设置的应用继续使用全局默认边距。抽屉内的「使用默认」按钮可一键回退到全局值。顶部全局边距滑块仍是所有应用的回退默认值。设置跨更新保留（稳定签名身份 + 签名无关的设置文件）。",
+    "es": "Margen de mosaico por app: toca cualquier app en la lista de Mosaico para desplegar un cajón de margen integrado. Arrastra el deslizador para fijar un margen personalizado solo para esa app; las apps sin ajuste personalizado siguen usando el margen global predeterminado. Un botón «Usar predeterminado» restablece una app al valor global. El deslizador de margen global superior sigue controlando el valor de respaldo para todas las apps.",
+    "fr": "Marge de mosaïque par app : touchez une app dans la liste Mosaïque pour déployer un tiroir de marge intégré. Glissez le curseur pour définir une marge personnalisée uniquement pour cette app ; les apps sans réglage personnalisé continuent d'utiliser la marge globale par défaut. Un bouton « Par défaut » réinitialise une app à la valeur globale. Le curseur de marge global en haut contrôle toujours la valeur de repli pour toutes les apps.",
+    "ja": "アプリごとのタイリング余白：タイリングリストでアプリをタップすると、インラインの余白ドロワーが展開します。スライダーをドラッグしてそのアプリだけのカスタム余白を設定できます。カスタム設定のないアプリは引き続きグローバルのデフォルト余白を使います。「デフォルトを使用」ボタンでアプリをグローバル値にリセットできます。上部のグローバル余白スライダーは引き続きすべてのアプリのフォールバック既定値を制御します。"
   },
   "minOS": "26.0"
 }
