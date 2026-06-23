@@ -383,45 +383,65 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         finish()
     }
 
-    /// 定位 app 列表第一行（计算器）的名称区 Button 中心。
-    /// 策略：app 列表在 PlatformContainer(ScrollView) 内，y 从 279 起。每行高 36，
-    /// 第一行在 DocumentView 的 y=101。convert(to:nil) 在 flipped ScrollView 里
-    /// 不可靠（返回了错误的 y=201.5，落在列表容器之上）。改为手动计算窗口坐标：
-    /// PlatformContainer.minY(279) + 行在 DocumentView 的 minY + 行高/2。
+    /// 定位 app 列表第一行的可点击中心。
+    /// 策略：用 NSView.hitTest(_:) 反向探测——这是 macOS 真实点击使用的命中测试，
+    /// 与坐标推导无关。在 app 列表区域（PlatformContainer）内网格扫描点，找 hitTest
+    /// 返回非 nil 且该点在 DocumentView 子树内的坐标（即落在 app 行内容上）。
     private func findAppRowCenter(in window: NSWindow) -> NSPoint? {
         guard let contentView = window.contentView else { return nil }
-        // 找 PlatformContainer（app 列表的滚动容器，frame y≈279）。
-        var containers: [NSView] = []
-        Self.collectViews(contentView, classNameContains: "PlatformContainer", into: &containers, maxDepth: 6)
-        // 找 DocumentView（滚动内容）。
+        // 找 DocumentView（app 列表滚动内容）和 PlatformContainer。
         var docs: [NSView] = []
         Self.collectViews(contentView, classNameContains: "DocumentView", into: &docs, maxDepth: 15)
-        guard let container = containers.first, let docView = docs.first else {
-            Self.log("SELFTEST-DRAWER: container/DocumentView not found")
-            return nil
+        guard let docView = docs.first else {
+            Self.log("SELFTEST-DRAWER: DocumentView not found"); return nil
         }
-        // 找第一个 app 行（_NSGraphicsView 824x36）在 DocumentView 内的 frame。
-        var rows: [NSView] = []
-        Self.collectViews(docView, classNameContains: "_NSGraphicsView", into: &rows, maxDepth: 6)
-        guard let firstRow = rows.first(where: { abs($0.frame.width - 824) < 30 && abs($0.frame.height - 36) < 8 }) else {
-            return nil
+        // PlatformContainer 是 ScrollView 容器，它的 frame 给出可见列表区域。
+        var containers: [NSView] = []
+        Self.collectViews(contentView, classNameContains: "PlatformContainer", into: &containers, maxDepth: 6)
+        guard let container = containers.first else {
+            Self.log("SELFTEST-DRAWER: PlatformContainer not found"); return nil
         }
-        // 手动计算窗口坐标（底部原点）：
-        // container 是窗口坐标系（frame 已含窗口原点偏移）。
-        // docView 在 container 内，firstRow 在 docView 内。
-        // 完整链：container.frame.minY（窗口系）+ docView 在 container 内的偏移 + row 在 docView 内的偏移。
-        // 但 docView/row 的 frame 是相对各自 superview。用 superview 链累加更可靠。
-        let containerMinYInWindow = container.frame.minY  // 窗口坐标（contentView 子视图）
-        // docView.frame.minY 相对 container（NSClipView），但 container 可能不是 docView 直接父。
-        // 简化：row.frame.minY 相对 docView，docView 的 frame.minY 相对其父……
-        // 用 convert 但只取 row→container（限定范围，避免跨 flipped 边界）。
-        let rowMinInContainer = firstRow.convert(NSPoint(x: 0, y: 0), to: container)
-        let rowCenterY = containerMinYInWindow + rowMinInContainer.y + firstRow.frame.height / 2
-        // x：行名称区中心偏左（避开右侧药丸）。行在 container 内 x≈28，宽 824。
-        let rowCenterX = container.frame.minX + firstRow.frame.minX + 250
-        let point = NSPoint(x: rowCenterX, y: rowCenterY)
-        Self.log("SELFTEST-DRAWER: computed click point (manual) = \(point) [containerMinY=\(containerMinYInWindow) rowMinInContainer=\(rowMinInContainer)]")
-        return point
+        // container 的 frame 在 contentView 坐标系（底部原点）。
+        // 在 container 可见区域内网格扫描，用 hitTest 找到落在 docView 子树内的点。
+        let cf = container.frame
+        Self.log("SELFTEST-DRAWER: PlatformContainer frame in contentView = (\(Int(cf.minX)),\(Int(cf.minY)),\(Int(cf.width))x\(Int(cf.height)))")
+        // 扫描：x 从左到右，y 从容器顶部往下（容器内前几行）。
+        // container.frame 是 contentView 坐标（底部原点）。第一个 app 行在容器顶部。
+        let scanX = cf.midX
+        // 容器顶部往下扫，记录 hitTest 返回的视图类型，找到落在 docView 子树的点。
+        var probeY = cf.maxY - 30
+        var sampleCount = 0
+        var firstHitPoint: NSPoint? = nil
+        while probeY > cf.minY + 10 {
+            let probePoint = NSPoint(x: scanX, y: probeY)
+            if let hit = contentView.hitTest(probePoint) {
+                let hitType = String(describing: type(of: hit))
+                if sampleCount < 5 {
+                    Self.log("SELFTEST-DRAWER: hitTest at y=\(Int(probeY)) → \(hitType)")
+                    sampleCount += 1
+                }
+                if firstHitPoint == nil { firstHitPoint = probePoint }
+                // 检查命中点是否在 DocumentView 子树内。
+                var v: NSView? = hit
+                while v != nil {
+                    if v === docView {
+                        Self.log("SELFTEST-DRAWER: FOUND DocumentView point at \(probePoint)")
+                        return probePoint
+                    }
+                    v = v?.superview
+                }
+            }
+            probeY -= 5
+        }
+        // hitTest 返回 NSHostingView（SwiftUI 边界）而非内部 DocumentView——这是
+        // NSHostingView 的 hitTest 不递归到 SwiftUI 视图层级的特性。但命中 NSHostingView
+        // 证明该坐标有效（落在设置窗口内容上）。返回第一个命中点，依赖事件系统路由。
+        if let p = firstHitPoint {
+            Self.log("SELFTEST-DRAWER: using first NSHostingView hit point at \(p) (hitTest doesn't recurse into SwiftUI)")
+            return p
+        }
+        Self.log("SELFTEST-DRAWER: hitTest scan found no DocumentView point")
+        return nil
     }
 
     /// Find the Nth tab pill (88x32 focus ring near top). Tab order by x: 居中, 平铺, 权限.
@@ -569,8 +589,6 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         // Ensure the window is key & frontmost so it receives the event.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        // Send synchronously on the current runloop turn so the click lands before the
-        // caller's follow-up check.
         self.sendMouseEvent(type: .leftMouseDown, at: pointInWindow, window: window)
         self.sendMouseEvent(type: .leftMouseUp, at: pointInWindow, window: window)
     }
