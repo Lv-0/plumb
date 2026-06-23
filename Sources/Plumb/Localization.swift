@@ -122,6 +122,11 @@ enum L10n {
         case otaInstallDone
         case otaInstallCanceled
         case otaInstallFailed
+        // OTA 下载进度
+        case otaDownloadingTitle
+        case otaDownloadingMessage
+        case otaDownloadingSize
+        case otaDownloadCanceled
     }
 
     // MARK: - 翻译表
@@ -194,6 +199,10 @@ enum L10n {
             .otaInstallDone: "Done. Relaunching…",
             .otaInstallCanceled: "Installation canceled. The previous version was kept.",
             .otaInstallFailed: "Installation failed. The previous version was kept.",
+            .otaDownloadingTitle: "Updating Plumb",
+            .otaDownloadingMessage: "Downloading Plumb %@…",
+            .otaDownloadingSize: "%1$@ of %2$@",
+            .otaDownloadCanceled: "Download canceled.",
         ],
         .es: [
             .menuSubtitle: "Centrado de ventanas · Mosaico",
@@ -262,6 +271,10 @@ enum L10n {
             .otaInstallDone: "Listo. Reiniciando…",
             .otaInstallCanceled: "Instalación cancelada. Se mantuvo la versión anterior.",
             .otaInstallFailed: "Error en la instalación. Se mantuvo la versión anterior.",
+            .otaDownloadingTitle: "Actualizando Plumb",
+            .otaDownloadingMessage: "Descargando Plumb %@…",
+            .otaDownloadingSize: "%1$@ de %2$@",
+            .otaDownloadCanceled: "Descarga cancelada.",
         ],
         .fr: [
             .menuSubtitle: "Centrage de fenêtre · Mosaïque",
@@ -330,6 +343,10 @@ enum L10n {
             .otaInstallDone: "Terminé. Redémarrage…",
             .otaInstallCanceled: "Installation annulée. La version précédente a été conservée.",
             .otaInstallFailed: "Échec de l'installation. La version précédente a été conservée.",
+            .otaDownloadingTitle: "Mise à jour de Plumb",
+            .otaDownloadingMessage: "Téléchargement de Plumb %@…",
+            .otaDownloadingSize: "%1$@ sur %2$@",
+            .otaDownloadCanceled: "Téléchargement annulé.",
         ],
         .zh: [
             .menuSubtitle: "窗口居中 · 平铺",
@@ -398,6 +415,10 @@ enum L10n {
             .otaInstallDone: "完成，正在重启…",
             .otaInstallCanceled: "安装已取消，已保留原版本。",
             .otaInstallFailed: "安装失败，已保留原版本。",
+            .otaDownloadingTitle: "正在更新 Plumb",
+            .otaDownloadingMessage: "正在下载 Plumb %@…",
+            .otaDownloadingSize: "%1$@ / %2$@",
+            .otaDownloadCanceled: "下载已取消。",
         ],
         .ja: [
             .menuSubtitle: "ウィンドウ中央寄せ · タイル",
@@ -466,6 +487,10 @@ enum L10n {
             .otaInstallDone: "完了。再起動中…",
             .otaInstallCanceled: "インストールがキャンセルされました。以前のバージョンを維持します。",
             .otaInstallFailed: "インストールに失敗しました。以前のバージョンを維持します。",
+            .otaDownloadingTitle: "Plumb を更新中",
+            .otaDownloadingMessage: "Plumb %@ をダウンロードしています…",
+            .otaDownloadingSize: "%1$@ / %2$@",
+            .otaDownloadCanceled: "ダウンロードがキャンセルされました。",
         ],
     ]
 
@@ -537,6 +562,10 @@ enum L10n {
     static var otaInstallDone: String { tr(.otaInstallDone) }
     static var otaInstallCanceled: String { tr(.otaInstallCanceled) }
     static var otaInstallFailed: String { tr(.otaInstallFailed) }
+    static var otaDownloadingTitle: String { tr(.otaDownloadingTitle) }
+    static var otaDownloadingMessage: String { tr(.otaDownloadingMessage) }
+    static var otaDownloadingSize: String { tr(.otaDownloadingSize) }
+    static var otaDownloadCanceled: String { tr(.otaDownloadCanceled) }
 
     // MARK: - 访问器（带参）
 

@@ -23,6 +23,9 @@ enum DownloadError: Error {
     case appNotFoundInArchive
 }
 
+/// 下载进度回调。`totalBytes == -1` 表示服务器未返回 Content-Length（调用方应降级为不确定动画）。
+typealias DownloadProgressHandler = @Sendable (_ bytesDownloaded: Int64, _ totalBytes: Int64) -> Void
+
 struct UpdateDownloader: Sendable {
     /// 校验 Data 的 sha256 是否等于预期十六进制串（大小写不敏感）。非法 hex 或不匹配返回 false。
     static func verifySHA256(data: Data, expectedHex: String) -> Bool {
@@ -32,13 +35,37 @@ struct UpdateDownloader: Sendable {
     }
 
     /// 下载 url 到临时文件，返回文件 URL。
-    func download(from url: URL) async throws -> URL {
+    ///
+    /// 使用 `URLSession.download(from:delegate:)`（流式落盘），相对旧的
+    /// `URLSession.data(from:)`（整包缓冲进内存、无进度）有两个改进：
+    ///   - **进度回调**：通过 `URLSessionDownloadDelegate.didWriteData` 上报已下载/总字节数。
+    ///     `onProgress` 线程不保证；调用方需自行切回 MainActor。
+    ///     `totalBytes == -1` 表示未知总长度（Content-Length 缺失）。
+    ///   - **协作式取消**：该 async API 与结构化并发联动——当外层 `Task` 被 `cancel()`，
+    ///     下载会被中断并抛出 `CancellationError`（Coordinator 据此区分取消与失败）。
+    ///
+    /// 大文件不占内存（直接落盘到临时位置，再 move 到我们自己的 tmp 路径）。
+    func download(from url: URL, onProgress: DownloadProgressHandler? = nil) async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".zip")
+        let delegate = DownloadProgressDelegate(onProgress: onProgress)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            try data.write(to: tmp)
+            let (downloadedURL, _) = try await URLSession.shared.download(from: url, delegate: delegate)
+            // downloadedURL 是 URLSession 管理的临时位置，可能很快被回收，立即移动到自有 tmp。
+            if FileManager.default.fileExists(atPath: tmp.path) {
+                try FileManager.default.removeItem(at: tmp)
+            }
+            try FileManager.default.moveItem(at: downloadedURL, to: tmp)
             return tmp
+        } catch is CancellationError {
+            try? FileManager.default.removeItem(at: tmp)
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            // async URLSession.download 被 Task.cancel() 取消时，部分系统版本以 URLError(.cancelled)
+            // 而非 CancellationError 抛出；统一归为取消，让 Coordinator 走静默取消分支而非"下载失败"。
+            try? FileManager.default.removeItem(at: tmp)
+            throw CancellationError()
         } catch {
+            try? FileManager.default.removeItem(at: tmp)
             throw DownloadError.downloadFailed(underlying: error)
         }
     }
@@ -75,5 +102,34 @@ struct UpdateDownloader: Sendable {
             throw DownloadError.appNotFoundInArchive
         }
         return app
+    }
+}
+
+// MARK: - 下载进度代理
+
+/// `URLSession.download(from:delegate:)` 的进度上报桥。
+///
+/// 把回调式 `URLSessionDownloadDelegate` 的字节写入事件转给 `onProgress` 闭包。
+/// `@unchecked Sendable`：仅持有不可变 `onProgress`（其自身 `@Sendable`），跨线程访问安全。
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let onProgress: DownloadProgressHandler?
+
+    init(onProgress: DownloadProgressHandler?) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        // totalBytesExpectedToWrite == NSURLSessionTransferSizeUnknown (-1) 表示未知总长度。
+        onProgress?(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        // async download(from:delegate:) 自行处理落盘，这里无需操作。
     }
 }

@@ -39,6 +39,9 @@ final class UpdateCoordinator {
     private let checker = UpdateChecker()
     private let downloader = UpdateDownloader()
 
+    /// 当前下载 Task（用于 Cancel 时协作式取消）。
+    private var currentDownloadTask: Task<Void, Never>?
+
     private var osVersion: AppVersion {
         let raw = ProcessInfo.processInfo.operatingSystemVersion
         return AppVersion(major: raw.majorVersion, minor: raw.minorVersion, patch: raw.patchVersion)
@@ -100,27 +103,52 @@ final class UpdateCoordinator {
     }
 
     /// 下载 → 校验 → 解压 → 写标志 → 重开自身进入安装器。
+    ///
+    /// 下载阶段弹出进度窗口（百分比 + 字节数 + Cancel）。
+    /// 用户点 Cancel → 取消下载 Task → downloader 抛 CancellationError → 静默关闭窗口。
     private func startUpdate(manifest: UpdateManifest) {
         DiagnosticLog.debug("OTA: update confirmed by user, target=\(manifest.version) starting download")
-        Task { [weak self] in
+
+        let progressWindow = UpdateProgressWindow(version: manifest.version)
+        progressWindow.onCancel = { [weak self] in
+            // 协作式取消：downloader.download 会抛 CancellationError。
+            self?.currentDownloadTask?.cancel()
+        }
+        progressWindow.show()
+
+        let task = Task { [weak self] in
             guard let self else { return }
             do {
-                let zip = try await self.downloader.download(from: manifest.url)
+                let zip = try await self.downloader.download(from: manifest.url) { downloaded, total in
+                    // downloader 回调线程不保证；切回 MainActor 更新 UI。
+                    Task { @MainActor in
+                        progressWindow.updateProgress(bytesDownloaded: downloaded, totalBytes: total)
+                    }
+                }
                 DiagnosticLog.debug("OTA: downloaded \(manifest.version)")
                 try self.downloader.verify(file: zip, expectedHex: manifest.sha256)
                 DiagnosticLog.debug("OTA: sha256 verified")
                 let newApp = try self.downloader.unzip(zip)
                 DiagnosticLog.debug("OTA: unzipped → \(newApp.path), relaunching into installer")
                 await MainActor.run {
+                    progressWindow.close()
                     self.relaunchIntoInstaller(with: newApp)
+                }
+            } catch is CancellationError {
+                DiagnosticLog.debug("OTA: download canceled by user")
+                await MainActor.run {
+                    progressWindow.close()
+                    // 静默取消（保留安装器阶段的 otaInstallCanceled 语义；下载取消无需额外提示）。
                 }
             } catch {
                 DiagnosticLog.debug("OTA: update FAILED: \(error)")
                 await MainActor.run {
+                    progressWindow.close()
                     self.alert(title: L10n.otaDownloadFailed, message: L10n.otaDownloadFailedHint)
                 }
             }
         }
+        currentDownloadTask = task
     }
 
     /// 写 installerMode + 待安装路径，启动**新 app**进入安装器模式，然后退出当前进程。
