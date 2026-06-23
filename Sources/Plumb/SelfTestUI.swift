@@ -384,32 +384,44 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 定位 app 列表第一行（计算器）的名称区 Button 中心。
-    /// 策略：app 列表在 ScrollView(NSClipView>DocumentView) 内。每行是
-    /// _NSGraphicsView(824x36)，内含名称区 _FocusRingView(756x24)。
-    /// ScrollView 内的坐标必须经过 NSClipView 的 boundsOrigin 偏移转换，
-    /// 直接 convert(to:nil) 在滚动视图中可能得到 DocumentView 内部坐标而非可见窗口坐标。
-    /// 故：找 NSClipView，取第一个 app 行的 _NSGraphicsView，用其 convert 到 nil（窗口）。
+    /// 策略：app 列表在 PlatformContainer(ScrollView) 内，y 从 279 起。每行高 36，
+    /// 第一行在 DocumentView 的 y=101。convert(to:nil) 在 flipped ScrollView 里
+    /// 不可靠（返回了错误的 y=201.5，落在列表容器之上）。改为手动计算窗口坐标：
+    /// PlatformContainer.minY(279) + 行在 DocumentView 的 minY + 行高/2。
     private func findAppRowCenter(in window: NSWindow) -> NSPoint? {
         guard let contentView = window.contentView else { return nil }
-        // 找 DocumentView（app 列表的滚动内容容器）。
+        // 找 PlatformContainer（app 列表的滚动容器，frame y≈279）。
+        var containers: [NSView] = []
+        Self.collectViews(contentView, classNameContains: "PlatformContainer", into: &containers, maxDepth: 6)
+        // 找 DocumentView（滚动内容）。
         var docs: [NSView] = []
         Self.collectViews(contentView, classNameContains: "DocumentView", into: &docs, maxDepth: 15)
-        guard let docView = docs.first else {
-            Self.log("SELFTEST-DRAWER: DocumentView not found")
+        guard let container = containers.first, let docView = docs.first else {
+            Self.log("SELFTEST-DRAWER: container/DocumentView not found")
             return nil
         }
-        // 在 DocumentView 子树内找 app 行的 _NSGraphicsView(824x36)。
+        // 找第一个 app 行（_NSGraphicsView 824x36）在 DocumentView 内的 frame。
         var rows: [NSView] = []
         Self.collectViews(docView, classNameContains: "_NSGraphicsView", into: &rows, maxDepth: 6)
-        let appRows = rows.filter { abs($0.frame.width - 824) < 30 && abs($0.frame.height - 36) < 8 }
-        Self.log("SELFTEST-DRAWER: app rows (_NSGraphicsView 824x36) in DocumentView = \(appRows.count)")
-        guard let firstRow = appRows.first else { return nil }
-        // 行的名称区 Button 在行左侧。点击行中心偏左（避开右侧 40x24 药丸）。
-        // convert(_:to:nil) 会经过整个 superview 链（含 NSClipView 的滚动偏移）到窗口坐标。
-        let localPoint = NSPoint(x: firstRow.bounds.minX + 250, y: firstRow.bounds.midY)
-        let windowPoint = firstRow.convert(localPoint, to: nil)
-        Self.log("SELFTEST-DRAWER: first app row window-local click point = \(windowPoint)")
-        return windowPoint
+        guard let firstRow = rows.first(where: { abs($0.frame.width - 824) < 30 && abs($0.frame.height - 36) < 8 }) else {
+            return nil
+        }
+        // 手动计算窗口坐标（底部原点）：
+        // container 是窗口坐标系（frame 已含窗口原点偏移）。
+        // docView 在 container 内，firstRow 在 docView 内。
+        // 完整链：container.frame.minY（窗口系）+ docView 在 container 内的偏移 + row 在 docView 内的偏移。
+        // 但 docView/row 的 frame 是相对各自 superview。用 superview 链累加更可靠。
+        let containerMinYInWindow = container.frame.minY  // 窗口坐标（contentView 子视图）
+        // docView.frame.minY 相对 container（NSClipView），但 container 可能不是 docView 直接父。
+        // 简化：row.frame.minY 相对 docView，docView 的 frame.minY 相对其父……
+        // 用 convert 但只取 row→container（限定范围，避免跨 flipped 边界）。
+        let rowMinInContainer = firstRow.convert(NSPoint(x: 0, y: 0), to: container)
+        let rowCenterY = containerMinYInWindow + rowMinInContainer.y + firstRow.frame.height / 2
+        // x：行名称区中心偏左（避开右侧药丸）。行在 container 内 x≈28，宽 824。
+        let rowCenterX = container.frame.minX + firstRow.frame.minX + 250
+        let point = NSPoint(x: rowCenterX, y: rowCenterY)
+        Self.log("SELFTEST-DRAWER: computed click point (manual) = \(point) [containerMinY=\(containerMinYInWindow) rowMinInContainer=\(rowMinInContainer)]")
+        return point
     }
 
     /// Find the Nth tab pill (88x32 focus ring near top). Tab order by x: 居中, 平铺, 权限.
