@@ -13,7 +13,7 @@ Centra y coloca en mosaico las apps de macOS automáticamente — ¡una bendici�
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requisitos)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.2.0-success.svg?style=flat-square)](#descarga-e-instalación)
+[![Release](https://img.shields.io/badge/release-v2.0.0-success.svg?style=flat-square)](#descarga-e-instalación)
 
 [English](./README.md) · [简体中文](./README.zh.md) · **Español** · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -56,6 +56,7 @@ Recibe el nombre de la **plomada** (plumb line) — el peso que el carpintero de
 | ✋ No lucha con tu disposición | Arrastrar una ventana nunca vuelve a disparar el centrado |
 | 🖥️ Evita con precisión el Dock/barra de menús | Basado en `screen.frame - screen.visibleFrame`, estable en multi-pantalla |
 | 📐 Mosaico automático por app | Mecanismo de lista de permitidas con margen uniforme configurable (px) |
+| 🎚️ Margen de mosaico por app | Toca cualquier app en mosaico para fijar un margen personalizado solo para esa app; las que no tengan ajuste usan el margen global predeterminado |
 | 🔄 Refresco en vivo de la lista de apps | Las apps recién instaladas aparecen en el selector de ajustes de inmediato, sin reiniciar |
 | 🪟 Interfaz Liquid Glass | Vidrio esmerilado de macOS 26, búsqueda, interruptores en píldora |
 | 🧠 Detección inteligente de coordenadas | Detecta automáticamente el espacio de coordenadas de cada app y lo cachea para estabilidad |
@@ -66,6 +67,7 @@ Recibe el nombre de la **plomada** (plumb line) — el peso que el carpintero de
 Abre `Ajustes de mosaico…` desde la barra de menús para activar/desactivar la función y gestionar tu flujo de trabajo.
 
 - Configura un único margen uniforme (px)
+- **Margen de mosaico por app**: toca cualquier app en la lista de mosaico para desplegar un cajón de margen integrado y fijar un margen personalizado solo para esa app; las apps sin ajuste personalizado siguen usando el margen global predeterminado. Un botón «Usar predeterminado» restablece una app al valor global.
 - Selecciona las apps permitidas entre las aplicaciones instaladas (las apps del sistema se ocultan por defecto, conmutable)
 - Para las apps permitidas, **el mosaico tiene prioridad** sobre el centrado automático
 - El ámbito de disparo es una vez por inicio de proceso (PID); sin mosaico repetido dentro del mismo proceso
@@ -80,12 +82,18 @@ Abre `Ajustes de mosaico…` desde la barra de menús para activar/desactivar la
 
 <table>
   <tr>
-    <td width="50%" align="center"><b>Interfaz de ajustes Liquid Glass</b></td>
-    <td width="50%" align="center"><b>Mosaico automático por app</b></td>
+    <td width="50%" align="center"><b>Centrar — lista de apps permitidas</b></td>
+    <td width="50%" align="center"><b>Mosaico — cajón de margen por app</b></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="assets/setting.png" alt="Interfaz de ajustes"></td>
-    <td width="50%" align="center"><img src="assets/layout.png" alt="Efecto de mosaico"></td>
+    <td width="50%" align="center"><img src="assets/Centering.png" alt="Pestaña Centrar"></td>
+    <td width="50%" align="center"><img src="assets/Tiling.png" alt="Pestaña Mosaico con cajón de margen por app"></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><b>Permisos — Accesibilidad, Grabación de pantalla, Inicio al iniciar sesión</b></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><img src="assets/Permissions.png" alt="Pestaña Permisos"></td>
   </tr>
 </table>
 

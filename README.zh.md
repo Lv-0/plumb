@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#系统要求)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.2.0-success.svg?style=flat-square)](#下载安装)
+[![Release](https://img.shields.io/badge/release-v2.0.0-success.svg?style=flat-square)](#下载安装)
 
 [English](./README.md) · **简体中文** · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -56,6 +56,7 @@
 | ✋ 不打扰手动布局 | 拖动移动窗口不会触发再次居中 |
 | 🖥️ 精确避开 Dock/状态栏 | 基于 `screen.frame - screen.visibleFrame`，多屏稳定 |
 | 📐 指定 App 自动平铺 | 白名单机制，可配置统一四边边距（px） |
+| 🎚️ 按 App 单独设置边距 | 在平铺列表点击任意应用展开抽屉，单独设置该应用的平铺边距；未单独设置的使用全局默认边距 |
 | 🔄 实时刷新应用列表 | 新安装的应用立即出现在设置选择器中，无需重启 |
 | 🪟 Liquid Glass 设置界面 | macOS 26 毛玻璃质感、搜索、药丸开关 |
 | 🧠 四坐标系智能识别 | 自动识别不同 App 的窗口坐标系并稳定缓存 |
@@ -66,6 +67,7 @@
 在菜单栏 `平铺设置…` 中可开启/关闭功能，灵活管理你的工作流。
 
 - 可配置统一四边距（px）
+- **按 App 单独设置边距**：在平铺应用列表点击任意应用，行内下拉出边距抽屉，拖动滑块即可为该应用单独设置平铺边距；未单独设置的应用继续使用全局默认边距。抽屉内「使用默认」按钮可一键回退到全局值。
 - 可从已安装应用列表中选择白名单 App（默认隐藏系统应用，可切换）
 - 白名单 App 触发时**优先平铺**，不再自动居中
 - 触发粒度为「每个进程首次窗口一次」；同一进程内后续不重复触发
@@ -80,12 +82,18 @@
 
 <table>
   <tr>
-    <td width="50%" align="center"><b>Liquid Glass 设置界面</b></td>
-    <td width="50%" align="center"><b>指定 App 自动平铺效果</b></td>
+    <td width="50%" align="center"><b>居中 — 应用白名单</b></td>
+    <td width="50%" align="center"><b>平铺 — 按 App 边距抽屉</b></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="assets/setting.png" alt="设置界面"></td>
-    <td width="50%" align="center"><img src="assets/layout.png" alt="平铺效果"></td>
+    <td width="50%" align="center"><img src="assets/Centering.png" alt="居中标签页"></td>
+    <td width="50%" align="center"><img src="assets/Tiling.png" alt="平铺标签页与按 App 边距抽屉"></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><b>权限 — 辅助功能、屏幕录制、开机自启</b></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><img src="assets/Permissions.png" alt="权限标签页"></td>
   </tr>
 </table>
 

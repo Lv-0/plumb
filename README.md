@@ -13,7 +13,7 @@ Auto-centers and tiles macOS apps — a blessing for neat freaks!
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requirements)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.2.0-success.svg?style=flat-square)](#download--install)
+[![Release](https://img.shields.io/badge/release-v2.0.0-success.svg?style=flat-square)](#download--install)
 
 **English** · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
@@ -57,6 +57,7 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 | ✋ Won't fight your layout | Dragging a window never re-triggers centering |
 | 🖥️ Precisely avoids Dock/menu bar | Based on `screen.frame - screen.visibleFrame`, stable across multi-display |
 | 📐 Per-app auto-tiling | Allowlist mechanism with a configurable uniform edge margin (px) |
+| 🎚️ Per-app tiling margin | Tap any tiled app to set a custom margin for just that app; apps without one fall back to the global default |
 | 🔄 Live app-list refresh | Newly installed apps appear in the settings picker immediately, no restart needed |
 | 🪟 Liquid Glass settings UI | macOS 26 frosted glass, search, pill toggles |
 | 🧠 Smart coordinate-space detection | Auto-detects each app's window coordinate space and caches it for stability |
@@ -68,6 +69,7 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 Open `Tiling Settings…` from the menu bar to enable/disable the feature and manage your workflow.
 
 - Configure a single uniform edge margin (px)
+- **Per-app margin override**: tap any app in the Tiling list to expand an inline margin drawer and set a custom margin for just that app; apps without a custom setting keep using the global default. A "Use Default" button resets an app back to the global value.
 - Select allowlisted apps from installed applications (system apps hidden by default, toggleable)
 - For allowlisted apps, **tiling has priority** over auto-centering
 - Trigger scope is once per process startup (PID); no repeated tiling within the same process
@@ -82,12 +84,18 @@ Open `Tiling Settings…` from the menu bar to enable/disable the feature and ma
 
 <table>
   <tr>
-    <td width="50%" align="center"><b>Liquid Glass Settings UI</b></td>
-    <td width="50%" align="center"><b>Per-App Auto-Tiling</b></td>
+    <td width="50%" align="center"><b>Centering — app allowlist</b></td>
+    <td width="50%" align="center"><b>Tiling — per-app margin drawer</b></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="assets/setting.png" alt="Settings UI"></td>
-    <td width="50%" align="center"><img src="assets/layout.png" alt="Tiling effect"></td>
+    <td width="50%" align="center"><img src="assets/Centering.png" alt="Centering tab"></td>
+    <td width="50%" align="center"><img src="assets/Tiling.png" alt="Tiling tab with per-app margin drawer"></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><b>Permissions — Accessibility, Screen Recording, Launch at Login</b></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><img src="assets/Permissions.png" alt="Permissions tab"></td>
   </tr>
 </table>
 

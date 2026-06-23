@@ -13,7 +13,7 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#動作環境)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v1.2.0-success.svg?style=flat-square)](#ダウンロードとインストール)
+[![Release](https://img.shields.io/badge/release-v2.0.0-success.svg?style=flat-square)](#ダウンロードとインストール)
 
 [English](./README.md) · [简体中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · **日本語**
 
@@ -56,6 +56,7 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 | ✋ 手動配置を妨げない | ウィンドウをドラッグしても中央寄せは再トリガーされない |
 | 🖥️ Dock/メニューバーを正確に回避 | `screen.frame - screen.visibleFrame` に基づき、マルチディスプレイで安定 |
 | 📐 アプリごとの自動タイル | ホワイトリスト方式、統一の四辺マージン（px）を設定可能 |
+| 🎚️ アプリごとのタイル余白 | タイルリストでアプリをタップしてそのアプリだけのカスタム余白を設定可能。設定のないアプリはグローバルのデフォルト余白を使用 |
 | 🔄 アプリリストをリアルタイム更新 | 新しくインストールしたアプリが設定ピッカーに即座に表示、再起動不要 |
 | 🪟 Liquid Glass 設定 UI | macOS 26 のすりガラス、検索、ピル型スイッチ |
 | 🧠 スマートな座標系検出 | 各アプリのウィンドウ座標系を自動検出し、安定のためキャッシュ |
@@ -66,6 +67,7 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 メニューバーの `タイル設定…` を開いて、機能のオン/オフやワークフローの管理を行えます。
 
 - 統一の四辺マージン（px）を設定可能
+- **アプリごとのタイル余白**：タイルリストでアプリをタップするとインラインの余白ドロワーが展開し、そのアプリだけのカスタム余白を設定できます。カスタム設定のないアプリは引き続きグローバルのデフォルト余白を使います。「デフォルトを使用」ボタンでアプリをグローバル値にリセットできます。
 - インストール済みアプリからホワイトリストを選択（システムアプリは既定で非表示、切替可能）
 - ホワイトリストのアプリでは **タイルが優先**、自動中央寄せは行わない
 - トリガ範囲はプロセス起動ごとに1回（PID）。同一プロセス内での繰り返しタイルなし
@@ -80,12 +82,18 @@ macOS アプリを自動で中央寄せ・タイル配置 —— 整理好きに
 
 <table>
   <tr>
-    <td width="50%" align="center"><b>Liquid Glass 設定 UI</b></td>
-    <td width="50%" align="center"><b>アプリごとの自動タイル</b></td>
+    <td width="50%" align="center"><b>中央寄せ — アプリ許可リスト</b></td>
+    <td width="50%" align="center"><b>タイル — アプリごとの余白ドロワー</b></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="assets/setting.png" alt="設定 UI"></td>
-    <td width="50%" align="center"><img src="assets/layout.png" alt="タイル効果"></td>
+    <td width="50%" align="center"><img src="assets/Centering.png" alt="中央寄せタブ"></td>
+    <td width="50%" align="center"><img src="assets/Tiling.png" alt="タイルタブとアプリごとの余白ドロワー"></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><b>権限 — アクセシビリティ、画面収録、ログイン時に起動</b></td>
+  </tr>
+  <tr>
+    <td width="100%" colspan="2" align="center"><img src="assets/Permissions.png" alt="権限タブ"></td>
   </tr>
 </table>
 
