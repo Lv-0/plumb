@@ -1,7 +1,7 @@
 {
-  "version": "1.3.0",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v1.3.0/Plumb-1.3.0.zip",
-  "sha256": "b648fbc97623299cc450e196cd1145f92f1c1b28d3efbfce4b4e2862edb0cf99",
+  "version": "1.4.0",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v1.4.0/Plumb-1.4.0.zip",
+  "sha256": "56ac8efb29e17591a67cdeba27511613bb2190ec4769679bc5fcbecf8d8dc507",
   "notes": {
     "en": "Centering tab now has \"Select All\" / \"Deselect All\" buttons above the app list — toggle every visible app at once. They act on the current (search-filtered) list, so you can select all \"office\" apps after a search. Behavior change: Deselect All empties the centering list, which (by design) means \"center every app\" — see the footnote in the Centering tab.",
     "zh": "居中标签页新增「全部打开 / 全部关闭」按钮：可一键勾选/取消当前可见的全部应用。按钮作用于当前（搜索过滤后的）列表，例如搜索 \"office\" 后点「全部打开」只勾选 office 相关应用。注：「全部关闭」会清空居中列表，按设计等同于「居中所有应用」——详见居中标签页底部的说明文字。",
