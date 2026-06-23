@@ -150,9 +150,8 @@ struct AppMarginDrawer: View {
                 Slider(value: $sliderValue,
                        in: AppTilingSettings.minimumEdgeMargin...AppTilingSettings.maximumEdgeMargin,
                        onEditingChanged: { editing in
-                        // 拖动结束（或变化）时写入；即时反馈。
-                        if !editing { onChange(sliderValue) }
-                        else { onChange(sliderValue) }
+                        // 拖动过程中持续写入，保证即时反馈与松手后的最终值一致。
+                        onChange(sliderValue)
                        })
                 Text("\(Int(sliderValue.rounded())) px")
                     .foregroundStyle(.secondary)
@@ -189,6 +188,13 @@ struct AppMarginDrawer: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
+        }
+        // 关键修复：当生效值（currentMargin）被外部改变——例如点击"使用默认"（删除 key → 回退
+        // defaultMargin）、或顶部全局滑块改变了 defaultMargin 而本 app 处于默认态——必须把
+        // 滑块的本地 @State 同步回生效值。否则 @State(initialValue:) 只在首次创建时生效，
+        // 滑块位置与数值会停留在旧值，与实际生效的边距不一致。
+        .onChange(of: currentMargin) { _, newValue in
+            sliderValue = newValue
         }
     }
 }
