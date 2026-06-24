@@ -22,9 +22,11 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let centeringService = WindowCenteringService()
     private let tilingSettingsStore = AppTilingSettingsStore()
+    private let dmgMonitor = DmgMountMonitor()
     private lazy var eventObserver = WindowEventObserver(
         service: centeringService,
-        tilingSettingsStore: tilingSettingsStore
+        tilingSettingsStore: tilingSettingsStore,
+        dmgMonitor: dmgMonitor
     )
     private var statusItem: NSStatusItem?
     private var launchCenterTimer: DispatchSourceTimer?
@@ -35,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMainMenu()
         _ = ScreenCapturePermission.ensureAuthorized(prompt: true)
         _ = AccessibilityPermission.ensureTrusted(prompt: true)
+        dmgMonitor.start()
         eventObserver.start()
         centerOnceOnLaunch()
         UpdateCoordinator.shared.checkForUpdatesInBackground()

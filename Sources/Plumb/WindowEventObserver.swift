@@ -31,6 +31,7 @@ import ApplicationServices
 final class WindowEventObserver {
     private let service: WindowCenteringService
     private let tilingSettingsStore: AppTilingSettingsStore
+    private let dmgMonitor: DmgMountMonitor?
 
     private var observer: AXObserver?
     private var observedPID: pid_t?
@@ -47,9 +48,10 @@ final class WindowEventObserver {
     private var initialCenterTimer: DispatchSourceTimer?
     private var tileStabilizeTimer: DispatchSourceTimer?
 
-    init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore) {
+    init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore, dmgMonitor: DmgMountMonitor? = nil) {
         self.service = service
         self.tilingSettingsStore = tilingSettingsStore
+        self.dmgMonitor = dmgMonitor
     }
 
     func start() {
@@ -317,6 +319,25 @@ final class WindowEventObserver {
                     return true
                 } catch {
                     DiagnosticLog.debug("handle[\(notification)]: chooser center failed pid=\(pid) error=\(error)")
+                    return false
+                }
+            }
+            // DMG 安装窗口感知：访达打开 .dmg 后弹出的「挂载内容窗口」（拖拽安装界面）。
+            // 该窗口标题 == DMG 卷名；命中已挂载 DMG 卷名集合 → 只居中、不平铺。
+            // 复用文档选择器分支的不变量：不 markCentered、不锁 processedPIDs，
+            // 使 DMG 窗口关闭后同一 Finder 里打开的普通文件夹窗口仍能被平铺。
+            // 不命中（非 Finder、非 DMG 标题、或 dmgMonitor 未注入）→ 落入下方正常平铺。
+            if let dmgMonitor,
+               isFinderBundle(frontmostApp.bundleIdentifier),
+               let title = windowElement.axString(kAXTitleAttribute as CFString),
+               dmgMonitor.isMountedDmgVolume(title)
+            {
+                DiagnosticLog.debug("handle[\(notification)]: DMG installer window — center only, keep PID unlocked, not marked pid=\(pid) title=\(title)")
+                do {
+                    try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                    return true
+                } catch {
+                    DiagnosticLog.debug("handle[\(notification)]: DMG center failed pid=\(pid) error=\(error)")
                     return false
                 }
             }
@@ -655,6 +676,12 @@ final class WindowEventObserver {
     private func windowHasDocument(_ window: AXUIElement) -> Bool {
         let doc = window.axString(kAXDocumentAttribute as CFString) ?? ""
         return !doc.isEmpty
+    }
+
+    /// bundle id 是否为访达（归一化比较）。
+    /// 访达的 DMG 挂载内容窗口与普通文件夹窗口同属 com.apple.finder，仅靠此 id 缩窄 DMG 检测范围。
+    private func isFinderBundle(_ bundleIdentifier: String?) -> Bool {
+        AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.apple.finder"
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
