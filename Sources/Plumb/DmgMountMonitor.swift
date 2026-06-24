@@ -63,10 +63,33 @@ final class DmgMountMonitor {
         mountedDmgNames.remove(resolved)
     }
 
-    // MARK: - 生产环境默认 DA 探测（Task 2 实现）
+    /// 预扫一组已存在的卷 URL（启动时遍历 /Volumes/*），把其中的 DMG 登记进集合。
+    /// 用「遍历注入」而非真实文件系统读取，便于测试。
+    func prescanExistingVolumes(_ volumes: [URL]) {
+        for url in volumes {
+            registerMount(volumeURL: url)
+        }
+    }
 
-    static let defaultDmgProbe: DmgProbe = { url in
-        // 占位：Task 2 替换为真实 DiskArbitration 实现。
-        return nil
+    // MARK: - 生产环境默认 DA 探测
+
+    /// 用 DiskArbitration 探测一个卷 URL 是否为磁盘映像。
+    /// Device Protocol == "Virtual Interface" 是 DMG 的明确标志（USB/SATA 等物理介质报为其它值）。
+    /// 探测失败（session/disk/description 任一为 nil）→ 返回 nil（调用方按「非 DMG」处理）。
+    /// 注：Swift 下 Core Foundation 对象由 ARC 自动管理，无需手动 CFRelease。
+    static let defaultDmgProbe: DmgProbe = { volumeURL in
+        guard let session = DASessionCreate(kCFAllocatorDefault) else { return nil }
+        guard
+            let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, volumeURL as CFURL)
+        else { return nil }
+        guard
+            let descCF = DADiskCopyDescription(disk),
+            let desc = descCF as? [String: Any]
+        else { return nil }
+
+        let proto = desc[kDADiskDescriptionDeviceProtocolKey as String] as? String
+        let isDmg = (proto == "Virtual Interface")
+        let name = desc[kDADiskDescriptionVolumeNameKey as String] as? String
+        return (isDmg: isDmg, name: name)
     }
 }

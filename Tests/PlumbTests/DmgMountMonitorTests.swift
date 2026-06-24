@@ -77,3 +77,24 @@ func dmgMonitor_unmountUnknownVolumeIsNoop() {
     monitor.registerUnmount(volumeURL: URL(fileURLWithPath: "/Volumes/Unknown"))
     #expect(monitor.isMountedDmgVolume("A") == true)
 }
+
+@Test
+@MainActor
+func dmgMonitor_startPrescansAlreadyMountedVolumes() {
+    // mock 探测：只有 /Volumes/AlreadyMounted 是 DMG。
+    let probe: DmgMountMonitor.DmgProbe = { url in
+        url.path == "/Volumes/AlreadyMounted"
+            ? (isDmg: true, name: "AlreadyMounted")
+            : (isDmg: false, name: nil)
+    }
+    // 注入枚举闭包：返回一组「当前已挂载卷」，模拟 /Volumes/*。
+    let volumes: [URL] = [
+        URL(fileURLWithPath: "/Volumes/AlreadyMounted"),
+        URL(fileURLWithPath: "/Volumes/SomeUSB")
+    ]
+    let monitor = DmgMountMonitor(dmgProbe: probe)
+    monitor.prescanExistingVolumes(volumes)
+
+    #expect(monitor.isMountedDmgVolume("AlreadyMounted") == true)
+    #expect(monitor.isMountedDmgVolume("SomeUSB") == false)
+}
