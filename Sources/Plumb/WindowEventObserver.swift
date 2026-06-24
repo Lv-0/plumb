@@ -195,11 +195,12 @@ final class WindowEventObserver {
 
             let app = NSRunningApplication(processIdentifier: pid)
             let bundleID = app?.bundleIdentifier
-            if isChatGPTAtlasBundle(bundleID) { seenPIDs.insert(pid); continue }     // 排除 Atlas
             if !settings.shouldCenter(bundleIdentifier: bundleID) { seenPIDs.insert(pid); continue }  // 白名单
 
             let appElement = AXUIElementCreateApplication(pid)
             guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else { continue }
+            // Atlas 设置窗口跳动：仅排除设置窗口，主窗口正常居中（与 handle 一致）。
+            if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) { seenPIDs.insert(pid); continue }
             do {
                 try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
                 markCentered(windowElement: windowElement, pid: pid)
@@ -386,11 +387,17 @@ final class WindowEventObserver {
             return false
         }
 
-        // ChatGPT Atlas（com.openai.atlas）特例：其设置窗口被自动居中后会反复跳动
-        //（窗口自带定位与 Plumb 的居中互相打架），故对该 app 全部窗口一律跳过，
-        // 不居中也不平铺。纯早退：不 markCentered、不锁 processedPIDs，不污染共享缓存语义。
-        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier) {
-            DiagnosticLog.debug("handle[\(notification)]: ChatGPT Atlas window — skip (settings window jitter fix) pid=\(pid)")
+        // ChatGPT Atlas（com.openai.atlas）特例：仅其「设置窗口」被自动居中/平铺后会反复跳动
+        //（窗口自带定位与 Plumb 的居中/平铺互相打架），故对设置窗口完全跳过（不居中也不平铺）。
+        // 关键收窄：只排除设置窗口，主浏览器窗口仍正常走居中/平铺（否则 Atlas 主窗口无法平铺）。
+        // 设置窗口识别：AXIdentifier 为结构化 JSON，主窗口是 {"type":"main",...}，
+        // 设置窗口是 {"type":"secondary","secondary":{"type":"settings"}}——用子串匹配稳定区分
+        //（标题随网页变化不可靠，subrole/modal 两者相同无法区分）。
+        // 纯早退：不 markCentered、不锁 processedPIDs，不污染共享缓存语义。
+        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier),
+           isAtlasSettingsWindow(windowElement)
+        {
+            DiagnosticLog.debug("handle[\(notification)]: ChatGPT Atlas settings window — skip (jitter fix) pid=\(pid)")
             return false
         }
 
@@ -799,10 +806,21 @@ final class WindowEventObserver {
     }
 
     /// bundle id 是否为 ChatGPT Atlas 浏览器（归一化比较）。
-    /// Atlas 的设置窗口被自动居中后会反复跳动（窗口自带定位与 Plumb 的居中互相打架），
-    /// 故对其全部窗口一律跳过，不居中也不平铺。
     private func isChatGPTAtlasBundle(_ bundleIdentifier: String?) -> Bool {
         AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.openai.atlas"
+    }
+
+    /// Atlas 窗口是否为「设置窗口」。
+    ///
+    /// 判据：AXIdentifier 为 Atlas 内部的结构化 JSON。实测（2026-06）：
+    ///   - 主浏览器窗口：{"type":"main","main":{...}}
+    ///   - 设置窗口：    {"type":"secondary","secondary":{"type":"settings"}}
+    /// 用子串 `"secondary"` + `"settings"` 匹配，避免 JSON 解析开销与格式漂移风险。
+    /// 这比标题（随网页变化）与 subrole/modal（主窗口与设置窗口相同）都稳定可靠——
+    /// 设置窗口被自动居中/平铺后会反复跳动，需完全跳过它，但主窗口仍要正常居中/平铺。
+    private func isAtlasSettingsWindow(_ window: AXUIElement) -> Bool {
+        guard let id = window.axString("AXIdentifier" as CFString) else { return false }
+        return id.contains("secondary") && id.contains("settings")
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
