@@ -98,3 +98,18 @@ func dmgMonitor_startPrescansAlreadyMountedVolumes() {
     #expect(monitor.isMountedDmgVolume("AlreadyMounted") == true)
     #expect(monitor.isMountedDmgVolume("SomeUSB") == false)
 }
+
+@Test
+@MainActor
+func dmgMonitor_start_doesNotCrashAndPrescansViaEnumerator() {
+    let probe: DmgMountMonitor.DmgProbe = { url in
+        url.path == "/Volumes/Pre" ? (isDmg: true, name: "Pre") : (isDmg: false, name: nil)
+    }
+    let monitor = DmgMountMonitor(dmgProbe: probe)
+    // 注入枚举器返回一个已挂载 DMG；start() 应预扫它。
+    monitor.start(existingVolumesEnumerator: {
+        [URL(fileURLWithPath: "/Volumes/Pre")]
+    })
+    #expect(monitor.isMountedDmgVolume("Pre") == true)
+    monitor.stop()
+}

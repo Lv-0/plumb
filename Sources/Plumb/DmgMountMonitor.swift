@@ -71,6 +71,67 @@ final class DmgMountMonitor {
         }
     }
 
+    // MARK: - NSWorkspace 挂载/卸载通知订阅
+
+    /// 当前已挂载卷枚举器签名（生产枚举 /Volumes/*，测试可注入）。
+    typealias VolumesEnumerator = () -> [URL]
+
+    /// 启动监听：订阅 NSWorkspace 挂载/卸载通知，并预扫已挂载卷。
+    /// existingVolumesEnumerator 默认枚举真实 /Volumes/*。
+    func start(existingVolumesEnumerator: @escaping VolumesEnumerator = DmgMountMonitor.enumerateVolumesRoot) {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            self,
+            selector: #selector(handleMount(_:)),
+            name: NSWorkspace.didMountNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleUnmount(_:)),
+            name: NSWorkspace.didUnmountNotification,
+            object: nil
+        )
+        // 预扫启动前已挂载的 DMG（用户在 Plumb 启动前就挂载了 .dmg）。
+        prescanExistingVolumes(existingVolumesEnumerator())
+    }
+
+    /// 停止监听（AppDelegate 退出时调用，幂等）。
+    func stop() {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    @objc private func handleMount(_ notification: Notification) {
+        guard let url = mountedVolumeURL(from: notification) else { return }
+        registerMount(volumeURL: url)
+    }
+
+    @objc private func handleUnmount(_ notification: Notification) {
+        guard let url = mountedVolumeURL(from: notification) else { return }
+        registerUnmount(volumeURL: url)
+    }
+
+    /// 从 NSWorkspace 挂载/卸载通知中取卷 URL。
+    /// 通知 userInfo 含 NSDevicePath（卷挂载点路径，如 /Volumes/Plumb）。
+    private func mountedVolumeURL(from notification: Notification) -> URL? {
+        guard let userInfo = notification.userInfo,
+              let path = userInfo["NSDevicePath"] as? String,
+              !path.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// 生产环境默认卷枚举器：列出 /Volumes/* 的子目录（顶层）。
+    static let enumerateVolumesRoot: VolumesEnumerator = {
+        let volumesRoot = URL(fileURLWithPath: "/Volumes")
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: volumesRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return contents.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+    }
+
     // MARK: - 生产环境默认 DA 探测
 
     /// 用 DiskArbitration 探测一个卷 URL 是否为磁盘映像。
