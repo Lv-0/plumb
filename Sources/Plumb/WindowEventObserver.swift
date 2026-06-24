@@ -68,6 +68,15 @@ final class WindowEventObserver {
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
         )
+        // Space（虚拟桌面）切换监听：切 Space 时前台 app 通常不变 → 不触发 didActivate →
+        // attachToFrontmostApp 的早退守卫会挡住，导致已居中窗口不会被重新居中。这里独立触发，
+        // 让切回来的前台 app 主窗口能重新居中（在该场景下放宽「每个窗口只居中一次」契约）。
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceDidChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
 
         if AccessibilityPermission.ensureTrusted(prompt: false) {
             // Already trusted: attach immediately.
@@ -104,6 +113,45 @@ final class WindowEventObserver {
 
     @objc private func activeAppChanged() {
         attachToFrontmostApp()
+    }
+
+    /// Space（虚拟桌面）切换处理。
+    ///
+    /// 切换 Space 时前台 app 通常不变 → macOS 不发 `didActivateApplicationNotification`
+    /// → `attachToFrontmostApp` 不被调用，且即使被调用也会命中其 `observedPID == pid`
+    /// 早退守卫而直接返回。因此已居中过的窗口永远命中 `processedPIDs`/居中缓存，不会重新居中。
+    ///
+    /// 这里独立处理：绕过早退守卫，清理当前前台 app 的居中缓存与 PID 标记，并重新启动居中重试，
+    /// 使其主窗口能在新 Space 上被重新居中。这是在该场景下对「每个窗口只居中一次」契约的放宽。
+    /// observer 仍绑定在当前 PID，无需重建（与 `attachToFrontmostApp` 切换到新 PID 的区别）。
+    @objc private func activeSpaceDidChange() {
+        guard AccessibilityPermission.ensureTrusted(prompt: false) else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let pid = observedPID,
+              app.processIdentifier == pid
+        else { return }   // 无前台 app 或尚未观察 → 无事可做
+
+        DiagnosticLog.debug("spaceDidChange: pid=\(pid) bundle=\(app.bundleIdentifier ?? "?") — recenter frontmost")
+
+        // 中止进行中的动画（切 Space 期间不应继续写旧窗口位置）。
+        service.abortActiveAnimations()
+        initialCenterTimer?.cancel()
+        initialCenterTimer = nil
+
+        // 清理该 PID 的居中缓存（同 attachToFrontmostApp 的 reactivated-prefix 逻辑），
+        // 使窗口不再被 hasCentered/processedPIDs 拦住，可重新居中。
+        let prefix = "\(pid):"
+        let removedCount = centeredWindowKeySet.filter { $0.hasPrefix(prefix) }.count
+        if removedCount > 0 {
+            DiagnosticLog.debug("spaceDidChange: cleared \(removedCount) cache entries for pid=\(pid)")
+            centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
+            centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
+        }
+        processedPIDs.remove(pid)
+
+        // 重新启动居中重试。复用既有路径：内部有「前台切换走即取消」保护，安全。
+        let appElement = AXUIElementCreateApplication(pid)
+        startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
     }
 
     /// Re-evaluate trust and re-attach if needed. Called when a manual action (e.g. "center now")
@@ -277,6 +325,14 @@ final class WindowEventObserver {
         let appElement = AXUIElementCreateApplication(pid)
         guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: element) else {
             DiagnosticLog.debug("handle[\(notification)]: no centerable candidate window")
+            return false
+        }
+
+        // ChatGPT Atlas（com.openai.atlas）特例：其设置窗口被自动居中后会反复跳动
+        //（窗口自带定位与 Plumb 的居中互相打架），故对该 app 全部窗口一律跳过，
+        // 不居中也不平铺。纯早退：不 markCentered、不锁 processedPIDs，不污染共享缓存语义。
+        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier) {
+            DiagnosticLog.debug("handle[\(notification)]: ChatGPT Atlas window — skip (settings window jitter fix) pid=\(pid)")
             return false
         }
 
@@ -682,6 +738,13 @@ final class WindowEventObserver {
     /// 访达的 DMG 挂载内容窗口与普通文件夹窗口同属 com.apple.finder，仅靠此 id 缩窄 DMG 检测范围。
     private func isFinderBundle(_ bundleIdentifier: String?) -> Bool {
         AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.apple.finder"
+    }
+
+    /// bundle id 是否为 ChatGPT Atlas 浏览器（归一化比较）。
+    /// Atlas 的设置窗口被自动居中后会反复跳动（窗口自带定位与 Plumb 的居中互相打架），
+    /// 故对其全部窗口一律跳过，不居中也不平铺。
+    private func isChatGPTAtlasBundle(_ bundleIdentifier: String?) -> Bool {
+        AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.openai.atlas"
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
