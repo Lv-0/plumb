@@ -117,29 +117,39 @@ final class WindowEventObserver {
 
     /// Space（虚拟桌面）切换处理。
     ///
-    /// 切换 Space 时前台 app 通常不变 → macOS 不发 `didActivateApplicationNotification`
-    /// → `attachToFrontmostApp` 不被调用，且即使被调用也会命中其 `observedPID == pid`
-    /// 早退守卫而直接返回。因此已居中过的窗口永远命中 `processedPIDs`/居中缓存，不会重新居中。
-    ///
-    /// 这里独立处理：绕过早退守卫，清理当前前台 app 的居中缓存与 PID 标记，并重新启动居中重试，
-    /// 使其主窗口能在新 Space 上被重新居中。这是在该场景下对「每个窗口只居中一次」契约的放宽。
-    /// observer 仍绑定在当前 PID，无需重建（与 `attachToFrontmostApp` 切换到新 PID 的区别）。
+    /// 两件事：
+    ///   1. 前台 app 重新居中。切 Space 时若前台 app 不变，macOS 不发 `didActivate`，
+    ///      `attachToFrontmostApp` 也不被调用（且其 `observedPID == pid` 早退守卫会挡住），
+    ///      故已居中窗口永远命中缓存。这里绕过早退守卫，清缓存 + 重启重试。
+    ///      若前台 app 变了（如全屏软件 → 桌面，前台从 X 变 Finder），走 `attachToFrontmostApp` 切 observer。
+    ///   2. 居中当前屏可见的**后台**标准窗口。切回桌面时前台 = Finder，桌面上的 app 窗口是后台，
+    ///      原「只动前台」架构不会碰它们——用户期望这些窗口也被整理居中（打破该契约，用户已确认）。
     @objc private func activeSpaceDidChange() {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else { return }
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              let pid = observedPID,
-              app.processIdentifier == pid
-        else { return }   // 无前台 app 或尚未观察 → 无事可做
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
 
+        // 1) 前台 app：已观察 → 清缓存重启重试；前台变了 → 切 observer。
+        if observedPID == frontmost.processIdentifier {
+            recenterObservedApp(pid: frontmost.processIdentifier)
+        } else {
+            attachToFrontmostApp()
+        }
+
+        // 2) 扫描当前屏可见的后台标准窗口，逐个居中。
+        recenterVisibleBackgroundWindows(excluding: frontmost.processIdentifier)
+    }
+
+    /// 对当前已观察的前台 app 重新居中：中止动画 → 清居中缓存与 PID 标记 → 重启重试。
+    /// 绕过 `attachToFrontmostApp` 的 `observedPID == pid` 早退守卫（切 Space 时前台不变，
+    /// 守卫会挡住，缓存不会清理）。observer 仍绑定当前 PID，无需重建。
+    private func recenterObservedApp(pid: pid_t) {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
         DiagnosticLog.debug("spaceDidChange: pid=\(pid) bundle=\(app.bundleIdentifier ?? "?") — recenter frontmost")
 
-        // 中止进行中的动画（切 Space 期间不应继续写旧窗口位置）。
         service.abortActiveAnimations()
         initialCenterTimer?.cancel()
         initialCenterTimer = nil
 
-        // 清理该 PID 的居中缓存（同 attachToFrontmostApp 的 reactivated-prefix 逻辑），
-        // 使窗口不再被 hasCentered/processedPIDs 拦住，可重新居中。
         let prefix = "\(pid):"
         let removedCount = centeredWindowKeySet.filter { $0.hasPrefix(prefix) }.count
         if removedCount > 0 {
@@ -149,9 +159,57 @@ final class WindowEventObserver {
         }
         processedPIDs.remove(pid)
 
-        // 重新启动居中重试。复用既有路径：内部有「前台切换走即取消」保护，安全。
         let appElement = AXUIElementCreateApplication(pid)
         startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
+    }
+
+    /// 居中当前屏上可见的、非前台 app 的标准窗口（切回桌面场景）。
+    ///
+    /// 打破「只动前台」契约：用户从全屏软件切回桌面后，桌面上的 app 窗口是后台，
+    /// 原 `handle`/`startInitialCenteringRetries` 路径会因前台守卫直接拒绝它们。这里用
+    /// `CGWindowList` 枚举屏上标准窗口（layer==0），筛出当前屏可见、非前台、符合 shouldCenter
+    /// 白名单（且非 Atlas 排除项）的，用 `centerWindowElementAnimated` 直接居中。
+    /// 副作用控制：仅当前屏、仅标准窗口、同一 app 只动一个主窗口。
+    private func recenterVisibleBackgroundWindows(excluding frontmostPID: pid_t) {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            return
+        }
+        // 当前屏：main = 菜单栏/聚焦所在屏。仅动与该屏有实质重叠的窗口，避免误动其他屏。
+        guard let screenRect = NSScreen.main?.frame else { return }
+
+        var seenPIDs: Set<pid_t> = []
+        let settings = tilingSettingsStore.load()
+
+        for info in list {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int else { continue }
+            let pid = pid_t(ownerPID)
+            if pid == frontmostPID { continue }            // 跳过前台 app
+            if seenPIDs.contains(pid) { continue }         // 同 app 只处理一次
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }  // 仅标准窗口层
+            guard let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: boundsDict)
+            else { continue }
+            // 仅当前屏：与当前屏有实质重叠（width/height 均 > 1），排除其他屏 / 桌面特殊层。
+            let overlap = rect.intersection(screenRect)
+            guard !overlap.isNull, overlap.width > 1, overlap.height > 1 else { continue }
+
+            let app = NSRunningApplication(processIdentifier: pid)
+            let bundleID = app?.bundleIdentifier
+            if isChatGPTAtlasBundle(bundleID) { seenPIDs.insert(pid); continue }     // 排除 Atlas
+            if !settings.shouldCenter(bundleIdentifier: bundleID) { seenPIDs.insert(pid); continue }  // 白名单
+
+            let appElement = AXUIElementCreateApplication(pid)
+            guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else { continue }
+            do {
+                try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                markCentered(windowElement: windowElement, pid: pid)
+                DiagnosticLog.debug("spaceDidChange: centered background window pid=\(pid) bundle=\(bundleID ?? "?")")
+            } catch {
+                // 全屏/读取失败等静默跳过（与 handle 的错误语义一致）。
+                DiagnosticLog.debug("spaceDidChange: background center failed pid=\(pid) error=\(error)")
+            }
+            seenPIDs.insert(pid)
+        }
     }
 
     /// Re-evaluate trust and re-attach if needed. Called when a manual action (e.g. "center now")
