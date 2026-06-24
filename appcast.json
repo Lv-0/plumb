@@ -1,7 +1,7 @@
 {
-  "version": "2.0.4",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.4/Plumb-2.0.4.zip",
-  "sha256": "4563a020aab773d6db3b677b94eb900123dabf18a8a04d1032e11edc874db785",
+  "version": "2.0.5",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.5/Plumb-2.0.5.zip",
+  "sha256": "46970cea6e3a57182d51af42f98f2756ad9263305dbc815f08b78e36aa17f97a",
   "notes": {
     "en": "Switching back to a Space (e.g. from a fullscreen app to the desktop) now also centers the visible background windows on that screen — previously only the frontmost app was re-centered, so app windows on the desktop were skipped until you clicked them. Scope is controlled: only the current screen, only standard windows, one main window per app, and the centering allow-list / exclusions (e.g. ChatGPT Atlas) still apply.",
     "zh": "切换桌面（Space）回来时，现在会一并居中当前屏上可见的后台窗口——此前只重新居中前台 app，桌面上的 app 窗口要点击后才会居中。作用范围已控制：仅当前屏、仅标准窗口、每个 app 只动一个主窗口，且仍遵循居中白名单与排除项（如 ChatGPT Atlas）。",
