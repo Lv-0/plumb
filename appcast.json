@@ -1,13 +1,13 @@
 {
-  "version": "2.0.0",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.0/Plumb-2.0.0.zip",
-  "sha256": "298ce9d0868408d05cc0dd2d69b09c11325078dcfd828a64f45b0dd0d0da7da0",
+  "version": "2.0.1",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.1/Plumb-2.0.1.zip",
+  "sha256": "773f62170959fe992088099f099b597ad0c11a95a4a7a1c668f2ce7b2f2001c6",
   "notes": {
-    "en": "Per-app tiling margin: tap any app in the Tiling list to expand an inline margin drawer. Drag the slider to set a custom margin for just that app; apps without a custom setting keep using the global default margin. A \"Use Default\" button resets an app back to the global value. The global margin slider at the top still controls the fallback for every app. Settings persist across updates (stable signing identity, signing-independent settings file).",
-    "zh": "Per-app 平铺边距：在「平铺应用列表」中点击任意应用，行内下拉出边距抽屉。拖动滑块即可为该应用单独设置平铺边距；未单独设置的应用继续使用全局默认边距。抽屉内的「使用默认」按钮可一键回退到全局值。顶部全局边距滑块仍是所有应用的回退默认值。设置跨更新保留（稳定签名身份 + 签名无关的设置文件）。",
-    "es": "Margen de mosaico por app: toca cualquier app en la lista de Mosaico para desplegar un cajón de margen integrado. Arrastra el deslizador para fijar un margen personalizado solo para esa app; las apps sin ajuste personalizado siguen usando el margen global predeterminado. Un botón «Usar predeterminado» restablece una app al valor global. El deslizador de margen global superior sigue controlando el valor de respaldo para todas las apps.",
-    "fr": "Marge de mosaïque par app : touchez une app dans la liste Mosaïque pour déployer un tiroir de marge intégré. Glissez le curseur pour définir une marge personnalisée uniquement pour cette app ; les apps sans réglage personnalisé continuent d'utiliser la marge globale par défaut. Un bouton « Par défaut » réinitialise une app à la valeur globale. Le curseur de marge global en haut contrôle toujours la valeur de repli pour toutes les apps.",
-    "ja": "アプリごとのタイリング余白：タイリングリストでアプリをタップすると、インラインの余白ドロワーが展開します。スライダーをドラッグしてそのアプリだけのカスタム余白を設定できます。カスタム設定のないアプリは引き続きグローバルのデフォルト余白を使います。「デフォルトを使用」ボタンでアプリをグローバル値にリセットできます。上部のグローバル余白スライダーは引き続きすべてのアプリのフォールバック既定値を制御します。"
+    "en": "DMG installer windows now center without tiling: when Finder is in your Tiling list, opening a downloaded .dmg no longer resizes the drag-to-install window, so the App icon + Applications shortcut layout stays intact. USB drives and normal Finder folder windows are unaffected (detected via DiskArbitration, only true disk images are excluded from tiling).",
+    "zh": "DMG 安装窗口不再平铺：当访达在你的平铺列表中时，打开下载的 .dmg 不再放大「拖拽安装」窗口，App 图标 + Applications 快捷方式的布局保持原样。U 盘与普通文件夹窗口不受影响（通过 DiskArbitration 精确识别，仅真正的磁盘映像排除平铺）。",
+    "es": "Las ventanas del instalador DMG ahora se centran sin mosaico: cuando Finder está en tu lista de Mosaico, abrir un .dmg descargado ya no redimensiona la ventana de arrastrar para instalar, por lo que el diseño del icono de la app + atálogo de Applications se mantiene intacto. Las unidades USB y las ventanas normales de carpetas de Finder no se ven afectadas (detectadas vía DiskArbitration, solo las imágenes de disco reales se excluyen del mosaico).",
+    "fr": "Les fenêtres d'installation DMG sont désormais centrées sans mosaïque : lorsque Finder est dans votre liste Mosaïque, l'ouverture d'un .dmg téléchargé ne redimensionne plus la fenêtre glisser pour installer, afin que la disposition de l'icône de l'app + du raccourci Applications reste intacte. Les disques USB et les fenêtres normales de dossiers Finder ne sont pas affectés (détectés via DiskArbitration, seules les vraies images disque sont exclues du mosaïque).",
+    "ja": "DMG インストーラウィンドウがタイリングせず中央配置に：Finder がタイリングリストにある場合、ダウンロードした .dmg を開いてもドラッグ インストール ウィンドウがリサイズされず、App アイコン + Applications ショートカットのレイアウトが維持されます。USB ドライブや通常の Finder フォルダウィンドウには影響しません（DiskArbitration で検出し、本当のディスクイメージのみタイリングから除外します）。"
   },
   "minOS": "26.0"
 }
