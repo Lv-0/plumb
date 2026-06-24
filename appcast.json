@@ -1,7 +1,7 @@
 {
-  "version": "2.0.2",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.2/Plumb-2.0.2.zip",
-  "sha256": "13474bc1dcb3c61c2d82feae673d32bdba986f442186d7bc3adb06b2bfb991fd",
+  "version": "2.0.3",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.3/Plumb-2.0.3.zip",
+  "sha256": "436666bd6fb2cf2cd7e272cab7d48bf96745c39d92fc9bfd7f43b71e51ea18cb",
   "notes": {
     "en": "DMG installer windows now center without tiling: when Finder is in your Tiling list, opening a downloaded .dmg no longer resizes the drag-to-install window, so the App icon + Applications shortcut layout stays intact. USB drives and normal Finder folder windows are unaffected (detected via DiskArbitration, only true disk images are excluded from tiling).",
     "zh": "DMG 安装窗口不再平铺：当访达在你的平铺列表中时，打开下载的 .dmg 不再放大「拖拽安装」窗口，App 图标 + Applications 快捷方式的布局保持原样。U 盘与普通文件夹窗口不受影响（通过 DiskArbitration 精确识别，仅真正的磁盘映像排除平铺）。",
