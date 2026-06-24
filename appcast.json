@@ -1,7 +1,7 @@
 {
-  "version": "2.0.3",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.3/Plumb-2.0.3.zip",
-  "sha256": "436666bd6fb2cf2cd7e272cab7d48bf96745c39d92fc9bfd7f43b71e51ea18cb",
+  "version": "2.0.4",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.4/Plumb-2.0.4.zip",
+  "sha256": "4563a020aab773d6db3b677b94eb900123dabf18a8a04d1032e11edc874db785",
   "notes": {
     "en": "Two fixes: (1) Windows now re-center automatically when you switch back to a Space (virtual desktop) — previously switching Spaces never triggered re-centering. (2) ChatGPT Atlas (com.openai.atlas) settings window no longer fights Plumb's centering (it no longer jitters back and forth); Plumb now skips that app's windows entirely.",
     "zh": "两项修复：（1）切换桌面（Space）回来后窗口会自动重新居中——此前切换 Space 不会触发重新居中。（2）ChatGPT Atlas（com.openai.atlas）的设置窗口不再与 Plumb 的自动居中互相打架（不再来回跳动），Plumb 现在完全跳过该 app 的窗口。",
