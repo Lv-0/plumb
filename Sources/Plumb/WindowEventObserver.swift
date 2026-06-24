@@ -700,10 +700,9 @@ final class WindowEventObserver {
     }
 
     private func windowNumber(of window: AXUIElement) -> Int? {
-        // AXWindowNumber 是 CFNumber；通过共享扩展读取并转成 Int。
+        // AXWindowNumber 是 CFNumber；通过共享扩展以 64 位安全方式读取正整数。
         // nil / 非正数视为无有效窗口编号（调用方会回退到 CFHash 作为 key）。
-        guard let n = window.axInt32("AXWindowNumber" as CFString), n > 0 else { return nil }
-        return Int(n)
+        return window.axPositiveInteger("AXWindowNumber" as CFString)
     }
 
     private func tilePendingWindows(

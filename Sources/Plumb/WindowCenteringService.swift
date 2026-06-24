@@ -83,6 +83,7 @@ enum ResizeOutcome {
     var didResize: Bool { self != .failed }
 }
 
+@MainActor
 final class WindowCenteringService {
     private enum RawSpace {
         case globalBottomLeft
@@ -1089,9 +1090,12 @@ final class WindowCenteringService {
     }
 
     private func windowIDAttribute(on window: AXUIElement) -> CGWindowID? {
-        // AXWindowNumber 为 CFNumber；通过共享扩展读取 Int32，再转 CGWindowID。
-        guard let n = window.axInt32("AXWindowNumber" as CFString), n > 0 else { return nil }
-        return CGWindowID(n)
+        // AXWindowNumber 为 CFNumber；通过共享扩展以 64 位安全方式读取正整数。
+        // CGWindowID 是 UInt32，故只接受落在 1...UInt32.max 的值（窗口编号总在此范围内）。
+        guard let n = window.axPositiveInteger("AXWindowNumber" as CFString),
+              (1...Int(UInt32.max)).contains(n)
+        else { return nil }
+        return CGWindowID(UInt32(n))
     }
 
     private func cgWindowBounds(

@@ -71,14 +71,17 @@ extension AXUIElement {
         return (value as? [AXUIElement]) ?? []
     }
 
-    /// 读取一个 CFNumber 属性并按 Int 返回（如 `AXWindowNumber`）。
-    /// 用于需要窗口编号等数值型属性的场景。非 CFNumber 或读取失败返回 nil。
-    func axInt32(_ attribute: CFString) -> Int32? {
+    /// 读取一个 CFNumber 属性并按 64 位安全的方式返回正整数（如 `AXWindowNumber`）。
+    ///
+    /// AXWindowNumber 在实际系统中可能超过 Int32.max（窗口编号是单调递增的 32 位无符号值，
+    /// 接近上限时会很大）。旧实现用 `.sInt32Type` 解码，超过 Int32.max 的值会被截断/溢出，
+    /// 导致 windowID 错误、坐标推断拿不到正确窗口。这里改用 `.sInt64Type` 完整解码，
+    /// 并要求结果为正数（窗口编号总是正的）。
+    /// 非 CFNumber、读取失败或非正值返回 nil。
+    func axPositiveInteger(_ attribute: CFString) -> Int? {
         guard let value = axRawValue(attribute) else { return nil }
         guard CFGetTypeID(value) == CFNumberGetTypeID() else { return nil }
-        var n: Int32 = 0
-        guard CFNumberGetValue(value as! CFNumber, .sInt32Type, &n) else { return nil }
-        return n
+        return AXAttributeAccess.positiveInteger(from: value as! CFNumber)
     }
 
     /// 底层：执行 AXUIElementCopyAttributeValue 并返回原始 CFTypeRef。
@@ -89,5 +92,20 @@ extension AXUIElement {
             return nil
         }
         return value
+    }
+}
+
+// MARK: - 纯函数数值解码（可单测）
+
+enum AXAttributeAccess {
+    /// 将一个 CFNumber 以 64 位安全的方式解码为正整数。
+    ///
+    /// 抽出为纯函数（不依赖活体 AXUIElement）以便单测覆盖关键语义：
+    /// 用 `.sInt64Type` 解码，避免旧 `.sInt32Type` 在值 > Int32.max 时溢出截断。
+    /// 返回 nil 表示值非正或解码失败。供 `AXUIElement.axPositiveInteger` 复用。
+    static func positiveInteger(from number: CFNumber) -> Int? {
+        var n: Int64 = 0
+        guard CFNumberGetValue(number, .sInt64Type, &n) else { return nil }
+        return n > 0 ? Int(n) : nil
     }
 }

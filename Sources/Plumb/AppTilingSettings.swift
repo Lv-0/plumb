@@ -222,6 +222,14 @@ final class AppTilingSettingsStore {
     /// 测试可注入临时路径。
     private let settingsFileURL: URL
 
+    /// 内存缓存：避免窗口事件热路径每次都同步读 settings.json。
+    /// store 本身不是 @MainActor（设置 UI、Observer、AppDelegate 都可能从主线程访问），
+    /// 但读路径必须线程安全——用 NSLock 保护。
+    /// 语义：nil 表示尚未加载（首次 load 会落盘读取并回填）；save() 写盘后同步更新为最新值。
+    /// 新 store 实例缓存为 nil，仍从文件/Defaults 读取，保证重启/OTA 持久化测试成立。
+    private var cachedSettings: AppTilingSettings?
+    private let cacheLock = NSLock()
+
     init(defaults: UserDefaults = .standard, settingsFileURL: URL? = nil) {
         self.defaults = defaults
         if let settingsFileURL {
@@ -245,6 +253,25 @@ final class AppTilingSettingsStore {
     }
 
     func load() -> AppTilingSettings {
+        // 热路径优化：命中缓存直接返回，避免每次都同步读 settings.json。
+        // 缓存由首次 load() 或 save() 填充；新 store 实例缓存为空，仍走落盘读取。
+        cacheLock.lock()
+        if let cached = cachedSettings {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let settings = loadUncached()
+
+        cacheLock.lock()
+        cachedSettings = settings
+        cacheLock.unlock()
+        return settings
+    }
+
+    /// 不经过缓存的落盘读取（保留原有文件优先 → UserDefaults fallback → 一次性迁移 → 一致性修复逻辑）。
+    private func loadUncached() -> AppTilingSettings {
         // 1) 优先读文件（签名无关、跨更新稳定）。
         if let fileSettings = readFromFile() {
             // 一致性守卫：文件解码成功，但其列表条目总数严格少于 UserDefaults 镜像时，
@@ -294,6 +321,11 @@ final class AppTilingSettingsStore {
         // 任一失败不阻塞另一个：文件写失败仍写 UserDefaults（降级），UserDefaults 写失败不影响文件。
         writeToFile(normalized)
         saveToUserDefaults(normalized)
+
+        // 更新内存缓存：后续 load() 命中缓存即返回，无需再读盘。
+        cacheLock.lock()
+        cachedSettings = normalized
+        cacheLock.unlock()
     }
 
     // MARK: - File persistence（主存储，签名无关）
