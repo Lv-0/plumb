@@ -437,15 +437,15 @@ final class WindowEventObserver {
             }
 
             // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
-            // 这些 App 启动时常先弹出模板/文件列表窗口（kAXDocument 为空、AXTitle 也为空），
-            // 再打开真正文档窗口（kAXDocument 为 file:// URL）。两者 subrole 都是 AXStandardWindow，
-            // 仅凭 subrole 无法区分。
+            // 这些 App 有三类「无 kAXDocument」窗口（subrole 均 AXStandardWindow）：文件列表、
+            // 模板选择器、新建未保存文档。只有「新建未保存文档」该平铺，前两类只居中。
             //
-            // 判据（见 windowHasDocument / isDocumentChooserGalleryWindow 注释的实测证据）：
+            // 判据（见 isDocumentChooserGalleryWindow 注释的时间序列实测证据）：
             //   - 有 kAXDocument（已保存文档）→ 落到下方正常平铺逻辑。
-            //   - 无 kAXDocument + AXTitle 为空（模板选择器）→ 本分支只居中、不平铺。
-            //   - 无 kAXDocument + AXTitle 非空（新建未保存文档，如「未命名」）→ 落到下方平铺。
-            // （原先无 kAXDocument 一律只居中，导致 Pages 新建文档不平铺；现用 AXTitle 空否区分。）
+            //   - 无 kAXDocument + 子元素数 < 6（文件列表 kids=1 / 模板选择器 kids=5）→ 本分支只居中。
+            //   - 无 kAXDocument + 子元素数 ≥ 6（新建未保存文档 kids=6）→ 落到下方平铺。
+            // （AXTitle 判据曾两次失败：文件列表标题非空致方向错、新文档标题填充延迟 2.85s 致时序错。
+            //  改用子元素数——结构性硬特征，状态切换瞬间即准确，不受标题时序/语言影响。）
             //
             // 关键：本分支【不】锁 processedPIDs、也【不】markCentered —— 否则后续真正文档窗口
             // （含同一窗口保存后获得 kAXDocument）会被第 270 行或 hasCentered 永久挡住，无法平铺
@@ -924,25 +924,31 @@ final class WindowEventObserver {
 
     /// 判断一个无文档窗口是否为「模板选择器 / 文件画廊」（而非新建的未保存文档窗口）。
     ///
-    /// 背景：文档类 App（Pages/Numbers/Word/Excel）的「模板选择器」和「新建未保存文档」
-    /// 两类窗口的 `kAXDocumentAttribute` 均为空、subrole 均为 AXStandardWindow，仅凭这两个
-    /// 属性无法区分（见 windowHasDocument 注释）。原先一律按「选择器」处理 → 只居中，导致
-    /// Pages 新建文档后窗口不会被平铺（用户报告的 bug）。
+    /// 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口，subrole 均
+    /// 为 AXStandardWindow，仅凭 subrole 与 kAXDocument 无法区分：
+    ///   - 文件列表（「打开」面板）
+    ///   - 模板选择器
+    ///   - 新建未保存文档（标题「未命名」）
+    /// 其中只有「新建未保存文档」应当平铺，前两类只居中。
     ///
-    /// 判据：**AXTitle 为空 = 模板选择器**。来自实测证据（Pages）：
-    ///   - 模板选择器窗口：AXTitle == ""（结构性无标题）、无全屏按钮、子元素 5 个。
-    ///   - 新建文档窗口：AXTitle == "未命名"（及保存后的文件名）、有全屏按钮、子元素 6 个。
-    /// 模板选择器是【结构性无标题】（稳态特征），并非「标题尚未填充」的时序假象，故判
-    /// 「空 vs 非空」稳健。
+    /// 判据：**窗口直接子元素数 < 6 = 非文档窗口（选择器/文件列表）**。来自实测时间序列
+    /// 证据（Pages，每 0.15s 采样一次，覆盖从模板选择器到点选模板创建文档的全过程）：
+    ///   - 文件列表：kids=1
+    ///   - 模板选择器：kids=5（18 个采样点全部稳定为 5）
+    ///   - 新建文档：kids=6（状态切换瞬间【立即、稳定】跳变为 6，无任何填充延迟）
     ///
-    /// 与被废弃的「标题匹配」方案的区别：那个方案匹配【特定文案】（如 "Choose a Template"），
-    /// 受本地化与时序双重影响而失败；本判据只看【空与否】，规避了文案问题。
-    /// 残余风险：新建文档窗口刚出现的极短时间内「未命名」标题可能尚未填充 → 被当作选择器
-    /// 居中；但 initialCenterTimer 的重试（平铺 app 重试至 24 次）会在标题填充后重新命中
-    /// 平铺分支，故不会永久卡在居中态。
+    /// 为什么不用 AXTitle（曾尝试过的判据，已两次失败）：
+    ///   1. 方向错：文件列表的标题是「打开」（非空），「标题空=选择器」会把文件列表当成新
+    ///      文档 → 误平铺。
+    ///   2. 时序错：时间序列实测显示，新建文档窗口出现后标题【空了整整 2.85s】才变成「未命名」，
+    ///      而 handle() 在 ~0.45s 就触发——此刻标题还是空的 → 被当成选择器 → 只居中（永远
+    ///      卡在居中态，因为后续不再触发）。这正是 AXTitle 不可靠的根因。
+    /// 子元素数则是结构性硬特征：在窗口状态切换的瞬间就准确，不受标题填充时序、语言影响。
     private func isDocumentChooserGalleryWindow(_ window: AXUIElement) -> Bool {
-        let title = window.axString(kAXTitleAttribute as CFString) ?? ""
-        return title.isEmpty
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &childrenRef)
+        let count = (childrenRef as? [AXUIElement])?.count ?? 0
+        return count < 6
     }
 
     /// bundle id 是否为访达（归一化比较）。
