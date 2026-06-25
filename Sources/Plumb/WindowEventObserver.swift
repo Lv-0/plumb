@@ -437,12 +437,15 @@ final class WindowEventObserver {
             }
 
             // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
-            // 这些 App 启动时常先弹出模板/文件列表窗口（kAXDocument 为空），再打开真正文档窗口
-            // （kAXDocument 为 file:// URL）。两者 subrole 都是 AXStandardWindow，仅凭 subrole 无法区分。
+            // 这些 App 启动时常先弹出模板/文件列表窗口（kAXDocument 为空、AXTitle 也为空），
+            // 再打开真正文档窗口（kAXDocument 为 file:// URL）。两者 subrole 都是 AXStandardWindow，
+            // 仅凭 subrole 无法区分。
             //
-            // 判据：只看 kAXDocument（弃用「标题匹配」方案，见 windowHasDocument 注释）。
-            //   - 无 kAXDocument（选择器 / 未保存新文档）→ 只居中、不平铺。
+            // 判据（见 windowHasDocument / isDocumentChooserGalleryWindow 注释的实测证据）：
             //   - 有 kAXDocument（已保存文档）→ 落到下方正常平铺逻辑。
+            //   - 无 kAXDocument + AXTitle 为空（模板选择器）→ 本分支只居中、不平铺。
+            //   - 无 kAXDocument + AXTitle 非空（新建未保存文档，如「未命名」）→ 落到下方平铺。
+            // （原先无 kAXDocument 一律只居中，导致 Pages 新建文档不平铺；现用 AXTitle 空否区分。）
             //
             // 关键：本分支【不】锁 processedPIDs、也【不】markCentered —— 否则后续真正文档窗口
             // （含同一窗口保存后获得 kAXDocument）会被第 270 行或 hasCentered 永久挡住，无法平铺
@@ -452,9 +455,10 @@ final class WindowEventObserver {
             // 设计决策：选择器居中不受 shouldCenter 白名单约束——只要该 App 在平铺白名单 +
             // 选择器感知列表内，选择器一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
             if tilingSettings.isDocumentChooserApp(bundleIdentifier: frontmostApp.bundleIdentifier),
-               !windowHasDocument(windowElement)
+               !windowHasDocument(windowElement),
+               isDocumentChooserGalleryWindow(windowElement)
             {
-                DiagnosticLog.debug("handle[\(notification)]: chooser/no-doc window — center only, keep PID unlocked, not marked pid=\(pid)")
+                DiagnosticLog.debug("handle[\(notification)]: gallery window — center only, keep PID unlocked, not marked pid=\(pid)")
                 do {
                     try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
                     // 不 markCentered：允许窗口后续获得 kAXDocument 时被平铺。
@@ -916,6 +920,29 @@ final class WindowEventObserver {
     private func windowHasDocument(_ window: AXUIElement) -> Bool {
         let doc = window.axString(kAXDocumentAttribute as CFString) ?? ""
         return !doc.isEmpty
+    }
+
+    /// 判断一个无文档窗口是否为「模板选择器 / 文件画廊」（而非新建的未保存文档窗口）。
+    ///
+    /// 背景：文档类 App（Pages/Numbers/Word/Excel）的「模板选择器」和「新建未保存文档」
+    /// 两类窗口的 `kAXDocumentAttribute` 均为空、subrole 均为 AXStandardWindow，仅凭这两个
+    /// 属性无法区分（见 windowHasDocument 注释）。原先一律按「选择器」处理 → 只居中，导致
+    /// Pages 新建文档后窗口不会被平铺（用户报告的 bug）。
+    ///
+    /// 判据：**AXTitle 为空 = 模板选择器**。来自实测证据（Pages）：
+    ///   - 模板选择器窗口：AXTitle == ""（结构性无标题）、无全屏按钮、子元素 5 个。
+    ///   - 新建文档窗口：AXTitle == "未命名"（及保存后的文件名）、有全屏按钮、子元素 6 个。
+    /// 模板选择器是【结构性无标题】（稳态特征），并非「标题尚未填充」的时序假象，故判
+    /// 「空 vs 非空」稳健。
+    ///
+    /// 与被废弃的「标题匹配」方案的区别：那个方案匹配【特定文案】（如 "Choose a Template"），
+    /// 受本地化与时序双重影响而失败；本判据只看【空与否】，规避了文案问题。
+    /// 残余风险：新建文档窗口刚出现的极短时间内「未命名」标题可能尚未填充 → 被当作选择器
+    /// 居中；但 initialCenterTimer 的重试（平铺 app 重试至 24 次）会在标题填充后重新命中
+    /// 平铺分支，故不会永久卡在居中态。
+    private func isDocumentChooserGalleryWindow(_ window: AXUIElement) -> Bool {
+        let title = window.axString(kAXTitleAttribute as CFString) ?? ""
+        return title.isEmpty
     }
 
     /// bundle id 是否为访达（归一化比较）。
