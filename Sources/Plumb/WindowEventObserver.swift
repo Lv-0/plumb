@@ -47,6 +47,14 @@ final class WindowEventObserver {
     private var processedPIDs: Set<pid_t> = []
     private var initialCenterTimer: DispatchSourceTimer?
     private var tileStabilizeTimer: DispatchSourceTimer?
+    /// resize 后「延迟重铺」的防抖定时器。
+    ///
+    /// 用于应对 Terminal 这类 app：在同一个窗口内开关标签页，会因「字符网格对齐 + 标签栏
+    /// 出现/消失」改变窗口尺寸，但既不触发 focusedWindowChanged 也不触发 windowCreated，
+    /// 且标签页共享 windowNumber → 命不中原有缓存 → 已平铺窗口不会被重新平铺。
+    /// 改为：监听 `kAXResizedNotification`，尺寸变化后防抖 ~0.4s（合并多次抖动），
+    /// 仅当窗口明显偏离平铺目标（>16px）时重新平铺。仅对平铺白名单内的 app 生效。
+    private var resizeRetileTimer: DispatchSourceTimer?
 
     init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore, dmgMonitor: DmgMountMonitor? = nil) {
         self.service = service
@@ -99,6 +107,8 @@ final class WindowEventObserver {
         initialCenterTimer = nil
         tileStabilizeTimer?.cancel()
         tileStabilizeTimer = nil
+        resizeRetileTimer?.cancel()
+        resizeRetileTimer = nil
         service.abortActiveAnimations()
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -242,6 +252,8 @@ final class WindowEventObserver {
             initialCenterTimer = nil
             tileStabilizeTimer?.cancel()
             tileStabilizeTimer = nil
+            resizeRetileTimer?.cancel()
+            resizeRetileTimer = nil
             // 被观察的 app 退出时，其进行中的平铺/居中动画也必须停止，否则 Phase-B 定时器
             // 会在已退出的 pid 上继续尝试写 AX（必然失败，但仍占用 activeAnimationKey 锁）。
             service.abortActiveAnimations()
@@ -282,6 +294,8 @@ final class WindowEventObserver {
 
         initialCenterTimer?.cancel()
         initialCenterTimer = nil
+        resizeRetileTimer?.cancel()
+        resizeRetileTimer = nil
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
@@ -327,7 +341,8 @@ final class WindowEventObserver {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let r1 = AXObserverAddNotification(newObserver, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
         let r2 = AXObserverAddNotification(newObserver, appElement, kAXWindowCreatedNotification as CFString, refcon)
-        DiagnosticLog.debug("attach: observer added; focusedChanged=\(r1.rawValue) windowCreated=\(r2.rawValue)")
+        let r3 = AXObserverAddNotification(newObserver, appElement, kAXResizedNotification as CFString, refcon)
+        DiagnosticLog.debug("attach: observer added; focusedChanged=\(r1.rawValue) windowCreated=\(r2.rawValue) resized=\(r3.rawValue)")
 
         // 不在 attach 当下立即居中：app 刚被激活时 macOS 还在做激活动画，窗口位置/尺寸在抖动，
         // 此时探测坐标空间与读取 visibleFrame 都不稳定，会导致居中位置算错（"切换后居中没考虑
@@ -372,6 +387,13 @@ final class WindowEventObserver {
         if let observedPID, observedPID != pid {
             DiagnosticLog.debug("handle[\(notification)]: stale — observedPID=\(observedPID) pid=\(pid), skip")
             return false
+        }
+
+        // resize 事件走独立旁路：必须在下方 processedPIDs 守卫之前分流，否则一个已平铺的窗口
+        //（PID 已被锁）在尺寸因标签开关变化后，事件会被 PID 锁直接 short-circuit，永远无法重铺。
+        // handleResize 内部自带 frontmost 守卫已由上方覆盖、白名单守卫、subrole 守卫与防抖。
+        if notification == (kAXResizedNotification as String) {
+            return handleResize(element: element, forcedPID: forcedPID)
         }
 
         // Bug #3: 本激活周期内此 PID 的主窗口已完成居中/平铺 → 跳过任何后续窗口事件
@@ -755,6 +777,103 @@ final class WindowEventObserver {
         }
         tileStabilizeTimer = timer
         timer.resume()
+    }
+
+    /// 处理 `kAXResizedNotification`：在窗口尺寸变化后延迟重新平铺。
+    ///
+    /// 场景：Terminal 这类 app 在同一窗口内开关标签页时，会因「字符网格对齐 + 标签栏出现/消失」
+    /// 改变窗口尺寸。原监听集合（focusedWindowChanged / windowCreated）覆盖不到该场景，且
+    /// 标签页共享 windowNumber 命不中原有缓存 → 已平铺窗口不会被重铺（用户报告的 bug）。
+    ///
+    /// 本方法是一条【独立旁路】：
+    ///   - 仅对平铺白名单内的 app 生效（shouldTile == true），居中类 app 一律不响应 resize。
+    ///   - 防抖 ~0.4s：合并开关标签时的连续多次 resize 抖动，只触发一次重铺评估。
+    ///   - 重铺前用 isWindowNearTiledTarget 判定：尺寸已在平铺目标 16px 容差内 → 不做事，
+    ///     避免对已是平铺态的窗口反复触发动画。
+    ///   - 进行中的动画（isAnyAnimationInProgress）跳过本回合，防止与自身平铺动画叠加。
+    ///   - 刻意【不】触碰 processedPIDs / markCentered：resize 重铺不应破坏原「一次即可」语义，
+    ///     也避免二级窗口因 resize 被误触发。
+    ///
+    /// 关于「用户手动拖动改尺寸」：按设计取舍，白名单 app 本就应处于平铺态，手动改尺寸被拉回
+    /// 属可接受行为；故此处不区分「用户手势 vs 标签 resize」，偏移即重铺。
+    ///
+    /// `element`：resize 通知的 element 通常就是被缩放的窗口本身（非 app 元素）。
+    private func handleResize(element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
+        // pid 已由 handle() 入口解析过；这里仅做必要的合法性确认。
+        guard let pid = forcedPID ?? NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            DiagnosticLog.debug("handle[resize]: cannot resolve pid, skip")
+            return false
+        }
+        // 仅前台 app：与 handle() 一致，避免对后台窗口的 resize 做任何写操作。
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            DiagnosticLog.debug("handle[resize]: frontmost != pid \(pid), skip")
+            return false
+        }
+        // stale observer 守卫：与 handle() 一致。
+        if let observedPID, observedPID != pid {
+            DiagnosticLog.debug("handle[resize]: stale — observedPID=\(observedPID) pid=\(pid), skip")
+            return false
+        }
+
+        // 仅平铺白名单 app 响应 resize；居中类 app 尺寸变化不重铺（保持原行为）。
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              tilingSettingsStore.load().shouldTile(bundleIdentifier: bundleID)
+        else {
+            DiagnosticLog.debug("handle[resize]: pid \(pid) not in tile whitelist, skip")
+            return false
+        }
+
+        // resize 通知的 element 应是窗口本身；校验 role == AXWindow，并排除 dialog/floating 等辅助窗口。
+        // 直接复用 isMovableNonAuxiliaryWindow 的「真实窗口 + 非辅助类型」判定（不强制 AXStandardWindow，
+        // 因部分 app 主窗口 subrole 缺失）。
+        guard isMovableNonAuxiliaryWindow(element) else {
+            DiagnosticLog.debug("handle[resize]: element not a movable non-auxiliary window, skip")
+            return false
+        }
+
+        let appElement = AXUIElementCreateApplication(pid)
+        let edgeMargin = tilingSettingsStore.load().effectiveMargin(for: bundleID)
+        let windowElement = element
+
+        DiagnosticLog.debug("handle[resize]: scheduling retile for pid=\(pid) bundle=\(bundleID)")
+
+        // 防抖：每次 resize 重置定时器，停止抖动 ~0.4s 后才评估重铺。
+        resizeRetileTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.40)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.resizeRetileTimer = nil
+
+            // 切走/退出后残留的定时器不应在后台写窗口（与 abortActiveAnimations 同理念）。
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                DiagnosticLog.debug("handle[resize]: fired but no longer frontmost pid=\(pid), skip")
+                return
+            }
+
+            // 与自身平铺动画叠加会导致「来回拉扯」：进行中则放弃本回合。
+            if self.service.isAnyAnimationInProgress {
+                DiagnosticLog.debug("handle[resize]: animation in progress, skip this round")
+                return
+            }
+
+            // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
+            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, edgeMargin: edgeMargin) {
+                DiagnosticLog.debug("handle[resize]: window already near tiled target, skip retile")
+                return
+            }
+
+            DiagnosticLog.debug("handle[resize]: window off target → retile pid=\(pid)")
+            _ = try? self.service.tileWindowElementAnimated(
+                windowElement,
+                pid: pid,
+                appElement: appElement,
+                edgeMargin: edgeMargin
+            )
+        }
+        resizeRetileTimer = timer
+        timer.resume()
+        return true
     }
 
     /// 窗口当前尺寸是否已接近平铺目标（用于停止平铺稳定重试）。
