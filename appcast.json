@@ -1,7 +1,7 @@
 {
-  "version": "2.0.11",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.11/Plumb-2.0.11.zip",
-  "sha256": "7564c523ab8579d74bd0084737d3e919b706edc82c043666e5e2e2b302aec4c2",
+  "version": "2.0.12",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.12/Plumb-2.0.12.zip",
+  "sha256": "431661f6d05b486b8810f2f474457637dfd7b4444ae3178d51c89890402e4893",
   "notes": {
     "en": "New: Hide the menu-bar icon. A new toggle in Settings → Permissions removes the droplet icon from the menu bar while centering and tiling keep running in the background. To get back into Settings once the icon is hidden, open Plumb twice in a row (within 3 seconds) — the Settings window appears. No behavior change unless you turn the toggle on. 148 tests pass (4 new for the setting).",
     "zh": "新增：隐藏菜单栏图标。在「设置 → 权限」新增开关，开启后水滴图标从菜单栏消失，但居中与平铺继续在后台运行。隐藏后要重新进入设置，连续两次打开 Plumb（间隔 3 秒内）即可弹出设置窗口。不开启该开关则行为完全不变。148 项测试通过（含 4 项新设置测试）。",
