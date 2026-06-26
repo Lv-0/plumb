@@ -32,22 +32,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
-    /// 逃生口（菜单栏图标隐藏时）：记录上一次「应用被重新激活」的时间。
-    /// 若距上次激活 ≤ 3 秒即视为「连续两次打开」→ 弹出设置。超过 3 秒重新计数。
+    /// 逃生口（菜单栏图标隐藏时）：记录上一次「应用被打开」的时间。
+    /// 若距上次打开 ≤ 3 秒即视为「连续两次打开」→ 弹出设置。超过 3 秒重新计数。
     ///
-    /// 注：原先挂在 `applicationShouldHandleReopen` 上，但隐藏菜单栏图标后 Plumb 是
-    /// 纯后台 agent（无 Dock 图标 / 无菜单栏图标 / 无窗口），系统在再次双击 .app 时
-    /// 不投递 reopen 事件 → 计数逻辑形同死代码。故改为监听 `applicationDidBecomeActive`
-    /// （对 agent app 可靠），并屏蔽「我们自己开设置造成的激活」。
+    /// 信号选型（经历两轮实测验证）：
+    ///   - `applicationShouldHandleReopen`：隐藏图标后是纯后台 agent，系统在再次双击
+    ///     .app 时不投递 reopen 事件 → 完全不触发（死代码）。
+    ///   - `applicationDidBecomeActive`：第一次 open 会触发，但第二次 open（app 已是
+    ///     active 时）系统合并、不再派发第二次回调 → 双击只有一次回调，无法计数。
+    ///   - `kAEOpenApplication` Apple Event（最终方案）：每次 Launch Services 打开 app
+    ///     都派发，**即使 app 已在运行 / 已是 active**，是唯一可靠的「再次打开」信号。
     private var lastReopenDate: Date?
 
-    /// 屏蔽「我们自己开设置」造成的激活：openSettings → setActivationPolicy(.regular)
-    /// 会触发一次 applicationDidBecomeActive，需用此标志跳过，避免自激误判计数。
-    private var suppressActivationCount = false
+    /// 排除「应用首次启动」那一次 kAEOpenApplication：launch 时也会派发一次该事件，
+    /// 但那不是「重新打开」，不应计入双击计数。
+    private var hasObservedInitialOpen = false
 
     /// 监听「隐藏菜单栏图标」开关变化的观察者。
     /// AppDelegate 与 app 同生命周期，无需显式移除（闭包用 [weak self]，无循环引用）。
     private var statusBarVisibilityObserver: NSObjectProtocol?
+
+    /// 早在 `applicationDidFinishLaunching` 之前注册 kAEOpenApplication 处理器。
+    /// 必须在此刻注册——kAEOpenApplication 事件在 launch 早期就被派发，若等到
+    /// `applicationDidFinishLaunching` 再注册，就会错过首次事件，且后续 reopen 也可能
+    /// 因注册时机问题而不触发（agent app 尤其敏感）。
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleOpenApplication(_:andReceiveEvent:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenApplication)
+        )
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 按设置决定是否显示菜单栏图标：默认显示；开启「隐藏菜单栏图标」则不创建。
@@ -66,33 +82,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: 菜单栏图标隐藏时的逃生口
 
-    /// 监听「应用被重新激活」——对 agent（无 Dock 图标）app，这是「再次打开」最可靠的信号。
+    /// `kAEOpenApplication` Apple Event 处理器——每次 Launch Services 打开 app 都派发，
+    /// **即使 app 已在运行 / 已是 active**。这是「再次打开」最可靠的信号。
     ///
-    /// 为何不用 `applicationShouldHandleReopen`：隐藏菜单栏图标后 Plumb 是纯后台 agent
-    /// （无 Dock 图标 / 无菜单栏图标 / 无窗口），系统在再次双击 .app 时通常只静默置前、
-    /// 不投递 reopen 事件，导致原实现完全不触发（实测「完全没反应」）。
-    ///
-    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次激活（间隔 ≤ 3 秒）** 即弹出设置，
+    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ 3 秒）** 即弹出设置，
     /// 这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
-    func applicationDidBecomeActive(_ notification: Notification) {
-        // 屏蔽「我们自己开设置」造成的激活：setActivationPolicy(.regular) + activate
-        // 会触发本回调，清掉标志位后立即返回，不计入「打开」计数。
-        if suppressActivationCount {
-            suppressActivationCount = false
+    @objc private func handleOpenApplication(
+        _ handler: NSAppleEventManager,
+        andReceiveEvent event: NSAppleEventDescriptor,
+        withReplyEvent replyEvent: NSAppleEventDescriptor
+    ) {
+        // 排除应用首次启动那一次（launch 时也会派发 kAEOpenApplication）。
+        guard hasObservedInitialOpen else {
+            hasObservedInitialOpen = true
+            DiagnosticLog.debug("AppDelegate: kAEOpenApplication (initial launch, handler registered ✓)")
             return
         }
 
-        // 诊断信号：确认本回调在 agent app 下确实触发（measure, don't guess）。
-        DiagnosticLog.debug("AppDelegate: applicationDidBecomeActive (reopening, iconHidden=\(tilingSettingsStore.load().hideStatusBarIcon))")
+        let iconHidden = tilingSettingsStore.load().hideStatusBarIcon
+        DiagnosticLog.debug("AppDelegate: kAEOpenApplication (reopening, iconHidden=\(iconHidden))")
 
-        guard tilingSettingsStore.load().hideStatusBarIcon else { return }
+        guard iconHidden else { return }
         let now = Date()
         if let last = lastReopenDate, now.timeIntervalSince(last) <= 3 {
             // 第二次打开 → 弹出设置，并清零计数（避免第三次误触发）。
             lastReopenDate = nil
             openSettings()
         } else {
-            // 第一次打开 → 静默记录时间，留待下一次激活判定。
+            // 第一次打开 → 静默记录时间，留待下一次打开判定。
             lastReopenDate = now
         }
     }
@@ -143,9 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        // openSettings → showWindow 会 setActivationPolicy(.regular) + activate，从而触发
-        // applicationDidBecomeActive。置此标志让该次自激激活被跳过，不误计为「一次打开」。
-        suppressActivationCount = true
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(store: tilingSettingsStore)
         }

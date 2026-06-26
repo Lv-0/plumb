@@ -436,6 +436,19 @@ final class WindowEventObserver {
                 return false
             }
 
+            // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info 等）常报告
+            // AXStandardWindow subrole，会绕过 subrole 过滤被误平铺。命中屏蔽列表且候选不是主窗口
+            //（候选 ≠ kAXMainWindowAttribute）时完全跳过——不平铺、不居中、不 markCentered、
+            // 不锁 processedPIDs，保持其弹出位置。主窗口（候选 == 主窗口）不受影响，正常平铺。
+            // 仿上方 Atlas 设置窗口特例（419-424）的纯早退语义。补的是「PID 锁被清除（Space 切换/
+            // 重新激活）或二级窗口先于主窗口到达」时空档——其余情况下 processedPIDs 锁已拦截。
+            if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
+               isSecondaryWindowOfApp(windowElement, appElement: appElement)
+            {
+                DiagnosticLog.debug("handle[\(notification)]: shielded browser/Finder secondary window — skip (no tile, no center) pid=\(pid)")
+                return false
+            }
+
             // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
             // 这些 App 有三类「无 kAXDocument」窗口（subrole 均 AXStandardWindow）：文件列表、
             // 模板选择器、新建未保存文档。只有「新建未保存文档」该平铺，前两类只居中。
@@ -960,6 +973,43 @@ final class WindowEventObserver {
     /// bundle id 是否为 ChatGPT Atlas 浏览器（归一化比较）。
     private func isChatGPTAtlasBundle(_ bundleIdentifier: String?) -> Bool {
         AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.openai.atlas"
+    }
+
+    /// 需要屏蔽「二级窗口平铺」的浏览器 bundle id（归一化小写比较）。
+    /// 这些 App 的二级窗口（设置/下载/弹窗/PWA/扩展窗）常报告 AXStandardWindow subrole，
+    /// 会绕过 subrole 过滤被误平铺。硬编码默认覆盖主流浏览器；访达单独由 isFinderBundle 处理。
+    private static let secondaryWindowShieldedBundleIDs: Set<String> = [
+        "com.apple.safari",
+        "com.google.chrome",
+        "com.microsoft.edgemac",
+        "org.mozilla.firefox",
+        "com.brave.browser",
+        "company.thebrowser.browser",   // Arc
+        "com.vivaldi.vivaldi",
+        "com.operasoftware.opera"
+    ]
+
+    /// bundle id 是否属于「需屏蔽二级窗口平铺」的浏览器或访达（归一化比较）。
+    /// 作用域收窄：仅命中此集合的 App 才进入二级窗口跳过逻辑，不影响文档类 App 或其他白名单 App。
+    private func shieldedFromSecondaryWindowTiling(_ bundleIdentifier: String?) -> Bool {
+        let id = AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "")
+        return Self.secondaryWindowShieldedBundleIDs.contains(id) || id == "com.apple.finder"
+    }
+
+    /// 判定候选窗口是否为该 App 的【非主】窗口（即二级窗口）。
+    ///
+    /// 判据：候选窗口 ≠ `kAXMainWindowAttribute` 返回的主窗口（用 CFEqual 比较 AXUIElement，
+    /// 与 tilePendingWindows 的窗口比较方式一致）。`kAXMainWindowAttribute` 是结构性硬特征，
+    /// 由系统维护，不受标题填充时序/语言影响（AXTitle 判据曾两次因时序竞争失败，见 447/908-914 注释）。
+    /// - 主窗口缺失（nil）：无法判定，保守地视为「主窗口」返回 false
+    ///   （不平铺一次的风险 < 误跳过主窗口致其永远不平铺的风险，与「主窗口优先平铺」预期一致）。
+    /// - 候选 == 主窗口：返回 false（是主窗口，正常平铺）。
+    /// - 候选 ≠ 主窗口：返回 true（二级窗口 → 跳过）。
+    private func isSecondaryWindowOfApp(_ window: AXUIElement, appElement: AXUIElement) -> Bool {
+        guard let main = appElement.axWindowElement(kAXMainWindowAttribute as CFString) else {
+            return false  // 主窗口不可得：保守视为主窗口，不跳过
+        }
+        return !CFEqual(main, window)
     }
 
     /// Atlas 窗口是否为「设置窗口」。
