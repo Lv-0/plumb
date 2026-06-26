@@ -32,8 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
-    /// 逃生口（菜单栏图标隐藏时）：记录上一次「应用被打开」的时间。
-    /// 若距上次打开 ≤ 3 秒即视为「连续两次打开」→ 弹出设置。超过 3 秒重新计数。
+    /// 逃生口（菜单栏图标隐藏时）的「连续两次打开」判定器。
+    /// 若距上次打开 ≤ threshold 秒即视为「连续两次打开」→ 弹出设置；超过则重新计数。
+    /// 纯逻辑状态机（无 macOS 依赖），threshold 与计数细节见 `ReopenDetector`（可单测）。
     ///
     /// 信号选型（经历两轮实测验证）：
     ///   - `applicationShouldHandleReopen`：隐藏图标后是纯后台 agent，系统在再次双击
@@ -42,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///     active 时）系统合并、不再派发第二次回调 → 双击只有一次回调，无法计数。
     ///   - `kAEOpenApplication` Apple Event（最终方案）：每次 Launch Services 打开 app
     ///     都派发，**即使 app 已在运行 / 已是 active**，是唯一可靠的「再次打开」信号。
-    private var lastReopenDate: Date?
+    private var reopenDetector = ReopenDetector()
 
     /// 排除「应用首次启动」那一次 kAEOpenApplication：launch 时也会派发一次该事件，
     /// 但那不是「重新打开」，不应计入双击计数。
@@ -85,8 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `kAEOpenApplication` Apple Event 处理器——每次 Launch Services 打开 app 都派发，
     /// **即使 app 已在运行 / 已是 active**。这是「再次打开」最可靠的信号。
     ///
-    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ 3 秒）** 即弹出设置，
+    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ threshold 秒）** 即弹出设置，
     /// 这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
+    /// 计数与时间窗口判定委托给 `ReopenDetector`（纯逻辑，单测覆盖）。
     @objc private func handleOpenApplication(
         _ handler: NSAppleEventManager,
         andReceiveEvent event: NSAppleEventDescriptor,
@@ -103,14 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DiagnosticLog.debug("AppDelegate: kAEOpenApplication (reopening, iconHidden=\(iconHidden))")
 
         guard iconHidden else { return }
-        let now = Date()
-        if let last = lastReopenDate, now.timeIntervalSince(last) <= 3 {
-            // 第二次打开 → 弹出设置，并清零计数（避免第三次误触发）。
-            lastReopenDate = nil
+        // registerOpen 记录本次打开并判定：true = 距上次打开在窗口内 → 连续两次，弹设置。
+        if reopenDetector.registerOpen() {
             openSettings()
-        } else {
-            // 第一次打开 → 静默记录时间，留待下一次打开判定。
-            lastReopenDate = now
         }
     }
 
