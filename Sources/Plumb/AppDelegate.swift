@@ -32,15 +32,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
+    /// 逃生口（菜单栏图标隐藏时）：记录上一次 applicationShouldHandleReopen 的时间。
+    /// 若距上次 reopen ≤ 3 秒即视为「连续两次打开」→ 弹出设置。超过 3 秒重新计数。
+    private var lastReopenDate: Date?
+
+    /// 监听「隐藏菜单栏图标」开关变化的观察者。
+    /// AppDelegate 与 app 同生命周期，无需显式移除（闭包用 [weak self]，无循环引用）。
+    private var statusBarVisibilityObserver: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setupStatusItem()
+        // 按设置决定是否显示菜单栏图标：默认显示；开启「隐藏菜单栏图标」则不创建。
+        if !tilingSettingsStore.load().hideStatusBarIcon {
+            showStatusBarIcon()
+        }
         setupMainMenu()
+        observeStatusBarVisibilityChanges()
         _ = ScreenCapturePermission.ensureAuthorized(prompt: true)
         _ = AccessibilityPermission.ensureTrusted(prompt: true)
         dmgMonitor.start()
         eventObserver.start()
         centerOnceOnLaunch()
         UpdateCoordinator.shared.checkForUpdatesInBackground()
+    }
+
+    // MARK: 菜单栏图标隐藏时的逃生口
+
+    /// 用户在 Plumb 已运行时再次「打开」（Finder/Launchpad/Spotlight 双击）触发。
+    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ 3 秒）** 即弹出设置，
+    /// 这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard tilingSettingsStore.load().hideStatusBarIcon else { return true }
+        let now = Date()
+        if let last = lastReopenDate, now.timeIntervalSince(last) <= 3 {
+            // 第二次打开 → 弹出设置，并清零计数（避免第三次误触发）。
+            lastReopenDate = nil
+            openSettings()
+        } else {
+            // 第一次打开 → 静默记录时间，留待下一次 reopen 判定。
+            lastReopenDate = now
+        }
+        return true
+    }
+
+    /// 监听设置 UI 的「隐藏菜单栏图标」开关变化：拨动后即时增/删状态栏图标。
+    /// 用通知解耦——设置视图不持有 AppDelegate（windowDidShow 通知亦是此先例）。
+    private func observeStatusBarVisibilityChanges() {
+        statusBarVisibilityObserver = NotificationCenter.default.addObserver(
+            forName: SettingsWindowNotifications.statusBarIconVisibilityChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.applyStatusBarVisibility()
+            }
+        }
+    }
+
+    /// 按当前设置增/删菜单栏图标（开关变化时调用）。
+    private func applyStatusBarVisibility() {
+        let shouldHide = tilingSettingsStore.load().hideStatusBarIcon
+        if shouldHide {
+            hideStatusBarIcon()
+        } else {
+            showStatusBarIcon()
+        }
     }
 
     @objc private func centerNow() {
@@ -110,7 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    private func setupStatusItem() {
+    private func showStatusBarIcon() {
+        // 幂等：图标已存在则不重复创建（避免开关来回拨动时叠加多个图标）。
+        if statusItem != nil { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if
             let iconURL = Bundle.main.url(forResource: "StatusIconTemplate", withExtension: "png"),
@@ -150,6 +207,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+    }
+
+    /// 从状态栏移除水滴图标（「隐藏菜单栏图标」开启或切换时调用）。
+    private func hideStatusBarIcon() {
+        guard let item = statusItem else { return }
+        NSStatusBar.system.removeStatusItem(item)
+        statusItem = nil
     }
 
     private func centerOnceOnLaunch() {

@@ -21,4 +21,10 @@ enum SettingsWindowNotifications {
     /// 设置窗口每次 `showWindow` 完成后发出。
     static let windowDidShow =
         Notification.Name("plumb.settings.windowDidShow")
+
+    /// 「隐藏菜单栏图标」开关变化时发出。
+    /// AppDelegate 监听后按当前 hideStatusBarIcon 设置增/删 NSStatusItem，
+    /// 实现「拨动开关 → 图标立即消失/出现」。用通知解耦：设置 UI 不持有 AppDelegate。
+    static let statusBarIconVisibilityChanged =
+        Notification.Name("plumb.settings.statusBarIconVisibilityChanged")
 }

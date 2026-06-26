@@ -169,7 +169,7 @@ struct SettingsView: View {
         case .tiling:
             TilingSection(settings: $settings, apps: apps)
         case .permissions:
-            PermissionsSection()
+            PermissionsSection(hideStatusBarIcon: $settings.hideStatusBarIcon)
         case .about:
             AboutSection()
         }

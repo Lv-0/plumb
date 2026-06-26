@@ -38,7 +38,7 @@ struct AppTilingSettings: Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case isEnabled, edgeMargin, tiledBundleIDs, hideSystemAppsInPicker
         case centerEnabled, centeredBundleIDs, documentChooserBundleIDs
-        case perAppMargins
+        case perAppMargins, hideStatusBarIcon
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +51,8 @@ struct AppTilingSettings: Equatable, Codable {
         centeredBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .centeredBundleIDs) ?? []
         documentChooserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .documentChooserBundleIDs) ?? Self.defaultDocumentChooserBundleIDs
         perAppMargins = try c.decodeIfPresent([String: CGFloat].self, forKey: .perAppMargins) ?? [:]
+        // 后增字段：旧 settings.json 不含此键 → 回退 false（默认显示图标，保持既有行为）。
+        hideStatusBarIcon = try c.decodeIfPresent(Bool.self, forKey: .hideStatusBarIcon) ?? false
     }
 
     /// 显式成员初始化器。自定义了 init(from:) 后编译器不再合成默认成员初始化器，
@@ -63,7 +65,8 @@ struct AppTilingSettings: Equatable, Codable {
         centerEnabled: Bool,
         centeredBundleIDs: Set<String>,
         documentChooserBundleIDs: Set<String>,
-        perAppMargins: [String: CGFloat] = [:]
+        perAppMargins: [String: CGFloat] = [:],
+        hideStatusBarIcon: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.edgeMargin = edgeMargin
@@ -73,6 +76,7 @@ struct AppTilingSettings: Equatable, Codable {
         self.centeredBundleIDs = centeredBundleIDs
         self.documentChooserBundleIDs = documentChooserBundleIDs
         self.perAppMargins = perAppMargins
+        self.hideStatusBarIcon = hideStatusBarIcon
     }
 
     /// 默认启用"文档选择器感知"的 App 集合。
@@ -94,6 +98,11 @@ struct AppTilingSettings: Equatable, Codable {
     var edgeMargin: CGFloat
     var tiledBundleIDs: Set<String>
     var hideSystemAppsInPicker: Bool
+
+    /// 是否隐藏菜单栏水滴图标（默认 false = 显示，保持既有行为）。
+    /// 隐藏后无菜单栏入口，设置界面只能通过「连续两次打开 Plumb」的逃生口重新进入
+    ///（详见 AppDelegate.applicationShouldHandleReopen）。
+    var hideStatusBarIcon: Bool
 
     /// 居中功能总开关（默认开启，保持既有行为）。
     var centerEnabled: Bool
@@ -141,7 +150,8 @@ struct AppTilingSettings: Equatable, Codable {
             centerEnabled: centerEnabled,
             centeredBundleIDs: normalizedCenterIDs,
             documentChooserBundleIDs: normalizedChooserIDs,
-            perAppMargins: normalizedPerApp
+            perAppMargins: normalizedPerApp,
+            hideStatusBarIcon: hideStatusBarIcon
         )
     }
 
@@ -214,6 +224,7 @@ final class AppTilingSettingsStore {
         static let centeredBundleIDs = "centering.bundleIDs"
         static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
         static let perAppMargins = "tiling.perAppMargins"
+        static let hideStatusBarIcon = "appearance.hideStatusBarIcon"
     }
 
     private let defaults: UserDefaults
@@ -307,7 +318,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppMargins=\(s.perAppMargins.count)"
+        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppMargins=\(s.perAppMargins.count) hideIcon=\(s.hideStatusBarIcon)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -388,9 +399,10 @@ final class AppTilingSettingsStore {
         let hasCenterEnabled = defaults.object(forKey: Keys.centerEnabled) != nil
         let hasCenteredBundleIDs = defaults.object(forKey: Keys.centeredBundleIDs) != nil
         let hasDocumentChooserBundleIDs = defaults.object(forKey: Keys.documentChooserBundleIDs) != nil
+        let hasHideStatusBarIcon = defaults.object(forKey: Keys.hideStatusBarIcon) != nil
 
         if !hasEnabled, !hasMargin, !hasBundleIDs, !hasHideSystemApps,
-           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs {
+           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs, !hasHideStatusBarIcon {
             return .default
         }
 
@@ -410,6 +422,9 @@ final class AppTilingSettingsStore {
         let perAppMargins = Dictionary(uniqueKeysWithValues: perAppMarginsRaw.map { (k, v) in
             (AppTilingSettings.normalizeBundleID(k), CGFloat(v))
         }.filter { !$0.0.isEmpty })
+        let hideStatusBarIcon = hasHideStatusBarIcon
+            ? defaults.bool(forKey: Keys.hideStatusBarIcon)
+            : AppTilingSettings.default.hideStatusBarIcon
 
         return AppTilingSettings(
             isEnabled: isEnabled,
@@ -419,7 +434,8 @@ final class AppTilingSettingsStore {
             centerEnabled: centerEnabled,
             centeredBundleIDs: Set(centeredBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
-            perAppMargins: perAppMargins
+            perAppMargins: perAppMargins,
+            hideStatusBarIcon: hideStatusBarIcon
         ).normalized()
     }
 
@@ -434,5 +450,6 @@ final class AppTilingSettingsStore {
         // per-app 边距镜像双写：CGFloat → Double（UserDefaults 原生支持）。
         let perAppDouble = Dictionary(uniqueKeysWithValues: normalized.perAppMargins.map { ($0.key, Double($0.value)) })
         defaults.set(perAppDouble, forKey: Keys.perAppMargins)
+        defaults.set(normalized.hideStatusBarIcon, forKey: Keys.hideStatusBarIcon)
     }
 }

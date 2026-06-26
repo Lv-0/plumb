@@ -93,6 +93,9 @@ enum L10n {
         case openSettings
         case launchAtLogin
         case launchAtLoginHint
+        // 外观 / 菜单栏
+        case hideStatusBarIcon
+        case hideStatusBarIconHint
         // 关于段
         case tabAbout
         case aboutVersion
@@ -176,6 +179,8 @@ enum L10n {
             .openSettings: "Open Settings…",
             .launchAtLogin: "Launch at Login",
             .launchAtLoginHint: "Automatically launch Plumb when your Mac starts.",
+            .hideStatusBarIcon: "Hide Menu Bar Icon",
+            .hideStatusBarIconHint: "When hidden, open Plumb twice in a row to reopen Settings.",
             .tabAbout: "About",
             .aboutVersion: "Version",
             .aboutGitHub: "GitHub",
@@ -251,6 +256,8 @@ enum L10n {
             .openSettings: "Abrir ajustes…",
             .launchAtLogin: "Abrir al iniciar sesión",
             .launchAtLoginHint: "Inicia Plumb automáticamente al encender el Mac.",
+            .hideStatusBarIcon: "Ocultar icono de la barra de menús",
+            .hideStatusBarIconHint: "Cuando está oculto, abre Plumb dos veces seguidas para volver a abrir Ajustes.",
             .tabAbout: "Acerca de",
             .aboutVersion: "Versión",
             .aboutGitHub: "GitHub",
@@ -326,6 +333,8 @@ enum L10n {
             .openSettings: "Ouvrir les réglages…",
             .launchAtLogin: "Lancer à la connexion",
             .launchAtLoginHint: "Lance Plumb automatiquement au démarrage du Mac.",
+            .hideStatusBarIcon: "Masquer l'icône de la barre des menus",
+            .hideStatusBarIconHint: "Lorsque masquée, ouvrez Plumb deux fois de suite pour rouvrir les Réglages.",
             .tabAbout: "À propos",
             .aboutVersion: "Version",
             .aboutGitHub: "GitHub",
@@ -401,6 +410,8 @@ enum L10n {
             .openSettings: "打开设置…",
             .launchAtLogin: "开机自启动",
             .launchAtLoginHint: "Mac 开机后自动启动 Plumb。",
+            .hideStatusBarIcon: "隐藏菜单栏图标",
+            .hideStatusBarIconHint: "隐藏后，连续两次打开 Plumb 可重新进入设置。",
             .tabAbout: "关于",
             .aboutVersion: "版本",
             .aboutGitHub: "GitHub",
@@ -476,6 +487,8 @@ enum L10n {
             .openSettings: "設定を開く…",
             .launchAtLogin: "ログイン時に起動",
             .launchAtLoginHint: "Mac 起動時に Plumb を自動的に起動します。",
+            .hideStatusBarIcon: "メニューバーアイコンを非表示",
+            .hideStatusBarIconHint: "非表示の時、Plumb を連続して 2 回開くと設定を再度開けます。",
             .tabAbout: "について",
             .aboutVersion: "バージョン",
             .aboutGitHub: "GitHub",
@@ -554,6 +567,8 @@ enum L10n {
     static var openSettings: String { tr(.openSettings) }
     static var launchAtLogin: String { tr(.launchAtLogin) }
     static var launchAtLoginHint: String { tr(.launchAtLoginHint) }
+    static var hideStatusBarIcon: String { tr(.hideStatusBarIcon) }
+    static var hideStatusBarIconHint: String { tr(.hideStatusBarIconHint) }
     static var tabAbout: String { tr(.tabAbout) }
     static var aboutVersion: String { tr(.aboutVersion) }
     static var aboutGitHub: String { tr(.aboutGitHub) }

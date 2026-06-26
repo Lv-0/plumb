@@ -14,6 +14,10 @@ import SwiftUI
 
 /// 权限段：状态行 + 两个按钮，整体放在 Liquid Glass 容器里。
 struct PermissionsSection: View {
+    /// 与 SettingsView 同源的设置绑定：改这里即触发其 `.onChange(of: settings) → store.save`，
+    /// 避免另起数据源导致 stale 覆盖（详见 hideStatusBarIconCard 注释）。
+    @Binding var hideStatusBarIcon: Bool
+
     @State private var accessibilityOK = false
     @State private var screenCaptureOK = false
     @State private var launchAtLogin: Bool = false
@@ -51,6 +55,7 @@ struct PermissionsSection: View {
                 )
 
                 launchAtLoginCard
+                hideStatusBarIconCard
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -123,6 +128,42 @@ struct PermissionsSection: View {
         } catch {
             // 失败（如裸可执行环境）→ 回滚到真实状态。
             launchAtLogin = LaunchAtLogin.isEnabled
+        }
+    }
+
+    /// 「隐藏菜单栏图标」独立卡片：视觉与开机自启动卡片一致。
+    /// 说明文案即为逃生口用法——隐藏后连续两次打开 Plumb 可重新进入设置。
+    ///
+    /// 数据流：$hideStatusBarIcon 绑定自 SettingsView 的 settings，改它即触发其
+    /// `.onChange(of: settings) → store.save(new)`，与本卡片共用唯一数据源，
+    /// 避免另起 store 写入被随后的平铺/居中编辑 stale 覆盖。
+    /// 仅在切换后额外发通知，让 AppDelegate 即时增/删菜单栏图标（save 已落盘，通知只负责触发 UI 反应）。
+    private var hideStatusBarIconCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "menubar.arrow.up.rectangle")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.hideStatusBarIcon)
+                    .foregroundStyle(.primary)
+                Text(L10n.hideStatusBarIconHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            PillToggle(isOn: $hideStatusBarIcon)
+                .animation(.spring(duration: 0.32, bounce: 0.25), value: hideStatusBarIcon)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+        .onChange(of: hideStatusBarIcon) { _, _ in
+            // 通知 AppDelegate 即时增/删菜单栏图标（设置已随 binding 落盘）。
+            NotificationCenter.default.post(name: SettingsWindowNotifications.statusBarIconVisibilityChanged, object: nil)
         }
     }
 }
