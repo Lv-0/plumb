@@ -11,11 +11,13 @@ import Foundation
 //   - 触发后清零计数，避免第三次打开再次误触发。
 //   - 超过 threshold 秒重新开始一轮（第一次打开静默记录时间）。
 //
-// 设计说明：原判定逻辑内联在 AppDelegate 里（与 NSApplication / Apple Event 强耦合），
-// 无法单测。此处抽出为纯 struct（沿用 WindowGeometry 的纯函数风格），注入 `now`
-// 取时，可任意构造时序验证。threshold=10s：菜单栏图标隐藏后 Plumb 是纯后台 agent
-// （无 Dock 图标、无菜单栏图标），用户只能经 Finder/启动台/Spotlight 重新打开——
-// 比「双击 Dock 图标」慢得多，原先 3 秒窗口过紧，常态性凑不齐两次。
+// 信号来源：`applicationShouldHandleReopen`（每次 LaunchServices 打开都投递，详见
+// AppDelegate 字段注释）。threshold=10s：菜单栏图标隐藏后用户经 Finder/启动台/Spotlight
+// 重新打开，两次打开间隔可能数秒，10 秒窗口给足操作时间；误判的代价只是多弹一次设置窗口
+// （关掉即可，无副作用），故宁可宽裕。
+//
+// 设计：原判定逻辑内联在 AppDelegate 里（与 NSApplication 强耦合），无法单测。此处抽出为
+// 纯 struct（沿用 WindowGeometry 的纯函数风格），注入 `now` 取时，可任意构造时序验证。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 「连续两次打开」判定器：纯逻辑状态机，无 macOS 依赖，可单测。

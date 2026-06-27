@@ -36,35 +36,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 若距上次打开 ≤ threshold 秒即视为「连续两次打开」→ 弹出设置；超过则重新计数。
     /// 纯逻辑状态机（无 macOS 依赖），threshold 与计数细节见 `ReopenDetector`（可单测）。
     ///
-    /// 信号选型（经历两轮实测验证）：
-    ///   - `applicationShouldHandleReopen`：隐藏图标后是纯后台 agent，系统在再次双击
-    ///     .app 时不投递 reopen 事件 → 完全不触发（死代码）。
-    ///   - `applicationDidBecomeActive`：第一次 open 会触发，但第二次 open（app 已是
-    ///     active 时）系统合并、不再派发第二次回调 → 双击只有一次回调，无法计数。
-    ///   - `kAEOpenApplication` Apple Event（最终方案）：每次 Launch Services 打开 app
-    ///     都派发，**即使 app 已在运行 / 已是 active**，是唯一可靠的「再次打开」信号。
+    /// 信号选型（实测结论）：菜单栏图标隐藏后 Plumb 是纯后台 agent（无 Dock 图标 / 无菜单栏
+    /// 图标 / 无窗口）。此时经 Finder/启动台/Spotlight 再次打开，系统走 LaunchServices 路径
+    /// 投递 `applicationShouldHandleReopen`（每次打开都投递，hasVisibleWindows=false）——这是
+    /// 唯一对「隐藏 agent 的再次打开」可靠的系统信号。
+    /// ⚠️ 历史教训：v2.0.10–v2.0.12 误判此信号无效，是因为只测了 CLI `open`（走另一条路径、
+    /// 对隐藏 agent 不投递）。Finder 双击走 LaunchServices，该信号每次必触发。务必用真实
+    /// LaunchServices 路径验证，不要用 CLI `open`。
     private var reopenDetector = ReopenDetector()
-
-    /// 排除「应用首次启动」那一次 kAEOpenApplication：launch 时也会派发一次该事件，
-    /// 但那不是「重新打开」，不应计入双击计数。
-    private var hasObservedInitialOpen = false
 
     /// 监听「隐藏菜单栏图标」开关变化的观察者。
     /// AppDelegate 与 app 同生命周期，无需显式移除（闭包用 [weak self]，无循环引用）。
     private var statusBarVisibilityObserver: NSObjectProtocol?
-
-    /// 早在 `applicationDidFinishLaunching` 之前注册 kAEOpenApplication 处理器。
-    /// 必须在此刻注册——kAEOpenApplication 事件在 launch 早期就被派发，若等到
-    /// `applicationDidFinishLaunching` 再注册，就会错过首次事件，且后续 reopen 也可能
-    /// 因注册时机问题而不触发（agent app 尤其敏感）。
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleOpenApplication(_:andReceiveEvent:withReplyEvent:)),
-            forEventClass: AEEventClass(kCoreEventClass),
-            andEventID: AEEventID(kAEOpenApplication)
-        )
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 按设置决定是否显示菜单栏图标：默认显示；开启「隐藏菜单栏图标」则不创建。
@@ -81,34 +64,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UpdateCoordinator.shared.checkForUpdatesInBackground()
     }
 
-    // MARK: 菜单栏图标隐藏时的逃生口
+    // MARK: 菜单栏图标隐藏时的逃生口（连续两次打开 → 弹设置）
 
-    /// `kAEOpenApplication` Apple Event 处理器——每次 Launch Services 打开 app 都派发，
-    /// **即使 app 已在运行 / 已是 active**。这是「再次打开」最可靠的信号。
+    /// 经 Finder/启动台/Spotlight「再次打开」已运行的 Plumb 时触发。对隐藏图标的 agent app，
+    /// 这是唯一可靠的「再次打开」系统信号（每次打开都投递，hasVisibleWindows=false）。
     ///
-    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ threshold 秒）** 即弹出设置，
-    /// 这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
+    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ threshold 秒）** 即弹出
+    /// 设置，这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
     /// 计数与时间窗口判定委托给 `ReopenDetector`（纯逻辑，单测覆盖）。
-    @objc private func handleOpenApplication(
-        _ handler: NSAppleEventManager,
-        andReceiveEvent event: NSAppleEventDescriptor,
-        withReplyEvent replyEvent: NSAppleEventDescriptor
-    ) {
-        // 排除应用首次启动那一次（launch 时也会派发 kAEOpenApplication）。
-        guard hasObservedInitialOpen else {
-            hasObservedInitialOpen = true
-            DiagnosticLog.debug("AppDelegate: kAEOpenApplication (initial launch, handler registered ✓)")
-            return
-        }
-
-        let iconHidden = tilingSettingsStore.load().hideStatusBarIcon
-        DiagnosticLog.debug("AppDelegate: kAEOpenApplication (reopening, iconHidden=\(iconHidden))")
-
-        guard iconHidden else { return }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard tilingSettingsStore.load().hideStatusBarIcon else { return true }
         // registerOpen 记录本次打开并判定：true = 距上次打开在窗口内 → 连续两次，弹设置。
         if reopenDetector.registerOpen() {
             openSettings()
         }
+        return true
     }
 
     /// 监听设置 UI 的「隐藏菜单栏图标」开关变化：拨动后即时增/删状态栏图标。
