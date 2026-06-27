@@ -214,7 +214,7 @@ final class WindowEventObserver {
             // 浏览器/访达二级窗口：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
             //（与 handle 路径一致；命中屏蔽列表且候选非主窗口 → 跳过，保持弹出位置）。
             if shieldedFromSecondaryWindowTiling(bundleID),
-               isSecondaryWindowOfApp(windowElement, appElement: appElement)
+               isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID)
             {
                 seenPIDs.insert(pid); continue
             }
@@ -430,16 +430,21 @@ final class WindowEventObserver {
             return false
         }
 
-        // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info 等）常报告
+        // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info/扩展页 等）常报告
         // AXStandardWindow subrole，会绕过 subrole 过滤被误居中/误平铺。命中屏蔽列表且候选不是主窗口
-        //（候选 ≠ kAXMainWindowAttribute）时完全跳过——不平铺、不居中、不 markCentered、
-        // 不锁 processedPIDs，保持其弹出位置。主窗口（候选 == 主窗口）不受影响，正常居中/平铺。
+        // 时完全跳过——不平铺、不居中、不 markCentered、不锁 processedPIDs，保持其弹出位置。
+        // 主窗口不受影响，正常居中/平铺。
         // 关键：必须放在 `if shouldTile` 分流**之前**——浏览器默认走居中分支（不在平铺白名单），
         // 若只在 shouldTile 分支内拦截（c1a1d34 原做法），居中分支无保护，弹窗仍会被居中。
         // 仿上方 Atlas 设置窗口特例的纯早退语义。补的是「PID 锁被清除（Space 切换/重新激活）
         // 或二级窗口先于主窗口到达」时空档——其余情况下 processedPIDs 锁已拦截。
+        //
+        // isSecondaryWindowOfApp 内部对 Chromium 内核浏览器优先用 AXIdentifier 的 type 字段
+        //（"main"/"secondary"）判定——kAXMainWindowAttribute 在二级窗口聚焦时会追踪聚焦窗，
+        // 把扩展设置页误报成主窗口（用户报告的「扩展程序设置界面被居中」根因），靠它判定会漏；
+        // AXIdentifier 是 Chromium 进程内窗口管理的稳定结构化标识，能可靠区分主/二级窗口。
         if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
-           isSecondaryWindowOfApp(windowElement, appElement: appElement)
+           isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
         {
             DiagnosticLog.debug("handle[\(notification)]: shielded browser/Finder secondary window — skip (no tile, no center) pid=\(pid)")
             return false
@@ -886,6 +891,21 @@ final class WindowEventObserver {
                 return
             }
 
+            // 浏览器/访达二级窗口屏蔽（resize 旁路补丁）。
+            // 现象：Chrome/Edge 等 Chromium 浏览器打开扩展设置页/详情页/弹窗时，会弹出一个
+            // 独立的**非主**小窗口（实测如 390x171），它触发 kAXResizedNotification 走本旁路。
+            // 由于 handleResize 刻意不查 processedPIDs（见 828 行注释），且此前也没有二级窗口
+            // 守卫，这个小窗口被判为「偏离平铺目标」→ 被强行拉满全屏（用户报告的
+            // 「打开扩展程序设置界面会被自动居中/放大」根因）。
+            // 修复：与 handle() 主路径守卫一致——命中屏蔽列表（浏览器/访达）且候选是该 App 的
+            // 非主窗口时，完全跳过重铺，保持其弹出尺寸/位置。主窗口（候选 == 主窗口）不受影响。
+            if self.shieldedFromSecondaryWindowTiling(bundleID) {
+                if self.isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID) {
+                    DiagnosticLog.debug("handle[resize]: shielded browser/Finder secondary window — skip retile pid=\(pid)")
+                    return
+                }
+            }
+
             // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
             if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, edgeMargin: edgeMargin) {
                 DiagnosticLog.debug("handle[resize]: window already near tiled target, skip retile")
@@ -990,15 +1010,27 @@ final class WindowEventObserver {
     /// 需要屏蔽「二级窗口平铺」的浏览器 bundle id（归一化小写比较）。
     /// 这些 App 的二级窗口（设置/下载/弹窗/PWA/扩展窗）常报告 AXStandardWindow subrole，
     /// 会绕过 subrole 过滤被误平铺。硬编码默认覆盖主流浏览器；访达单独由 isFinderBundle 处理。
+    /// ChatGPT Atlas (com.openai.atlas) 本质是 Chromium 内核浏览器，二级窗口同样会泄漏——
+    /// 它原有的 isAtlasSettingsWindow 特例只覆盖「设置窗口」，弹窗/PWA/工具窗仍被居中/平铺，
+    /// 故纳入此表走通用的二级窗口屏蔽（候选 ≠ kAXMainWindow 即跳过）。
     private static let secondaryWindowShieldedBundleIDs: Set<String> = [
         "com.apple.safari",
         "com.google.chrome",
+        "com.google.chrome.canary",
+        "com.google.chromefortesting",
+        "org.chromium.chromium",
         "com.microsoft.edgemac",
+        "com.microsoft.edgemac.beta",
+        "com.microsoft.edgemac.dev",
+        "com.microsoft.edgemac.canary",
         "org.mozilla.firefox",
         "com.brave.browser",
+        "com.brave.browser.beta",
+        "com.brave.browser.nightly",
         "company.thebrowser.browser",   // Arc
         "com.vivaldi.vivaldi",
-        "com.operasoftware.opera"
+        "com.operasoftware.opera",
+        "com.openai.atlas"              // ChatGPT Atlas（Chromium 内核，二级窗口同样泄漏）
     ]
 
     /// bundle id 是否属于「需屏蔽二级窗口平铺」的浏览器或访达（归一化比较）。
@@ -1010,14 +1042,39 @@ final class WindowEventObserver {
 
     /// 判定候选窗口是否为该 App 的【非主】窗口（即二级窗口）。
     ///
-    /// 判据：候选窗口 ≠ `kAXMainWindowAttribute` 返回的主窗口（用 CFEqual 比较 AXUIElement，
-    /// 与 tilePendingWindows 的窗口比较方式一致）。`kAXMainWindowAttribute` 是结构性硬特征，
-    /// 由系统维护，不受标题填充时序/语言影响（AXTitle 判据曾两次因时序竞争失败，见 447/908-914 注释）。
-    /// - 主窗口缺失（nil）：无法判定，保守地视为「主窗口」返回 false
-    ///   （不平铺一次的风险 < 误跳过主窗口致其永远不平铺的风险，与「主窗口优先平铺」预期一致）。
-    /// - 候选 == 主窗口：返回 false（是主窗口，正常平铺）。
-    /// - 候选 ≠ 主窗口：返回 true（二级窗口 → 跳过）。
-    private func isSecondaryWindowOfApp(_ window: AXUIElement, appElement: AXUIElement) -> Bool {
+    /// 判据分两档（按可靠性顺序）：
+    ///
+    /// **1. Chromium 浏览器 → AXIdentifier 的 `type` 字段（实测最可靠）**
+    ///   Chromium 窗口 AXIdentifier 是结构化 JSON（实测 2026-06）：主窗口
+    ///   `{"...,"type":"main"}`，设置/扩展/弹窗为 `{"...,"type":"secondary"}`。
+    ///   这些二级窗口与主窗口 AXSubrole/AXModal 完全相同；且 kAXMainWindowAttribute 在
+    ///   二级窗口聚焦时会追踪聚焦窗，把扩展设置页误报成主窗口。AXIdentifier 的 type 字段
+    ///   是更稳定的硬特征。这里复用 ChromiumWindowIdentifier 解析 type 字段。
+    ///
+    /// **2. 其它 App（Safari/Firefox/访达 等）→ `kAXMainWindowAttribute`（回退）**
+    ///   候选窗口 ≠ 主窗口即视为二级窗口。这是结构性硬特征，由系统维护。
+    ///   实测（2026-06）：Chrome 打开扩展弹窗/设置页时弹出的独立小窗口（如 390x171）确实
+    ///   ≠ kAXMainWindowAttribute（main!=cand），本判据能正确识别它为二级窗口并跳过。
+    ///   - 主窗口缺失（nil）：保守地视为「主窗口」返回 false
+    ///     （不平铺一次的风险 < 误跳过主窗口致其永远不平铺的风险，与「主窗口优先平铺」预期一致）。
+    ///   - 候选 == 主窗口：返回 false（是主窗口，正常平铺）。
+    ///   - 候选 ≠ 主窗口：返回 true（二级窗口 → 跳过）。
+    ///
+    /// 注意：Chromium 分类器返回 nil（AXIdentifier 不可读 / 非 JSON / 无 type）时回退到档 2，
+    /// 不影响保守语义。
+    private func isSecondaryWindowOfApp(_ window: AXUIElement, appElement: AXUIElement, bundleIdentifier: String? = nil) -> Bool {
+        // 档 1：Chromium 浏览器用 AXIdentifier 判定；kAXMainWindowAttribute 在扩展页聚焦时不可靠。
+        if ChromiumWindowIdentifier.isKnownChromiumBrowser(bundleIdentifier: bundleIdentifier) {
+            if let id = window.axString("AXIdentifier" as CFString),
+               let classification = ChromiumWindowIdentifier.classify(axIdentifier: id)
+            {
+                // 分类成功：secondary → 跳过；main → 不跳过。
+                return classification == .secondary
+            }
+            // 分类失败（无 AXIdentifier / 非 JSON / 无 type）：落到档 2 回退。
+        }
+
+        // 档 2：kAXMainWindowAttribute 判定。
         guard let main = appElement.axWindowElement(kAXMainWindowAttribute as CFString) else {
             return false  // 主窗口不可得：保守视为主窗口，不跳过
         }
