@@ -524,16 +524,27 @@ final class WindowEventObserver {
                 primaryWindow: windowElement,
                 edgeMargin: effectiveMargin
             ) {
-                markCentered(windowElement: tiledWindow, pid: pid)
-                processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
-                startTileStabilizationRetries(
-                    pid: pid,
-                    appElement: appElement,
-                    windowElement: tiledWindow,
-                    edgeMargin: effectiveMargin
-                )
-                DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
-                return true
+                // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
+                // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
+                // 典型场景：SiYuan 等 Electron 应用首次启动先弹加载小窗，若在此小窗上锁了 PID，
+                // 随后到达的真正主窗口会被 Bug #3 守卫永久跳过（"第一次打开不平铺"的根因）。
+                // 与上方 document-chooser / DMG 分支的「不锁」不变量同构。
+                if didWindowActuallyTile(tiledWindow, pid: pid, edgeMargin: effectiveMargin) {
+                    markCentered(windowElement: tiledWindow, pid: pid)
+                    processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
+                    startTileStabilizationRetries(
+                        pid: pid,
+                        appElement: appElement,
+                        windowElement: tiledWindow,
+                        edgeMargin: effectiveMargin
+                    )
+                    DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
+                    return true
+                } else {
+                    // 启动期小窗等：不锁、不标记，让重试继续接力处理后续到达的真正主窗口。
+                    DiagnosticLog.debug("handle[\(notification)]: tile did not actually enlarge window — keep PID unlocked for retry pid=\(pid)")
+                    return false
+                }
             }
             // For tiled apps, do not fall back to centering.
             DiagnosticLog.debug("handle[\(notification)]: tiling enabled but no window tiled")
@@ -937,6 +948,28 @@ final class WindowEventObserver {
         else { return false }
         let tol: CGFloat = 16
         return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
+    }
+
+    /// 平铺后窗口是否真正放大到接近目标尺寸。
+    ///
+    /// 用于区分「真正成功的主窗口平铺」与「启动期小窗 / 不可调大小窗口的无效平铺」：
+    /// 后者（Electron 类应用如 SiYuan 首次启动时的加载窗）虽然走完了 `tilePendingWindows`
+    /// 的两阶段动画，但尺寸无法真正放大到平铺目标。若此时仍 `markCentered` + 锁 `processedPIDs`，
+    /// 随后到达的真正主窗口会被 Bug #3 守卫（`processedPIDs.contains(pid)`）永久跳过，
+    /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
+    ///
+    /// 判据：当前尺寸在目标尺寸的 16px 容差内（沿用 `isWindowNearTiledTarget` 的容差语义，
+    /// 两者同源、保持一致）。读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），
+    /// 与既有「主窗口缺失时保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
+    ///
+    /// 语义配合：返回 false 时调用方应【不】markCentered、【不】锁 processedPIDs，
+    /// 与上方 document-chooser / DMG 分支的「不锁」不变量同构——让真正主窗口有机会被处理。
+    private func didWindowActuallyTile(_ windowElement: AXUIElement, pid: pid_t, edgeMargin: CGFloat) -> Bool {
+        guard let size = sizeAttributeValue(windowElement),
+              let target = service.tiledTargetFrame(for: windowElement, pid: pid, edgeMargin: edgeMargin)
+        else { return false }
+        let tol: CGFloat = 16
+        return size.width >= target.width - tol && size.height >= target.height - tol
     }
 
     private func pointAttributeValue(_ windowElement: AXUIElement) -> CGPoint? {
