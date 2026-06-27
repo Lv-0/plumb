@@ -1,7 +1,7 @@
 {
-  "version": "2.0.14",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.14/Plumb-2.0.14.zip",
-  "sha256": "911ec24c7043a6abf5b81c7508951c2de850ab00a008f558f5a41c21aade2387",
+  "version": "2.0.15",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.15/Plumb-2.0.15.zip",
+  "sha256": "149f00e1e1b99c053cb111436c80605cea21ef2801ffd4235a145e35e07c55fb",
   "notes": {
     "en": "Fixed: when the menu-bar icon is hidden, the escape hatch to reopen Settings now works reliably. You still open Plumb twice in a row, but the window is widened from 3 seconds to 10 — so a normal Finder/Spotlight relaunch (slower than a Dock double-click) counts as a double-open and Settings appears. No behavior change unless you've hidden the icon. 154 tests pass (6 new).",
     "zh": "修复：隐藏菜单栏图标后，重新进入设置的逃生口现在更可靠了。仍是连续两次打开 Plumb，但判定窗口从 3 秒放宽到 10 秒——这样经 Finder/Spotlight 重新打开（比双击 Dock 慢）也能凑齐两次、弹出设置。未隐藏图标则行为不变。154 项测试通过（含 6 项新增）。",
