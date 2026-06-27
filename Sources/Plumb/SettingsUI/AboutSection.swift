@@ -6,6 +6,7 @@ import SwiftUI
 // 模块角色：设置中"关于"标签页的内容视图。
 //
 // 职责：展示当前软件版本号（取自 AppVersion.current，即 CFBundleShortVersionString），
+//   「检查更新」按钮（复用 UpdateCoordinator 的模态弹窗反馈，使隐藏菜单栏图标时也能更新），
 //   以及一个可点击打开 GitHub 仓库主页（https://github.com/Lv-0/plumb）的按钮。
 //
 // 说明：纯展示视图，无状态、无持久化。版本号每次显示时实时读取（计算属性）；
@@ -49,7 +50,30 @@ struct AboutSection: View {
             Divider()
                 .opacity(0.25)
 
-            // 行 2：GitHub 按钮行
+            // 行 2：检查更新行。与 GitHub 行对称：图标 + 标题/副标题 + 右侧按钮。
+            // 复用 UpdateCoordinator.checkForUpdatesManually()：与状态栏菜单入口同一路径，
+            // 反馈也走现有模态 NSAlert（已是最新/检查失败/发现新版本→下载进度窗口）。
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")   // 与状态栏「检查更新」菜单项图标一致
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.otaCheckForUpdates)
+                        .foregroundStyle(.primary)
+                    Text(L10n.aboutCheckUpdatesHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+                Button(L10n.otaCheckForUpdates, action: checkForUpdates)
+                    .buttonStyle(.bordered)
+            }
+
+            Divider()
+                .opacity(0.25)
+
+            // 行 3：GitHub 按钮行
             HStack(spacing: 12) {
                 Image(systemName: "globe")
                     .font(.title3)
@@ -81,5 +105,12 @@ struct AboutSection: View {
         if let url = URL(string: "https://github.com/Lv-0/plumb") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// 触发手动检查更新。委托给 UpdateCoordinator（状态栏菜单的同一路径），
+    /// 反馈走现有模态弹窗：已是最新 / 检查失败 / 发现新版本→下载进度窗口。
+    /// 保留这条入口是为了让「隐藏菜单栏图标」开启后仍可在设置里更新。
+    private func checkForUpdates() {
+        UpdateCoordinator.shared.checkForUpdatesManually()
     }
 }

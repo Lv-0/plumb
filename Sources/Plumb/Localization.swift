@@ -102,6 +102,7 @@ enum L10n {
         case aboutGitHub
         case aboutGitHubHint
         case aboutViewOnGitHub
+        case aboutCheckUpdatesHint
         // 开关 / 无障碍
         case toggleSwitch
         case on, off
@@ -186,6 +187,7 @@ enum L10n {
             .aboutGitHub: "GitHub",
             .aboutGitHubHint: "View source code and report issues.",
             .aboutViewOnGitHub: "View on GitHub",
+            .aboutCheckUpdatesHint: "Check for the latest version of Plumb.",
             .toggleSwitch: "Switch",
             .on: "On",
             .off: "Off",
@@ -263,6 +265,7 @@ enum L10n {
             .aboutGitHub: "GitHub",
             .aboutGitHubHint: "Ver código fuente y reportar problemas.",
             .aboutViewOnGitHub: "Ver en GitHub",
+            .aboutCheckUpdatesHint: "Comprobar la última versión de Plumb.",
             .toggleSwitch: "Interruptor",
             .on: "Activado",
             .off: "Desactivado",
@@ -340,6 +343,7 @@ enum L10n {
             .aboutGitHub: "GitHub",
             .aboutGitHubHint: "Voir le code source et signaler des problèmes.",
             .aboutViewOnGitHub: "Voir sur GitHub",
+            .aboutCheckUpdatesHint: "Rechercher la dernière version de Plumb.",
             .toggleSwitch: "Interrupteur",
             .on: "Activé",
             .off: "Désactivé",
@@ -417,6 +421,7 @@ enum L10n {
             .aboutGitHub: "GitHub",
             .aboutGitHubHint: "查看源代码与提交问题。",
             .aboutViewOnGitHub: "在 GitHub 上查看",
+            .aboutCheckUpdatesHint: "检查 Plumb 的最新版本。",
             .toggleSwitch: "开关",
             .on: "开",
             .off: "关",
@@ -494,6 +499,7 @@ enum L10n {
             .aboutGitHub: "GitHub",
             .aboutGitHubHint: "ソースコードの確認と問題の報告。",
             .aboutViewOnGitHub: "GitHub で見る",
+            .aboutCheckUpdatesHint: "Plumb の最新バージョンを確認します。",
             .toggleSwitch: "スイッチ",
             .on: "オン",
             .off: "オフ",
@@ -574,6 +580,7 @@ enum L10n {
     static var aboutGitHub: String { tr(.aboutGitHub) }
     static var aboutGitHubHint: String { tr(.aboutGitHubHint) }
     static var aboutViewOnGitHub: String { tr(.aboutViewOnGitHub) }
+    static var aboutCheckUpdatesHint: String { tr(.aboutCheckUpdatesHint) }
     static var toggleSwitch: String { tr(.toggleSwitch) }
     static var on: String { tr(.on) }
     static var off: String { tr(.off) }
