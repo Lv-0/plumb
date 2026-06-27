@@ -211,6 +211,13 @@ final class WindowEventObserver {
             guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else { continue }
             // Atlas 设置窗口跳动：仅排除设置窗口，主窗口正常居中（与 handle 一致）。
             if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) { seenPIDs.insert(pid); continue }
+            // 浏览器/访达二级窗口：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
+            //（与 handle 路径一致；命中屏蔽列表且候选非主窗口 → 跳过，保持弹出位置）。
+            if shieldedFromSecondaryWindowTiling(bundleID),
+               isSecondaryWindowOfApp(windowElement, appElement: appElement)
+            {
+                seenPIDs.insert(pid); continue
+            }
             do {
                 try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
                 markCentered(windowElement: windowElement, pid: pid)
@@ -423,6 +430,21 @@ final class WindowEventObserver {
             return false
         }
 
+        // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info 等）常报告
+        // AXStandardWindow subrole，会绕过 subrole 过滤被误居中/误平铺。命中屏蔽列表且候选不是主窗口
+        //（候选 ≠ kAXMainWindowAttribute）时完全跳过——不平铺、不居中、不 markCentered、
+        // 不锁 processedPIDs，保持其弹出位置。主窗口（候选 == 主窗口）不受影响，正常居中/平铺。
+        // 关键：必须放在 `if shouldTile` 分流**之前**——浏览器默认走居中分支（不在平铺白名单），
+        // 若只在 shouldTile 分支内拦截（c1a1d34 原做法），居中分支无保护，弹窗仍会被居中。
+        // 仿上方 Atlas 设置窗口特例的纯早退语义。补的是「PID 锁被清除（Space 切换/重新激活）
+        // 或二级窗口先于主窗口到达」时空档——其余情况下 processedPIDs 锁已拦截。
+        if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
+           isSecondaryWindowOfApp(windowElement, appElement: appElement)
+        {
+            DiagnosticLog.debug("handle[\(notification)]: shielded browser/Finder secondary window — skip (no tile, no center) pid=\(pid)")
+            return false
+        }
+
         let tilingSettings = tilingSettingsStore.load()
         let shouldTile = tilingSettings.shouldTile(bundleIdentifier: frontmostApp.bundleIdentifier)
         // per-app 边距：该 app 单独设置过 → 用自定义值；否则回退全局 edgeMargin。
@@ -436,18 +458,8 @@ final class WindowEventObserver {
                 return false
             }
 
-            // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info 等）常报告
-            // AXStandardWindow subrole，会绕过 subrole 过滤被误平铺。命中屏蔽列表且候选不是主窗口
-            //（候选 ≠ kAXMainWindowAttribute）时完全跳过——不平铺、不居中、不 markCentered、
-            // 不锁 processedPIDs，保持其弹出位置。主窗口（候选 == 主窗口）不受影响，正常平铺。
-            // 仿上方 Atlas 设置窗口特例（419-424）的纯早退语义。补的是「PID 锁被清除（Space 切换/
-            // 重新激活）或二级窗口先于主窗口到达」时空档——其余情况下 processedPIDs 锁已拦截。
-            if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
-               isSecondaryWindowOfApp(windowElement, appElement: appElement)
-            {
-                DiagnosticLog.debug("handle[\(notification)]: shielded browser/Finder secondary window — skip (no tile, no center) pid=\(pid)")
-                return false
-            }
+            // 浏览器/访达二级窗口屏蔽：已在上方 if shouldTile 分流前统一拦截（同时保护居中+平铺），
+            // 此处不再重复检查。
 
             // 文档类 App 选择器感知（Pages/Word/Excel/Numbers 等）。
             // 这些 App 有三类「无 kAXDocument」窗口（subrole 均 AXStandardWindow）：文件列表、
