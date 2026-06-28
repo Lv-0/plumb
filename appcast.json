@@ -1,7 +1,7 @@
 {
-  "version": "2.0.16",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.16/Plumb-2.0.16.zip",
-  "sha256": "e4198e96e380eac4fa88fadc13271f15f9c13f9cd06157e342a7f10b2c36d454",
+  "version": "2.0.17",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.17/Plumb-2.0.17.zip",
+  "sha256": "9c3d420c565f93ae71ba2ffac03f7ca7dfdf16d3449e1017ef428a3fd1886647",
   "notes": {
     "en": "New: Check for Updates from Settings → About — the update command previously lived only in the menu-bar dropdown, so with the menu-bar icon hidden there was no way to update; the About tab now has a Check-for-Updates button using the same flow. Fixed: Electron-based apps (e.g. SiYuan) now tile correctly on first launch. On first open, Electron shows a small launcher window before the real main window; Plumb was tiling that transient window and locking the app's 'already processed' state, so the real main window was skipped and never tiled. Plumb now only locks the per-cycle state when the tiled window genuinely enlarged to the target size, and keeps retrying for the real main window otherwise. Main windows that tile successfully still lock as before, so secondary-window suppression (browsers/Finder) is unchanged. Native apps are unaffected. 161 tests pass.",
     "zh": "新增：可在「设置 → 关于」中检查更新——此前更新入口只在菜单栏下拉菜单中，隐藏菜单栏图标后便无法更新；现在「关于」标签新增了「检查更新」按钮，流程与菜单入口一致。修复：Electron 类应用（如思源笔记 SiYuan）首次打开时现在能正确平铺。Electron 应用首次启动会先弹出一个小型加载窗口，再创建真正的主窗口；此前 Plumb 平铺了这个过渡窗口并锁定了该应用的「本周期已处理」状态，导致随后到达的真正主窗口被跳过、永远不被平铺。现在 Plumb 只在平铺窗口确实放大到目标尺寸时才锁定该状态，否则继续重试直到真正主窗口到达。成功平铺的主窗口仍照常锁定，因此二级窗口抑制（浏览器/访达）行为不变，原生应用不受影响。161 项测试通过。",
