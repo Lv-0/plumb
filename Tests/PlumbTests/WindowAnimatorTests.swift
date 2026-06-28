@@ -52,7 +52,7 @@ func interpolatedRectMatchesEasing() async throws {
 @Test
 func sampleCountReasonable() async throws {
     let n = WindowAnimator.sampleCount()
-    // 默认 0.28s @ 120Hz ≈ 33.6 => 34 帧，且不少于 2。
+    // 默认 0.18s @ 120Hz ≈ 21.6 => 22 帧，且不少于 2。
     #expect(n >= 2)
     #expect(n <= 200)
 }

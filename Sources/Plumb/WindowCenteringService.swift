@@ -120,6 +120,30 @@ final class WindowCenteringService {
     private var cachedSpaceByPID: [pid_t: RawSpace] = [:]
     private var cachedDisplayByPID: [pid_t: CGDirectDisplayID] = [:]
 
+    // MARK: - Phase-B 平铺动画时序参数
+    //
+    // 阶段 B（架构变更，3+ 次 per-frame 尝试失败后的正确方案）：
+    // 高频 per-frame 写 size 会导致 app 每帧重新布局、把窗口"弹回"到一个非目标位置，
+    // 使 macOS 把尺寸 clamp 到"不溢出屏"的小值（"4 边铺不满"根因）。
+    // 实测有效方案：先把 position 移到最终平铺原点（一次写），给 app 一段 settle 时间，
+    // 再分少量大步把尺寸插值到目标（每步之间也 settle），最后强制 pos+size 落地。
+    //
+    // 提速调整（保守、绝不回归）：步数与步进可压，但 settle 引入延迟绝不动——它是防弹回的关键。
+    // 历史值：steps=6 / stepIntervalMs=120ms → Phase-B ≈ 0.97s。
+    // 当前值：steps=4 / stepIntervalMs=90ms  → Phase-B ≈ 0.61s（省 ~0.36s）。
+    // 若某 app 出现铺不满/弹回，单独回退这两个值即可（互不影响）。
+
+    /// Phase-B 分步推进的尺寸插值步数。每步线性逼近目标尺寸，最后一步强制落地兜底。
+    private static let tilePhaseBSteps = 4
+
+    /// Phase-B 每步之间的 settle 间隔（毫秒）。必须远大于一帧（60Hz≈16.7ms），否则会触发
+    /// app 每帧重布局导致弹回。90ms ≈ 5 帧，满足约束。
+    private static let tilePhaseBStepIntervalMs: Int = 90
+
+    /// Phase-B 启动前的 settle 引入延迟（毫秒）：先把 position 写到平铺原点，给 app 这段时间
+    /// 稳定，再开始扩大尺寸。**这是防弹回的关键防线，不要压缩。**
+    private static let tilePhaseBLeadInMs: Int = 250
+
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
 
@@ -535,11 +559,7 @@ final class WindowCenteringService {
                 return
             }
 
-            // 阶段 B（架构变更，3+ 次 per-frame 尝试失败后的正确方案）：
-            // 高频 per-frame 写 size 会导致 app 每帧重新布局、把窗口"弹回"到一个
-            // 非目标位置，使 macOS 把尺寸 clamp 到"不溢出屏"的小值（"4 边铺不满"根因）。
-            // 实测有效方案：先把 position 移到最终平铺原点（一次写），给 app ~0.25s settle，
-            // 再分少量大步把尺寸插值到目标（每步之间也 settle），最后强制 pos+size 落地。
+            // 阶段 B 的时序参数见类顶 tilePhaseB* 常量（含提速调整与回归风险注释）。
             let endSize = targetFrame.size
             let targetAXOrigin = toAXOrigin(
                 bottomLeftOrigin: targetFrame.origin,
@@ -552,16 +572,15 @@ final class WindowCenteringService {
             // 1) 先把窗口左下角移到平铺原点。
             _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
 
-            // 2) 用 DispatchSource 定时器分步推进尺寸（每步 ~120ms settle），避免高频写触发 app 弹回。
-            //    从 startSize 线性到 endSize，分 6 步。
+            // 2) 用 DispatchSource 定时器分步推进尺寸（每步 settle，见 tilePhaseBStepIntervalMs），
+            //    避免高频写触发 app 弹回。从 startSize 线性到 endSize，分 tilePhaseBSteps 步。
             //    定时器存入 self.activeTileTimer 以便切换 app 时由 abortActiveAnimations() 取消；
             //    此外每步开头有前台守卫（双保险），防止 zombie 定时器在非前台 app 上继续写窗口。
-            let steps = 6
-            let stepDelay: UInt64 = 120_000_000  // 0.12s
+            let steps = Self.tilePhaseBSteps
             let timer = DispatchSource.makeTimerSource(queue: .main)
             activeTileTimer = timer
             var step = 0
-            timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(120))
+            timer.schedule(deadline: .now() + .milliseconds(Self.tilePhaseBLeadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
                 // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari

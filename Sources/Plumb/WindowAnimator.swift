@@ -31,7 +31,13 @@ import Foundation
 /// 并在动画中读取窗口实际位置：若窗口被用户拖动（与上次写入位置偏离过大）则中止动画。
 enum WindowAnimator {
     /// 动画默认时长（秒）。足够短以避免打断，又足够长以呈现丝滑感。
-    static let defaultDuration: TimeInterval = 0.28
+    ///
+    /// 取值说明（提速调整）：居中/平铺的 Phase-A 只写 AXPosition（移动、不改尺寸），
+    /// 不会触发布局弹回，因此可压得较短。0.18s @ 120Hz ≈ 22 帧，仍以 easeInOut 平滑插值。
+    /// 用户拖动中止依赖「连续 4 帧 >40px」(jumpAbortConsecutiveTicks)，时长缩短只会让
+    /// 系统激活动画更难误触发中止，更安全。
+    /// 历史值：0.28s。如出现居中动画观感过快可回调。
+    static let defaultDuration: TimeInterval = 0.18
     /// 定时器频率（Hz）。
     static let tickHz: Int = 120
     /// 判定窗口"被用户挪走"的像素阈值。
