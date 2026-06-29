@@ -58,6 +58,14 @@ enum WindowAnimator {
         return clamped * clamped * (3 - 2 * clamped)
     }
 
+    /// 二次 ease-out 曲线：1 - (1-t)^2，t∈[0,1] → [0,1]。
+    /// “快进慢收”——前段快速增长、临近目标放缓，适合尺寸放大（落位）动画。
+    /// 单调、过冲为 0，t=0.5 时恰好为 0.75。
+    static func easeOut(_ t: CGFloat) -> CGFloat {
+        let clamped = Swift.max(0, Swift.min(1, t))
+        return 1 - (1 - clamped) * (1 - clamped)
+    }
+
     /// 阻尼弹簧近似（用于手动“立即居中”的更顺滑手感；自动触发仍用 easeInOut）。
     /// 临界阻尼弹簧 1 - (1 + ωt)e^(-ωt) 归一化到 t=1 时恰好为 1，
     /// 单调、过冲很小，t∈[0,1] → [0,1]。

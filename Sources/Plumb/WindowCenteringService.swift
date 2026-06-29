@@ -144,6 +144,33 @@ final class WindowCenteringService {
     /// 稳定，再开始扩大尺寸。**这是防弹回的关键防线，不要压缩。**
     private static let tilePhaseBLeadInMs: Int = 250
 
+    // MARK: - Phase-B 丝滑放大时序参数
+    //
+    // 丝滑模式（默认）：以高频帧（60Hz）驱动尺寸放大，用 ease-out 曲线插值，替代稳健模式的
+    // “4 步线性跳跃”。左上角锚定、向右下扩展（origin 不变，仅 width/height 变化）。
+    // 60Hz × 0.30s ≈ 18 帧 ease-out，观感为连续平滑的“落位”放大。
+    //
+    // 防弹回（回归防线）：高频写 size 仍可能触发某些 app 每帧重布局导致“铺不满/弹回”（历史上
+    // 踩过的坑，故有上方 250ms settle）。丝滑模式每帧读回实际尺寸，若连续落后写入值超过阈值，
+    // 立即降级到稳健大步模式（`runPhaseBRobust`），保证敏感 app（Electron 类、终端类）不回归。
+
+    /// 丝滑放大总时长（秒）。
+    private static let smoothPhaseBDuration: TimeInterval = 0.30
+
+    /// 丝滑放大写尺寸的帧率（Hz）。60Hz 平衡了流畅度与“不让 app 每帧过载布局”——120Hz 会显著
+    /// 增加弹回概率，故刻意低于 Phase-A 的 120Hz。
+    private static let smoothPhaseBTickHz: Int = 60
+
+    /// 丝滑放大启动前的 settle 引入延迟（毫秒）。稳健模式需 250ms 给大步之间稳定；帧驱动因每步
+    /// 变化小（ease-out 单帧增量远小于一个大步），可大幅压缩。保留少量引入延迟以先稳定布局。
+    private static let smoothPhaseBLeadInMs: Int = 60
+
+    /// 弹回判定阈值（px）：若实际尺寸在某一轴上落后于写入值超过此值，计为一帧“弹回”。
+    private static let smoothPhaseBBounceBackPx: CGFloat = 24
+
+    /// 连续多少帧弹回才触发降级。要求连续多帧可避免对系统瞬时弹动（激活/聚焦调整）的误判。
+    private static let smoothPhaseBBounceBackConsecutiveTicks: Int = 2
+
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
 
@@ -559,7 +586,7 @@ final class WindowCenteringService {
                 return
             }
 
-            // 阶段 B 的时序参数见类顶 tilePhaseB* 常量（含提速调整与回归风险注释）。
+            // 阶段 B 的时序参数见类顶 tilePhaseB* / smoothPhaseB* 常量（含提速调整与回归风险注释）。
             let endSize = targetFrame.size
             let targetAXOrigin = toAXOrigin(
                 bottomLeftOrigin: targetFrame.origin,
@@ -572,66 +599,21 @@ final class WindowCenteringService {
             // 1) 先把窗口左下角移到平铺原点。
             _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
 
-            // 2) 用 DispatchSource 定时器分步推进尺寸（每步 settle，见 tilePhaseBStepIntervalMs），
-            //    避免高频写触发 app 弹回。从 startSize 线性到 endSize，分 tilePhaseBSteps 步。
-            //    定时器存入 self.activeTileTimer 以便切换 app 时由 abortActiveAnimations() 取消；
-            //    此外每步开头有前台守卫（双保险），防止 zombie 定时器在非前台 app 上继续写窗口。
-            let steps = Self.tilePhaseBSteps
-            let timer = DispatchSource.makeTimerSource(queue: .main)
-            activeTileTimer = timer
-            var step = 0
-            timer.schedule(deadline: .now() + .milliseconds(Self.tilePhaseBLeadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
-            timer.setEventHandler { [weak self] in
-                guard let self else { return }
-                // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari
-                // 被 zombie 定时器拉到另一屏"的关键防线（即便外部未调用 abort）。
-                if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                    timer.cancel()
-                    if self.activeTileTimer === timer { self.activeTileTimer = nil }
-                    if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
-                    DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
-                    return
-                }
-                step += 1
-                if step >= steps {
-                    timer.cancel()
-                    if self.activeTileTimer === timer { self.activeTileTimer = nil }
-                    // 最终强制 pos+size 落到目标。
-                    _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
-                    let sizeOutcome = self.resizeWindowWithFallback(windowElement, newSize: endSize)
-                    if let pid {
-                        _ = self.tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
-                    }
-                    // 终端类 app（如 electerm）按字符行网格 snap，高度可能无法精确到目标。
-                    // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸在
-                    // visibleFrame 内重新居中，避免窗口顶部对齐而底部溢出/贴边。
-                    let actualSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
-                    if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
-                        let recenteredBL = WindowGeometry.centeredOrigin(windowSize: actualSize, visibleFrame: visibleFrame)
-                        let recenteredAX = self.toAXOrigin(
-                            bottomLeftOrigin: recenteredBL,
-                            windowSize: actualSize,
-                            screenFrame: context.screen.frame,
-                            space: context.space,
-                            primaryTopY: primaryTopY
-                        )
-                        _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: recenteredAX, on: windowElement)
-                        DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); recentered to \(recenteredAX)")
-                    }
-                    let postSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
-                    let postPos = self.pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
-                    DiagnosticLog.debug("tile-animator: phase B done pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
-                    finishActive()
-                    completion?()
-                    return
-                }
-                let p = CGFloat(step) / CGFloat(steps)
-                let curW = windowSize.width + (endSize.width - windowSize.width) * p
-                let curH = windowSize.height + (endSize.height - windowSize.height) * p
-                let curSize = CGSize(width: curW, height: curH)
-                _ = self.resizeWindowWithFallback(windowElement, newSize: curSize)
-            }
-            timer.resume()
+            // 2) 进入丝滑放大（默认）。若检测到弹回，会自动降级到稳健大步模式。
+            runPhaseBSmooth(
+                windowElement: windowElement,
+                startSize: windowSize,
+                endSize: endSize,
+                targetAXOrigin: targetAXOrigin,
+                targetFrame: targetFrame,
+                visibleFrame: visibleFrame,
+                context: context,
+                primaryTopY: primaryTopY,
+                pid: pid,
+                animKey: animKey,
+                finishActive: finishActive,
+                completion: completion
+            )
         }
 
         if alreadyCentered {
@@ -664,6 +646,232 @@ final class WindowCenteringService {
         if let phaseATimer = phaseATimerBox {
             activeAnimatorTimers.append(phaseATimer)
         }
+    }
+
+    // MARK: - Phase-B 丝滑放大 / 稳健降级
+
+    /// 丝滑放大（默认）：60Hz × ease-out 帧驱动尺寸放大，左上角锚定向右下扩展。每帧读回实际尺寸
+    /// 做弹回检测；若连续帧落后写入值超阈值，降级到 `runPhaseBRobust`（稳健大步）兜底。
+    /// 末帧强制 pos+size 落地、读回重居中，逻辑与稳健模式完全一致（保持终端类 app grid snap 兼容）。
+    private func runPhaseBSmooth(
+        windowElement: AXUIElement,
+        startSize: CGSize,
+        endSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        visibleFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        animKey: String,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        // 若起止尺寸几乎相同，无需放大，直接落地收尾。
+        if abs(startSize.width - endSize.width) < 1 && abs(startSize.height - endSize.height) < 1 {
+            finalizePhaseB(
+                windowElement: windowElement,
+                endSize: endSize,
+                targetAXOrigin: targetAXOrigin,
+                targetFrame: targetFrame,
+                visibleFrame: visibleFrame,
+                context: context,
+                primaryTopY: primaryTopY,
+                pid: pid,
+                via: "smooth-noop",
+                finishActive: finishActive,
+                completion: completion
+            )
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        activeTileTimer = timer
+        let intervalNs: Int = 1_000_000_000 / max(1, Self.smoothPhaseBTickHz)
+        timer.schedule(deadline: .now() + .milliseconds(Self.smoothPhaseBLeadInMs), repeating: .nanoseconds(intervalNs))
+        let startTime = DispatchTime.now()
+        var bounceTicks = 0
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            // 前台守卫：若该 pid 已不是前台 app，立即停止——消除 zombie 定时器移动非前台窗口。
+            if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
+                DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
+                return
+            }
+
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds
+            let rawProgress = CGFloat(elapsed) / CGFloat(TimeInterval(Self.smoothPhaseBDuration) * 1_000_000_000)
+
+            // 末帧：强制落地收尾。
+            if rawProgress >= 1.0 {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                self.finalizePhaseB(
+                    windowElement: windowElement,
+                    endSize: endSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    visibleFrame: visibleFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: "smooth",
+                    finishActive: finishActive,
+                    completion: completion
+                )
+                return
+            }
+
+            // ease-out 插值尺寸（origin 不动，仅 width/height）。
+            let p = WindowAnimator.easeOut(rawProgress)
+            let curSize = CGSize(
+                width: startSize.width + (endSize.width - startSize.width) * p,
+                height: startSize.height + (endSize.height - startSize.height) * p
+            )
+            _ = self.resizeWindowWithFallback(windowElement, newSize: curSize)
+
+            // 弹回检测：读回实际尺寸，若在任一轴上落后写入值超阈值，计为一帧弹回。
+            if let actual = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement) {
+                let lagW = abs(actual.width - curSize.width)
+                let lagH = abs(actual.height - curSize.height)
+                // 仅在尺寸已显著增长（>25% 进度）后才判定弹回：前段 app 尚未开始放大属正常，
+                // 避免把“前几帧还没动”误判为弹回而频繁降级。
+                if p > 0.25 && (lagW > Self.smoothPhaseBBounceBackPx || lagH > Self.smoothPhaseBBounceBackPx) {
+                    bounceTicks += 1
+                    DiagnosticLog.debug("tile-animator: bounce-back detected (tick=\(bounceTicks) lagW=\(lagW) lagH=\(lagH) written=\(curSize) actual=\(actual))")
+                    if bounceTicks >= Self.smoothPhaseBBounceBackConsecutiveTicks {
+                        // 降级到稳健大步模式。
+                        timer.cancel()
+                        if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                        DiagnosticLog.debug("tile-animator: smooth -> robust fallback (pid=\(pid.map(String.init) ?? "?"))")
+                        self.runPhaseBRobust(
+                            windowElement: windowElement,
+                            startSize: startSize,
+                            endSize: endSize,
+                            targetAXOrigin: targetAXOrigin,
+                            targetFrame: targetFrame,
+                            visibleFrame: visibleFrame,
+                            context: context,
+                            primaryTopY: primaryTopY,
+                            pid: pid,
+                            animKey: animKey,
+                            finishActive: finishActive,
+                            completion: completion
+                        )
+                        return
+                    }
+                } else {
+                    bounceTicks = 0
+                }
+            }
+        }
+        timer.resume()
+    }
+
+    /// 稳健大步放大（降级路径）：从 startSize 线性到 endSize，分 tilePhaseBSteps 步、每步 settle
+    ///（tilePhaseBStepIntervalMs），是历史上验证过“绝不弹回”的方案。逻辑与重构前的原 Phase-B 完全一致。
+    private func runPhaseBRobust(
+        windowElement: AXUIElement,
+        startSize: CGSize,
+        endSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        visibleFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        animKey: String,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        let steps = Self.tilePhaseBSteps
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        activeTileTimer = timer
+        var step = 0
+        timer.schedule(deadline: .now() + .milliseconds(Self.tilePhaseBLeadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari
+            // 被 zombie 定时器拉到另一屏"的关键防线（即便外部未调用 abort）。
+            if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
+                DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
+                return
+            }
+            step += 1
+            if step >= steps {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                self.finalizePhaseB(
+                    windowElement: windowElement,
+                    endSize: endSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    visibleFrame: visibleFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: "robust",
+                    finishActive: finishActive,
+                    completion: completion
+                )
+                return
+            }
+            let p = CGFloat(step) / CGFloat(steps)
+            let curW = startSize.width + (endSize.width - startSize.width) * p
+            let curH = startSize.height + (endSize.height - startSize.height) * p
+            let curSize = CGSize(width: curW, height: curH)
+            _ = self.resizeWindowWithFallback(windowElement, newSize: curSize)
+        }
+        timer.resume()
+    }
+
+    /// Phase-B 收尾（丝滑与稳健共用）：强制 pos+size 落地、读回实际尺寸、必要时重新居中、清锁。
+    private func finalizePhaseB(
+        windowElement: AXUIElement,
+        endSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        visibleFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        via: String,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        // 最终强制 pos+size 落到目标。
+        _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
+        let sizeOutcome = resizeWindowWithFallback(windowElement, newSize: endSize)
+        if let pid {
+            _ = tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
+        }
+        // 终端类 app（如 electerm）按字符行网格 snap，高度可能无法精确到目标。
+        // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸在
+        // visibleFrame 内重新居中，避免窗口顶部对齐而底部溢出/贴边。
+        let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
+            let recenteredBL = WindowGeometry.centeredOrigin(windowSize: actualSize, visibleFrame: visibleFrame)
+            let recenteredAX = toAXOrigin(
+                bottomLeftOrigin: recenteredBL,
+                windowSize: actualSize,
+                screenFrame: context.screen.frame,
+                space: context.space,
+                primaryTopY: primaryTopY
+            )
+            _ = setPointAttribute(kAXPositionAttribute as CFString, value: recenteredAX, on: windowElement)
+            DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); recentered to \(recenteredAX)")
+        }
+        let postSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
+        DiagnosticLog.debug("tile-animator: phase B done (via=\(via)) pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
+        finishActive()
+        completion?()
     }
 
     // MARK: - 共享解算 / 动画辅助

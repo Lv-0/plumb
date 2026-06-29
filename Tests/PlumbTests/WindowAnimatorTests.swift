@@ -31,6 +31,33 @@ func easeInOutClampsOutOfRange() async throws {
 }
 
 @Test
+func easeOutEndpoints() async throws {
+    // 曲线两端必须正好为 0 和 1。
+    #expect(WindowAnimator.easeOut(0) == 0)
+    #expect(WindowAnimator.easeOut(1) == 1)
+}
+
+@Test
+func easeOutMonotonicAndMidpoint() async throws {
+    // 二次 ease-out：1 - (1-t)^2，t=0.5 时为 0.75，单调递增，值域 [0,1]。
+    #expect(WindowAnimator.easeOut(0.5) == 0.75)
+    var prev: CGFloat = -1
+    for i in 0...20 {
+        let t = CGFloat(i) / 20.0
+        let v = WindowAnimator.easeOut(t)
+        #expect(v >= prev)
+        #expect(v >= 0 && v <= 1)
+        prev = v
+    }
+}
+
+@Test
+func easeOutClampsOutOfRange() async throws {
+    #expect(WindowAnimator.easeOut(-1) == 0)
+    #expect(WindowAnimator.easeOut(2) == 1)
+}
+
+@Test
 func interpolatedRectMatchesEasing() async throws {
     let start = CGRect(x: 0, y: 0, width: 100, height: 100)
     let end = CGRect(x: 200, y: 400, width: 300, height: 500)
