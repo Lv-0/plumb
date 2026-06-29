@@ -470,35 +470,59 @@ final class WindowEventObserver {
             // 这些 App 有三类「无 kAXDocument」窗口（subrole 均 AXStandardWindow）：文件列表、
             // 模板选择器、新建未保存文档。只有「新建未保存文档」该平铺，前两类只居中。
             //
-            // 判据（见 isDocumentChooserGalleryWindow 注释的实测证据）：
-            //   - 有 kAXDocument（已保存文档）→ 落到下方正常平铺逻辑。
-            //   - 无 kAXDocument + 子树含选择器特征 role（AXCollectionList，或 AXOutline+AXBrowser）
-            //     → 本分支只居中。
-            //   - 无 kAXDocument + 子树不含上述特征（新建未保存文档）→ 落到下方平铺。
+            // 判据（见 classifyDocumentAppWindow 注释的实测证据），按 windowHasDocument +
+            // classifyDocumentAppWindow 的三态分流：
+            //   - 有 kAXDocument（已保存文档）→ 跳过本分支，落到下方正常平铺 + 锁 PID。
+            //   - .gallery（子树含选择器 role）→ 只居中，不锁、不 markCentered。
+            //   - .document（无 kAXDocument 但子树含文档内容 role，如新建未保存文档）
+            //     → 跳过本分支，落到下方平铺（这正是 bbfdd1c 想要、又不破坏选择器的行为）。
+            //   - .undetermined（子树未就绪，Office 启动期 0.45s 空壳）→ 只居中，不锁、不 markCentered，
+            //     return true 但【不终止重试】。这是修复「Excel/Word 文件列表被平铺」的根因：
+            //     运行时日志确证 Office 在 0.45s 时子树还没构建出 AXCollectionList，旧实现把它当
+            //     「非选择器」→ 平铺 + processedPIDs.insert 锁死，导致即使几秒后子树就绪也永不再评估。
+            //     改为只居中、不锁，让 startInitialCenteringRetries 继续重试，直到子树能明确判定
+            //     为 .gallery（继续居中）或 .document（平铺）。
+            //
             // （childCount 阈值判据已两次失败：只对 Pages 实测，Excel 文件列表 childCount=9 击穿；
             //  AXTitle 判据也曾失败：文件列表标题非空 + 新文档标题填充延迟。AX role 是结构性硬特征，
             //  状态切换瞬间即准确，不受子元素计数、标题时序/语言影响。）
             //
-            // 关键：本分支【不】锁 processedPIDs、也【不】markCentered —— 否则后续真正文档窗口
-            // （含同一窗口保存后获得 kAXDocument）会被第 270 行或 hasCentered 永久挡住，无法平铺
-            // （这正是此前「打开文稿后不平铺」的根因）。重复居中由 service 的动画去重防抖
-            //（activeAnimationKey），居中不涉及 resize，无「来回拉扯」风险。
+            // 关键不变量：gallery / undetermined 两分支都【不】锁 processedPIDs、也【不】markCentered ——
+            // 否则后续真正文档窗口（含同一窗口保存后获得 kAXDocument）会被 hasCentered/processedPIDs
+            // 永久挡住无法平铺（这正是此前「打开文稿后不平铺」的根因）。.document 与有 kAXDocument 的
+            // 窗口一样落到下方正常平铺+锁。重复居中由 service 的动画去重防抖（activeAnimationKey），
+            // 居中不涉及 resize，无「来回拉扯」风险。
             //
             // 设计决策：选择器居中不受 shouldCenter 白名单约束——只要该 App 在平铺白名单 +
-            // 选择器感知列表内，选择器一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
+            // 选择器感知列表内，选择器/未定型窗口一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
             if tilingSettings.isDocumentChooserApp(bundleIdentifier: frontmostApp.bundleIdentifier),
-               !windowHasDocument(windowElement),
-               isDocumentChooserGalleryWindow(windowElement)
+               !windowHasDocument(windowElement)
             {
-                DiagnosticLog.debug("handle[\(notification)]: gallery window — center only, keep PID unlocked, not marked pid=\(pid)")
-                do {
-                    try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                    // 不 markCentered：允许窗口后续获得 kAXDocument 时被平铺。
-                    // 不 insert processedPIDs：允许后续窗口事件继续处理。
-                    return true
-                } catch {
-                    DiagnosticLog.debug("handle[\(notification)]: chooser center failed pid=\(pid) error=\(error)")
-                    return false
+                switch classifyDocumentAppWindow(windowElement) {
+                case .gallery:
+                    DiagnosticLog.debug("handle[\(notification)]: gallery window — center only, keep PID unlocked, not marked pid=\(pid)")
+                    do {
+                        try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                        return true   // 重试会继续；gallery 不会变成文档，但保持不锁语义一致。
+                    } catch {
+                        DiagnosticLog.debug("handle[\(notification)]: chooser center failed pid=\(pid) error=\(error)")
+                        return false
+                    }
+                case .undetermined:
+                    // 子树未就绪（Office 启动期空壳）：只居中、不锁、不 markCentered、继续重试。
+                    // ⚠️ 不落入下方 tilePendingWindows——那会平铺并锁死 PID，造成「文件列表被平铺」
+                    // 且后续真文档被永久挡住。等子树构建完成（后续重试）能明确判定后再处理。
+                    DiagnosticLog.debug("handle[\(notification)]: undetermined window (subtree not ready) — center only, keep PID unlocked, retry will re-evaluate pid=\(pid)")
+                    do {
+                        try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                        return true
+                    } catch {
+                        DiagnosticLog.debug("handle[\(notification)]: undetermined center failed pid=\(pid) error=\(error)")
+                        return false
+                    }
+                case .document:
+                    // 无 kAXDocument 但子树含文档内容（新建未保存文档）→ 落到下方正常平铺。
+                    DiagnosticLog.debug("handle[\(notification)]: document window (no kAXDocument but has content) — fall through to tile pid=\(pid)")
                 }
             }
             // DMG 安装窗口感知：访达打开 .dmg 后弹出的「挂载内容窗口」（拖拽安装界面）。
@@ -923,15 +947,20 @@ final class WindowEventObserver {
             // 与 handle() 的 chooser 分支同构。文档 App 必须在平铺白名单内（真文档要平铺），故其
             // 文件列表/模板画廊窗口一旦 resize（缩略图加载、入场动画）会通过上方 shouldTile 守卫，
             // 直接走到下面的 tileWindowElementAnimated 被强行平铺——这正是"文件列表界面又被平铺"的根因。
-            // 命中选择器窗口时改为只居中、不平铺；不锁 processedPIDs、不 markCentered（同 handle() 不变量，
-            // 否则后续真文档窗口会被永久挡住无法平铺）。居中不涉及 resize、无"来回拉扯"风险。
+            // 命中 .gallery 或 .undetermined（子树未就绪）时改为只居中、不平铺；不锁 processedPIDs、
+            // 不 markCentered（同 handle() 不变量，否则后续真文档窗口会被永久挡住无法平铺）。
+            // .undetermined 同样只居中：resize 时刻子树可能仍未就绪，平铺会锁死误判（同主路径根因）。
+            // 居中不涉及 resize、无"来回拉扯"风险。
             if self.tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleID),
-               !self.windowHasDocument(windowElement),
-               self.isDocumentChooserGalleryWindow(windowElement)
+               !self.windowHasDocument(windowElement)
             {
-                DiagnosticLog.debug("handle[resize]: document-chooser gallery window — center only, skip retile pid=\(pid)")
-                _ = try? self.service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                return
+                let kind = self.classifyDocumentAppWindow(windowElement)
+                if kind == .gallery || kind == .undetermined {
+                    DiagnosticLog.debug("handle[resize]: document-chooser \(kind) window — center only, skip retile pid=\(pid)")
+                    _ = try? self.service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                    return
+                }
+                // .document（无 kAXDocument 但有文档内容）→ 落到下方正常 retile。
             }
 
             // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
@@ -1017,7 +1046,7 @@ final class WindowEventObserver {
         return !doc.isEmpty
     }
 
-    /// 判断一个无文档窗口是否为「模板选择器 / 文件列表」（而非新建的未保存文档窗口）。
+    /// 对一个无文档窗口做三态分类：选择器/画廊、文档、或「未定型」。
     ///
     /// 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口，subrole 均
     /// 为 AXStandardWindow，仅凭 subrole 与 kAXDocument 无法区分：
@@ -1028,45 +1057,62 @@ final class WindowEventObserver {
     ///
     /// 判据：**窗口子树是否含选择器特有的 AX 角色**（而非数子元素数）。来自 2026-06 对
     /// Excel/Word/Pages/Numbers 的「文件列表 / 模板画廊 / 真实文档」三态实测（osascript 采
-    /// 全子树），选择器窗口稳定含以下 role 组合之一，文档窗口一个都不含：
+    /// 全子树），选择器窗口稳定含以下 role 组合之一：
     ///   - Office（Word/Excel）文件列表、iWork（Pages/Numbers）模板画廊：含 `AXCollectionList`
     ///   - iWork（Pages/Numbers）文件列表（「打开」面板）：同时含 `AXOutline` 与 `AXBrowser`
-    /// 实测对照（6 种窗口全部正确）：
-    ///   选择器：Excel 列表✓CollectionList / Word 列表✓CollectionList /
-    ///           Pages 列表✓Outline+Browser / Numbers 列表✓Outline+Browser /
-    ///           Pages 画廊✓CollectionList / Numbers 画廊✓CollectionList
-    ///   文档：  Excel✗ / Word✗ / Pages✗ / Numbers✗（含 AXLayoutArea 等，但都不命中上面组合）
     ///
-    /// 为什么不再用 childCount 阈值（曾两次失败）：
-    ///   - `bbfdd1c`(title.isEmpty)、`2912c5d`(childCount<6) 均只对 Pages 实测，对 Excel 失效：
-    ///     实测 Excel 文件列表 childCount=9（远超 6），且 Word 列表=9 / Word 文档=7，跨 App
-    ///     完全无规律，调阈值也修不好（详见 git log + 实测数据 result.txt）。
-    ///   - AX role 是结构性硬特征，不受子元素计数、本地化语言影响。
+    /// ⚠️ 三态的关键——为什么需要区分「未定型」（运行时日志 2026-06-29 确证）：
+    ///   Office 启动慢，attach 后 0.45s 首次 handle 触发时，文件列表窗口子树**还没构建出
+    ///   AXCollectionList**。此刻遍历子树「既找不到选择器 role、也找不到文档内容」。
+    ///   旧实现把这种情况当「不是选择器」→ 落入平铺 + processedPIDs.insert 锁死 PID，
+    ///   导致即使几秒后子树就绪也永远不再被评估（Excel/Word 文件列表被平铺的根因）。
+    ///   因此必须把它单独识别为 .undetermined：只居中、不锁 PID、让重试继续，直到子树就绪
+    ///   能明确判定为 .gallery（继续居中）或 .document（平铺）。
     ///
-    /// 为什么不用 AXTitle：见上方 windowHasDocument 注释（时序错 + 跨 App 文案不一致）。
-    private func isDocumentChooserGalleryWindow(_ window: AXUIElement) -> Bool {
+    /// 如何区分「未定型」与「真文档」：两者此刻都不含选择器 role。但真文档窗口子树非空且
+    /// 含文档内容 role（如 AXLayoutArea / AXTextArea / AXSplitGroup 等），未定型窗口子树
+    /// 极度贫瘠（Office 0.45s 时往往只有空壳）。用「子树是否含任意文档内容 role」区分：
+    ///   - 含选择器 role → .gallery
+    ///   - 不含选择器 role，但含文档内容 role → .document（应平铺）
+    ///   - 两者都不含（子树未构建/空壳）→ .undetermined（只居中、不锁、继续重试）
+    ///
+    /// 为什么不用 childCount 阈值（曾两次失败）：见 git log（bbfdd1c/2912c5d）。
+    /// 为什么不用 AXTitle：见 windowHasDocument 注释（时序错 + 跨 App 文案不一致）。
+    private func classifyDocumentAppWindow(_ window: AXUIElement) -> DocumentAppWindowKind {
         var foundCollectionList = false
         var foundOutline = false
         var foundBrowser = false
+        var foundDocumentContent = false
         subtreeRoles(window, maxDepth: Self.chooserRoleScanDepth) { role in
             switch role {
             case "AXCollectionList": foundCollectionList = true
             case "AXOutline":        foundOutline = true
             case "AXBrowser":        foundBrowser = true
+            // 文档内容 role（实测：Excel/Word/Pages/Numbers 文档窗口都含其中之一或多个）。
+            // 用于区分「真文档」与「未定型空壳」。
+            // ⚠️ 不能用 AXSplitGroup——它是通用容器 role，iWork 文件列表/模板页也含（实测
+            // Numbers 文件列表顶层就是 AXSplitGroup，但选择器 role AXOutline/AXBrowser 藏在它
+            // 内层）。若把 AXSplitGroup 当文档内容，会过早剪枝，扫不到内层的选择器 role，
+            // 导致 Numbers 文件列表被误判为 .document（运行时日志 2026-06-29 确证）。
+            // 只用「文档画布/可编辑文本」这种真正的文档内容 role。
+            case "AXLayoutArea", "AXTextArea":
+                foundDocumentContent = true
             default: break
             }
-            // 命中 CollectionList 即可定论；Outline+Browser 需两者都找到才定论，故这里只在
-            // 已命中选择器签名时提前终止以省遍历。
+            // 只有命中选择器签名（明确是 gallery）才剪枝；文档内容不剪枝——因为选择器 role
+            // 可能藏在更深层（如 Numbers 文件列表的 Outline/Browser 在 AXSplitGroup 内层），
+            // 过早因 foundDocumentContent 停止会漏扫选择器 role。让遍历走完整个 maxDepth 子树。
             return Self.isChooserRoleSignature(
                 hasCollectionList: foundCollectionList,
                 hasOutline: foundOutline,
                 hasBrowser: foundBrowser
             )
         }
-        return Self.isChooserRoleSignature(
+        return Self.classifyWindow(
             hasCollectionList: foundCollectionList,
             hasOutline: foundOutline,
-            hasBrowser: foundBrowser
+            hasBrowser: foundBrowser,
+            hasDocumentContent: foundDocumentContent
         )
     }
 
@@ -1091,11 +1137,21 @@ final class WindowEventObserver {
     /// 都在窗口根下 4 层以内出现；给到 6 留余量，同时避免对 Office 文档这种大子树全量遍历。
     private static let chooserRoleScanDepth = 6
 
+    /// 文档类 App 无文档窗口的三态分类。纯逻辑（无 actor 依赖），可单测。
+    ///
+    /// - gallery: 选择器/文件列表（只居中、不平铺，可安全锁/不锁均可——它不会再变成文档）
+    /// - document: 真文档窗口（应平铺 + 锁 PID）
+    /// - undetermined: 子树未就绪，无法判定（只居中、不锁 PID、继续重试，直到能明确判定）
+    enum DocumentAppWindowKind: Equatable {
+        case gallery
+        case document
+        case undetermined
+    }
+
     /// 纯逻辑判定：给定子树中各特征 role 的命中情况，是否构成「文件列表 / 模板画廊」签名。
     ///
-    /// 与 AX 取值解耦——`isDocumentChooserGalleryWindow` 负责遍历子树收集 role，本函数负责
-    /// 签名判定，这样规则集中、可单测（无 macOS/AX 依赖），未来要扩展（新 App 的选择器用了
-    /// 别的 role 组合）只改这里。规则（实测验证，见 isDocumentChooserGalleryWindow 注释）：
+    /// 与 AX 取值解耦——遍历子树负责收集 role，本函数负责签名判定，规则集中、可单测。
+    /// 规则（实测验证，见 classifyDocumentAppWindow 注释）：
     ///   - 含 AXCollectionList（Office 文件列表 + iWork 模板画廊）=> 选择器
     ///   - 同时含 AXOutline + AXBrowser（iWork「打开」文件列表）=> 选择器
     /// nonisolated：纯逻辑无任何 actor 状态依赖，可脱离 MainActor 在任意上下文（含单测）调用。
@@ -1105,6 +1161,31 @@ final class WindowEventObserver {
         hasBrowser: Bool
     ) -> Bool {
         return hasCollectionList || (hasOutline && hasBrowser)
+    }
+
+    /// 纯逻辑三态分类：给定子树特征 role 命中情况，判定窗口是 gallery / document / undetermined。
+    ///
+    /// 规则（实测验证，见 classifyDocumentAppWindow 注释）：
+    ///   - 命中选择器签名（AXCollectionList 或 AXOutline+AXBrowser）=> .gallery
+    ///   - 否则若含文档内容 role（AXLayoutArea / AXTextArea / AXSplitGroup）=> .document
+    ///   - 两者都不含（Office 启动期 0.45s 空壳、子树未构建）=> .undetermined
+    /// 这是修复「Excel/Word 文件列表 0.45s 时被误判平铺并锁死 PID」的关键纯函数：
+    /// 让调用方对 .undetermined 采取「只居中、不锁、继续重试」而非「平铺+锁」。
+    /// nonisolated：纯逻辑，可单测。
+    nonisolated static func classifyWindow(
+        hasCollectionList: Bool,
+        hasOutline: Bool,
+        hasBrowser: Bool,
+        hasDocumentContent: Bool
+    ) -> DocumentAppWindowKind {
+        if isChooserRoleSignature(
+            hasCollectionList: hasCollectionList,
+            hasOutline: hasOutline,
+            hasBrowser: hasBrowser
+        ) {
+            return .gallery
+        }
+        return hasDocumentContent ? .document : .undetermined
     }
 
     /// bundle id 是否为访达（归一化比较）。

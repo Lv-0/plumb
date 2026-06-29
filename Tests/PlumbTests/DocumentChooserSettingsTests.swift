@@ -156,73 +156,124 @@ func documentChooserDoesNotAffectShouldTile() async throws {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// isChooserRoleSignature 判定单测。
+// classifyWindow 三态分类单测（gallery / document / undetermined）。
 //
-// 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口（subrole 均为
-// AXStandardWindow）：文件列表、模板选择器、新建未保存文档。仅凭 kAXDocument 无法区分。
-// 判据是「窗口子树是否含选择器特有的 AX role 组合」（而非 childCount 阈值——后者只对 Pages
-// 实测、对 Excel 失效：Excel 文件列表 childCount=9）。
+// 背景：文档类 App（Pages/Numbers/Word/Excel）的无 kAXDocument 窗口需三态分类，决定
+// 「只居中」还是「平铺」还是「只居中但继续重试」。
 //
-// 实测签名（2026-06，osascript 采 Excel/Word/Pages/Numbers 三态全子树）：
+// 判据是「窗口子树是否含选择器特征 role」+「是否含文档内容 role」。实测签名（2026-06，
+// osascript 采 Excel/Word/Pages/Numbers 三态全子树 + 运行时日志）：
 //   - Office（Word/Excel）文件列表、iWork（Pages/Numbers）模板画廊：含 AXCollectionList
 //   - iWork（Pages/Numbers）文件列表（「打开」面板）：同时含 AXOutline 与 AXBrowser
-//   - 所有文档窗口（含未保存的「未命名/文档1/工作簿2」）：三者皆不含
+//   - 真文档窗口（含未保存的「工作簿2/文档1/未命名」）：含 AXLayoutArea/AXTextArea/AXSplitGroup
+//   - Office 启动期 0.45s 空壳（运行时日志确证）：什么特征 role 都没有 → undetermined
 //
-// 该判定同时被 handle() 的 chooser 分支与 handleResize 旁路引用，是「文件列表是否被平铺」的
-// 关键开关，故单独锁定以防回归。每个测试对应一个真实采样的窗口，标注其来源。
+// ⚠️ undetermined 是修复「Excel/Word 文件列表被平铺」的关键：
+//   运行时日志确证 Office 在 attach 后 0.45s 首次 handle 时子树还没构建出 AXCollectionList，
+//   旧实现把这种空壳当「非选择器」→ 平铺 + processedPIDs.insert 锁死 PID → 即使几秒后子树
+//   就绪也永不再评估。改为识别为 .undetermined：只居中、不锁、继续重试直到能明确判定。
+// 每个测试对应一个真实采样的窗口，标注其来源。该分类是「文件列表是否被平铺」的关键开关，单独锁定。
 // ─────────────────────────────────────────────────────────────────────────────
+
+// MARK: - isChooserRoleSignature（选择器签名子判定，仍保留测试）
 
 @Test
 func chooserSignature_officeFileList_isChooser() {
-    // Office 文件列表（实测 Excel/Word「打开新的和最近使用的文件」页）含 AXCollectionList
-    // → 是选择器，应只居中、不平铺。
-    #expect(WindowEventObserver.isChooserRoleSignature(
-        hasCollectionList: true, hasOutline: false, hasBrowser: false) == true)
-}
-
-@Test
-func chooserSignature_iworkTemplateGallery_isChooser() {
-    // iWork 模板选择器画廊（实测 Pages/Numbers 模板页）含 AXCollectionList
-    // → 是选择器，应只居中、不平铺。
+    // Office 文件列表（实测 Excel/Word「打开新的和最近使用的文件」页）含 AXCollectionList → 选择器。
     #expect(WindowEventObserver.isChooserRoleSignature(
         hasCollectionList: true, hasOutline: false, hasBrowser: false) == true)
 }
 
 @Test
 func chooserSignature_iworkFileList_isChooser() {
-    // iWork 文件列表（实测 Pages/Numbers「打开」面板）同时含 AXOutline + AXBrowser
-    // → 是选择器，应只居中、不平铺。
+    // iWork 文件列表（实测 Pages/Numbers「打开」面板）同时含 AXOutline + AXBrowser → 选择器。
     #expect(WindowEventObserver.isChooserRoleSignature(
         hasCollectionList: false, hasOutline: true, hasBrowser: true) == true)
 }
 
 @Test
-func chooserSignature_iworkFileList_outlineOnly_isNotChooser() {
-    // 只有 AXOutline 而无 AXBrowser 不是 iWork 文件列表签名（避免 AXOutline 单独命中误判）
-    // → 不是选择器 → 落入平铺。
+func chooserSignature_outlineOnly_isNotChooser() {
+    // 只有 AXOutline 而无 AXBrowser 不是选择器签名（避免 AXOutline 单独命中误判）。
     #expect(WindowEventObserver.isChooserRoleSignature(
         hasCollectionList: false, hasOutline: true, hasBrowser: false) == false)
 }
 
 @Test
-func chooserSignature_document_isNotChooser() {
-    // 真实文档窗口（实测 Excel/Word/Pages/Numbers 文档，含未保存的「工作簿2/文档1/未命名」）
-    // 三个特征 role 皆不含 → 不是选择器 → 走平铺（这正是 bbfdd1c 想要、且不破坏选择器的行为）。
-    #expect(WindowEventObserver.isChooserRoleSignature(
-        hasCollectionList: false, hasOutline: false, hasBrowser: false) == false)
-}
-
-@Test
-func chooserSignature_axFetchFailed_isNotChooser() {
-    // AX 取值失败 / 窗口暂无特征 role：保守地视为「不是选择器」→ 落入正常平铺路径。
-    // （选择器检测是「正向」匹配：拿不到证据就不拦截平铺，避免误吞真文档窗口。）
-    #expect(WindowEventObserver.isChooserRoleSignature(
-        hasCollectionList: false, hasOutline: false, hasBrowser: false) == false)
-}
-
-@Test
 func chooserSignature_collectionListDominates() {
-    // AXCollectionList 命中即定论（即使另有 Outline/Browser）→ 是选择器。
+    // AXCollectionList 命中即定论（即使另有 Outline/Browser）→ 选择器。
     #expect(WindowEventObserver.isChooserRoleSignature(
         hasCollectionList: true, hasOutline: true, hasBrowser: true) == true)
+}
+
+// MARK: - classifyWindow 三态（gallery / document / undetermined）
+
+@Test
+func classify_officeFileList_isGallery() {
+    // Office 文件列表（实测 Excel/Word）含 AXCollectionList，无文档内容 → .gallery（只居中）。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: true, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: false) == .gallery)
+}
+
+@Test
+func classify_iworkFileList_isGallery() {
+    // iWork 文件列表（实测 Pages/Numbers「打开」）含 Outline+Browser → .gallery。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: false, hasOutline: true, hasBrowser: true,
+        hasDocumentContent: false) == .gallery)
+}
+
+@Test
+func classify_iworkTemplateGallery_isGallery() {
+    // iWork 模板画廊（实测 Pages/Numbers 模板页）含 CollectionList → .gallery。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: true, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: false) == .gallery)
+}
+
+@Test
+func classify_documentWithContent_isDocument() {
+    // 真文档窗口（实测 Excel/Word/Pages/Numbers 文档，含未保存的「工作簿2/文档1/未命名」）
+    // 含 AXLayoutArea/AXTextArea/AXSplitGroup 等文档内容 role → .document（应平铺）。
+    // 这正是 bbfdd1c 想要「新建未保存文档也平铺」、又不破坏选择器的行为。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: false, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: true) == .document)
+}
+
+@Test
+func classify_officeStartupShell_isUndetermined() {
+    // ⭐ 核心修复用例：Office 启动期 0.45s 空壳（运行时日志确证 Excel/Word 文件列表 attach
+    // 后首次 handle 时子树未构建出任何特征 role）→ .undetermined（只居中、不锁、继续重试）。
+    // 旧实现会把它当 .document → 平铺 + 锁死 PID，这是「文件列表被平铺」的根因。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: false, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: false) == .undetermined)
+}
+
+@Test
+func classify_axFetchFailed_isUndetermined() {
+    // AX 取值失败 / 窗口暂无任何特征 role → 同 Office 空壳，保守地视为 .undetermined
+    // （只居中、不锁、继续重试），避免拿不到证据就平铺锁死。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: false, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: false) == .undetermined)
+}
+
+@Test
+func classify_gallerySignatureOverridesDocumentContent() {
+    // 选择器签名优先于文档内容：即使同时含 CollectionList 和 LayoutArea（理论上选择器
+    // 不会有文档内容，但防御性测试），按 .gallery 处理（选择器只居中）。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: true, hasOutline: false, hasBrowser: false,
+        hasDocumentContent: true) == .gallery)
+}
+
+@Test
+func classify_documentContentWithPartialChooser_isDocument() {
+    // 只有 AXOutline（无 Browser、无 CollectionList）+ 有文档内容 → 不是选择器签名 → .document。
+    // 锁定：Outline 单独出现不构成选择器，文档内容优先。
+    #expect(WindowEventObserver.classifyWindow(
+        hasCollectionList: false, hasOutline: true, hasBrowser: false,
+        hasDocumentContent: true) == .document)
 }
