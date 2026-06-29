@@ -1,7 +1,7 @@
 {
-  "version": "2.0.20",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.20/Plumb-2.0.20.zip",
-  "sha256": "635b1c74fa511e085c51dddbe89b66393a2d4429a6f043c79237e55f852be2f0",
+  "version": "2.0.21",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.21/Plumb-2.0.21.zip",
+  "sha256": "0454e45cce1e51d5b083572651468d140a7af082a6c1562329452cd7b2f102d1",
   "notes": {
     "en": "Improved: the tiling enlarge animation is now smoother — instead of snapping into place in 4 visible steps with a 250ms dead gap, tiled windows now glide smoothly into their final size over ~0.30s using a continuous ease-out curve (~18 frames at 60Hz), anchored at the top-left and growing right/down. The slide-to-center phase is unchanged (already smooth). Stability is preserved by a bounce-back detector: every frame the actual window size is read back, and if an app keeps snapping the size back (the historical layout-snap-back / 'edges don't fill' bug), Plumb automatically falls back to the proven large-step mode for that window — so sensitive apps (Electron-based, terminal grid-snap apps) keep tiling correctly while everyone else gets the smooth animation. 176 tests pass.",
     "zh": "改进：平铺放大动画更丝滑——平铺窗口不再以 4 段可见的跳跃并伴随 250ms 空档落位，而是用连续的 ease-out 缓动曲线（约 0.30 秒、60Hz 下约 18 帧）平滑地放大到最终尺寸，左上角锚定向右下扩展。滑到中心阶段（阶段 A）不变（本已顺滑）。稳定性由弹回检测保障：每帧读回实际尺寸，若应用持续把尺寸弹回（历史上的「布局弹回 / 四边铺不满」缺陷），Plumb 会自动对该窗口降级回经验证的大步模式——因此敏感应用（Electron 类、终端字符网格 snap 类）仍能正确平铺，其余应用则享受丝滑动画。176 项测试通过。",
