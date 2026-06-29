@@ -106,6 +106,10 @@ final class SettingsWindowController: NSWindowController {
         super.showWindow(sender)
         window?.center()
         // 出现动画：缩放（0.96→1.0）+ 淡入，easeOut。
+        // 关键：缩放改变 size 时会让窗口 origin 漂移（AppKit 以非中心锚点扩展），且 .accessory→.regular
+        // 切换 + 液态玻璃面板 resize 会进一步扰动位置。若依赖 AX observer 的异步居中 retry，会与此处
+        // 动画竞争（实测窗口最终停在偏上 112px、看似“没居中”）。改为动画结束后在 completionHandler 里
+        // 一次性精确居中：此时 size 已稳定为最终尺寸，setFrameOrigin 直接落到屏幕可见区正中。
         window?.alphaValue = 0
         if let frame = window?.frame {
             let scaled = NSRect(
@@ -118,6 +122,9 @@ final class SettingsWindowController: NSWindowController {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 window?.animator().alphaValue = 1
                 window?.animator().setFrame(frame, display: true)
+            }, completionHandler: { [weak self] in
+                // 动画结束、size 稳定后精确居中（消除缩放引入的 origin 漂移）。
+                self?.centerOnCurrentScreen()
             })
         }
 
@@ -139,6 +146,18 @@ final class SettingsWindowController: NSWindowController {
         // 其 `.task` 仅在首次出现时执行一次 → 再次打开不会重新扫描已安装应用，
         // 导致新安装的应用在退出 App 前不可见。视图收到本通知后会重新拉取应用列表。
         NotificationCenter.default.post(name: SettingsWindowNotifications.windowDidShow, object: nil)
+    }
+
+    /// 把设置窗口精确放到当前屏幕可见区正中（动画结束后调用，消除缩放引入的 origin 漂移）。
+    /// 用 setFrameOrigin 一次写入（非动画），避免与 AX observer 的异步居中竞争。
+    private func centerOnCurrentScreen() {
+        guard let window else { return }
+        let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        guard visible.width > 0, visible.height > 0 else { return }
+        let frame = window.frame
+        let x = visible.minX + (visible.width - frame.width) / 2
+        let y = visible.minY + (visible.height - frame.height) / 2
+        window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
 

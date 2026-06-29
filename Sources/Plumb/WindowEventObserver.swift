@@ -489,6 +489,15 @@ final class WindowEventObserver {
             return false
         }
 
+        // 跳过 Plumb 自身：设置窗口由 SettingsWindowController.showWindow 的 completionHandler 精确居中
+        //（动画结束后 setFrameOrigin）。通用 AX retry 居中会与 showWindow 的缩放动画 + 液态玻璃 resize +
+        // .accessory→.regular 切换竞争，把窗口拉到偏上位置（实测偏上 112px，用户报告“没居中”）。
+        // 纯早退：不 markCentered、不锁 processedPIDs，不影响其他 app。
+        if pid == ProcessInfo.processInfo.processIdentifier {
+            DiagnosticLog.debug("handle[\(notification)]: own PID \(pid) — settings window centered by showWindow, skip")
+            return false
+        }
+
         // Reject stale notifications delivered from a previously-observed app after the observer has
         // already been rebound to a different app.
         if let observedPID, observedPID != pid {
