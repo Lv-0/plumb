@@ -166,10 +166,17 @@ final class WindowCenteringService {
     private static let smoothPhaseBLeadInMs: Int = 60
 
     /// 弹回判定阈值（px）：若实际尺寸在某一轴上落后于写入值超过此值，计为一帧“弹回”。
-    private static let smoothPhaseBBounceBackPx: CGFloat = 24
+    /// 调高自 24px——60Hz 写入时 app 实际尺寸因 AX 异步延迟天然落后写入值 24~40px，属正常 lag
+    /// 而非真弹回；24px 阈值会把正常 lag 误判为弹回、频繁降级，导致「首次打开不平铺」（didWindowActuallyTile
+    /// 因降级后 250ms 重启而达不到目标）。
+    private static let smoothPhaseBBounceBackPx: CGFloat = 48
 
-    /// 连续多少帧弹回才触发降级。要求连续多帧可避免对系统瞬时弹动（激活/聚焦调整）的误判。
-    private static let smoothPhaseBBounceBackConsecutiveTicks: Int = 2
+    /// 连续多少帧弹回才触发降级。调高自 2 帧——要求更多连续帧可避免对正常 lag 的误判。
+    private static let smoothPhaseBBounceBackConsecutiveTicks: Int = 3
+
+    /// 仅当进度超过此阈值后才开始计弹回。前段（app 尚未真正开始放大、AX 延迟累积）的实际尺寸
+    /// 必然落后写入值，这是物理正常的；只有接近末段仍大幅落后才可能是真弹回。
+    private static let smoothPhaseBBounceBackMinProgress: CGFloat = 0.6
 
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
@@ -553,25 +560,37 @@ final class WindowCenteringService {
             self.activeTileTimer = nil
         }
 
-        // === 阶段 A：以当前尺寸居中（仅移动） ===
-        let centeredBottomLeftNow = WindowGeometry.centeredOrigin(windowSize: windowSize, visibleFrame: visibleFrame)
-        let centerAXOrigin = toAXOrigin(
-            bottomLeftOrigin: centeredBottomLeftNow,
+        // === 阶段 A：以当前尺寸滑到平铺目标原点（左上角锚定，仅移动） ===
+        // 关键修复：此前 Phase A 滑到「屏幕中心」、Phase B 再单次写入跳到左上角——那次写入常因
+        // app 在 Phase A 结束后仍在 relayout 而被延迟/忽略，导致窗口停在中心开始放大（用户报告
+        // 「没有先移到左上角」）。改为 Phase A 直接滑到左上角锚点，消除中间跳变。
+        //
+        // 几何：保持左上角角点固定在平铺目标左上角 (visibleFrame.minX+insetX, visibleFrame.maxY-insetY)，
+        // 对当前窗口尺寸反推左下角 origin。当尺寸增长到 targetSize 时，此 origin 收敛到 targetFrame.origin，
+        // 与 Phase B 的 targetAXOrigin 一致，故放大期间 origin 无需再动。
+        let insetX = targetFrame.minX - visibleFrame.minX
+        let insetY = visibleFrame.maxY - targetFrame.maxY
+        let tileOriginForCurrentSize = CGPoint(
+            x: visibleFrame.minX + insetX,
+            y: visibleFrame.maxY - insetY - windowSize.height
+        )
+        let tileOriginAXForCurrentSize = toAXOrigin(
+            bottomLeftOrigin: tileOriginForCurrentSize,
             windowSize: windowSize,
             screenFrame: context.screen.frame,
             space: context.space,
             primaryTopY: primaryTopY
         )
 
-        // 如果当前已大致居中，则跳过阶段 A 直接进入阶段 B。
-        let alreadyCentered = abs(currentPosition.x - centerAXOrigin.x) < 2 && abs(currentPosition.y - centerAXOrigin.y) < 2
+        // 如果当前位置已在平铺原点 2px 内，则跳过阶段 A 直接进入阶段 B。
+        let alreadyAtTileOrigin = abs(currentPosition.x - tileOriginAXForCurrentSize.x) < 2 && abs(currentPosition.y - tileOriginAXForCurrentSize.y) < 2
 
         // 阶段 B 的尺寸能否写入（即窗口是否可调整大小）。
         let canResize = isResizable(windowElement)
 
 
-        // 若既已居中又不可调整大小，则无需动画。
-        if alreadyCentered, !canResize {
+        // 若既已在原点又不可调整大小，则无需动画。
+        if alreadyAtTileOrigin, !canResize {
             finishActive()
             completion?()
             return
@@ -596,10 +615,9 @@ final class WindowCenteringService {
                 primaryTopY: primaryTopY
             )
 
-            // 1) 先把窗口左下角移到平铺原点。
-            _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
-
-            // 2) 进入丝滑放大（默认）。若检测到弹回，会自动降级到稳健大步模式。
+            // Phase A 已把窗口锚到平铺左上角原点（以当前尺寸）；此处不再单次写入 origin（旧实现的
+            // 那次写入恰是「窗口停在中心开始放大」bug 的根因——被 Phase A 收尾期的 relayout 拖垮）。
+            // 进入丝滑放大（默认）。若检测到弹回，会自动降级到稳健大步模式。
             runPhaseBSmooth(
                 windowElement: windowElement,
                 startSize: windowSize,
@@ -616,16 +634,16 @@ final class WindowCenteringService {
             )
         }
 
-        if alreadyCentered {
+        if alreadyAtTileOrigin {
             runPhaseB()
             return
         }
 
-        // 执行阶段 A，完成后进入阶段 B。
+        // 执行阶段 A：以当前尺寸滑到平铺目标原点（左上角锚定），完成后进入阶段 B 从该锚点放大。
         var phaseATimerBox: DispatchSourceTimer?
         phaseATimerBox = WindowAnimator.animate(
             from: CGRect(origin: currentPosition, size: windowSize),
-            to: CGRect(origin: centerAXOrigin, size: windowSize),
+            to: CGRect(origin: tileOriginAXForCurrentSize, size: windowSize),
             writer: { [weak self] frame in
                 guard let self else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
@@ -734,22 +752,24 @@ final class WindowCenteringService {
             _ = self.resizeWindowWithFallback(windowElement, newSize: curSize)
 
             // 弹回检测：读回实际尺寸，若在任一轴上落后写入值超阈值，计为一帧弹回。
+            // 仅在接近末段（progress > smoothPhaseBBounceBackMinProgress，默认 0.6）后才计弹回：
+            // 前段 app 实际尺寸因 AX 异步延迟天然落后写入值 24~40px，这是物理正常的 lag 而非真弹回，
+            // 旧实现用 0.25 门 + 24px 阈值会把这些正常 lag 误判为弹回并降级，破坏放大达成（首次不平铺根因）。
             if let actual = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement) {
                 let lagW = abs(actual.width - curSize.width)
                 let lagH = abs(actual.height - curSize.height)
-                // 仅在尺寸已显著增长（>25% 进度）后才判定弹回：前段 app 尚未开始放大属正常，
-                // 避免把“前几帧还没动”误判为弹回而频繁降级。
-                if p > 0.25 && (lagW > Self.smoothPhaseBBounceBackPx || lagH > Self.smoothPhaseBBounceBackPx) {
+                if p > Self.smoothPhaseBBounceBackMinProgress && (lagW > Self.smoothPhaseBBounceBackPx || lagH > Self.smoothPhaseBBounceBackPx) {
                     bounceTicks += 1
                     DiagnosticLog.debug("tile-animator: bounce-back detected (tick=\(bounceTicks) lagW=\(lagW) lagH=\(lagH) written=\(curSize) actual=\(actual))")
                     if bounceTicks >= Self.smoothPhaseBBounceBackConsecutiveTicks {
-                        // 降级到稳健大步模式。
+                        // 降级到稳健大步模式。从【当前实际尺寸】接力（而非原始 startSize），
+                        // 并跳过 lead-in（已在放大中，无需再 settle）——避免降级后从零重启 + 250ms 空档。
                         timer.cancel()
                         if self.activeTileTimer === timer { self.activeTileTimer = nil }
-                        DiagnosticLog.debug("tile-animator: smooth -> robust fallback (pid=\(pid.map(String.init) ?? "?"))")
+                        DiagnosticLog.debug("tile-animator: smooth -> robust fallback (pid=\(pid.map(String.init) ?? "?")) resume from \(actual)")
                         self.runPhaseBRobust(
                             windowElement: windowElement,
-                            startSize: startSize,
+                            startSize: actual,
                             endSize: endSize,
                             targetAXOrigin: targetAXOrigin,
                             targetFrame: targetFrame,
@@ -758,6 +778,7 @@ final class WindowCenteringService {
                             primaryTopY: primaryTopY,
                             pid: pid,
                             animKey: animKey,
+                            skipLeadIn: true,
                             finishActive: finishActive,
                             completion: completion
                         )
@@ -773,6 +794,8 @@ final class WindowCenteringService {
 
     /// 稳健大步放大（降级路径）：从 startSize 线性到 endSize，分 tilePhaseBSteps 步、每步 settle
     ///（tilePhaseBStepIntervalMs），是历史上验证过“绝不弹回”的方案。逻辑与重构前的原 Phase-B 完全一致。
+    /// - Parameter skipLeadIn: 从丝滑模式接力降级时传 true——已在放大中，无需 tilePhaseBLeadInMs 的
+    ///   settle 空档；直接开始分步。首次进入（非降级）传 false，保留 settle 防线。
     private func runPhaseBRobust(
         windowElement: AXUIElement,
         startSize: CGSize,
@@ -784,6 +807,7 @@ final class WindowCenteringService {
         primaryTopY: CGFloat,
         pid: pid_t?,
         animKey: String,
+        skipLeadIn: Bool = false,
         finishActive: @escaping () -> Void,
         completion: (() -> Void)?
     ) {
@@ -791,7 +815,8 @@ final class WindowCenteringService {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
         var step = 0
-        timer.schedule(deadline: .now() + .milliseconds(Self.tilePhaseBLeadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
+        let leadInMs = skipLeadIn ? 0 : Self.tilePhaseBLeadInMs
+        timer.schedule(deadline: .now() + .milliseconds(leadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari
