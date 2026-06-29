@@ -156,57 +156,73 @@ func documentChooserDoesNotAffectShouldTile() async throws {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// isGalleryChildCount 阈值判定单测。
+// isChooserRoleSignature 判定单测。
 //
 // 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口（subrole 均为
-// AXStandardWindow）：文件列表、模板选择器、新建未保存文档。仅凭 kAXDocument 无法区分，
-// 用「窗口直接子元素数」区分（基于 Pages 实测：文件列表 kids=1 / 模板选择器 kids=5 / 新文档 kids=6）。
+// AXStandardWindow）：文件列表、模板选择器、新建未保存文档。仅凭 kAXDocument 无法区分。
+// 判据是「窗口子树是否含选择器特有的 AX role 组合」（而非 childCount 阈值——后者只对 Pages
+// 实测、对 Excel 失效：Excel 文件列表 childCount=9）。
+//
+// 实测签名（2026-06，osascript 采 Excel/Word/Pages/Numbers 三态全子树）：
+//   - Office（Word/Excel）文件列表、iWork（Pages/Numbers）模板画廊：含 AXCollectionList
+//   - iWork（Pages/Numbers）文件列表（「打开」面板）：同时含 AXOutline 与 AXBrowser
+//   - 所有文档窗口（含未保存的「未命名/文档1/工作簿2」）：三者皆不含
+//
 // 该判定同时被 handle() 的 chooser 分支与 handleResize 旁路引用，是「文件列表是否被平铺」的
-// 关键开关，故单独锁定以防回归。
+// 关键开关，故单独锁定以防回归。每个测试对应一个真实采样的窗口，标注其来源。
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Test
-func galleryChildCount_fileList_isGallery() {
-    // 文件列表（「打开」面板）kids=1 => 非文档窗口，应只居中。
-    #expect(WindowEventObserver.isGalleryChildCount(1) == true)
+func chooserSignature_officeFileList_isChooser() {
+    // Office 文件列表（实测 Excel/Word「打开新的和最近使用的文件」页）含 AXCollectionList
+    // → 是选择器，应只居中、不平铺。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: true, hasOutline: false, hasBrowser: false) == true)
 }
 
 @Test
-func galleryChildCount_templateGallery_isGallery() {
-    // 模板选择器 kids=5 => 非文档窗口，应只居中。
-    #expect(WindowEventObserver.isGalleryChildCount(5) == true)
+func chooserSignature_iworkTemplateGallery_isChooser() {
+    // iWork 模板选择器画廊（实测 Pages/Numbers 模板页）含 AXCollectionList
+    // → 是选择器，应只居中、不平铺。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: true, hasOutline: false, hasBrowser: false) == true)
 }
 
 @Test
-func galleryChildCount_newDocument_isNotGallery() {
-    // 新建未保存文档 kids=6 => 是文档窗口，应走平铺。
-    #expect(WindowEventObserver.isGalleryChildCount(6) == false)
+func chooserSignature_iworkFileList_isChooser() {
+    // iWork 文件列表（实测 Pages/Numbers「打开」面板）同时含 AXOutline + AXBrowser
+    // → 是选择器，应只居中、不平铺。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: false, hasOutline: true, hasBrowser: true) == true)
 }
 
 @Test
-func galleryChildCount_richDocument_isNotGallery() {
-    // 富 UI 新文档（子元素更多）仍应判为文档窗口，走平铺。
-    #expect(WindowEventObserver.isGalleryChildCount(10) == false)
-    #expect(WindowEventObserver.isGalleryChildCount(100) == false)
+func chooserSignature_iworkFileList_outlineOnly_isNotChooser() {
+    // 只有 AXOutline 而无 AXBrowser 不是 iWork 文件列表签名（避免 AXOutline 单独命中误判）
+    // → 不是选择器 → 落入平铺。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: false, hasOutline: true, hasBrowser: false) == false)
 }
 
 @Test
-func galleryChildCount_axFetchFailed_isGallery() {
-    // AX 取值失败/暂无子元素回退到 count=0：保守地视为非文档窗口 → 只居中，
-    // 避免对状态未知的窗口强行平铺。
-    #expect(WindowEventObserver.isGalleryChildCount(0) == true)
+func chooserSignature_document_isNotChooser() {
+    // 真实文档窗口（实测 Excel/Word/Pages/Numbers 文档，含未保存的「工作簿2/文档1/未命名」）
+    // 三个特征 role 皆不含 → 不是选择器 → 走平铺（这正是 bbfdd1c 想要、且不破坏选择器的行为）。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: false, hasOutline: false, hasBrowser: false) == false)
 }
 
 @Test
-func galleryChildCount_thresholdBoundary() {
-    // 边界：threshold-1 => gallery；threshold => 非文档。锁定默认阈值=6 的语义。
-    #expect(WindowEventObserver.isGalleryChildCount(6 - 1) == true)
-    #expect(WindowEventObserver.isGalleryChildCount(6) == false)
+func chooserSignature_axFetchFailed_isNotChooser() {
+    // AX 取值失败 / 窗口暂无特征 role：保守地视为「不是选择器」→ 落入正常平铺路径。
+    // （选择器检测是「正向」匹配：拿不到证据就不拦截平铺，避免误吞真文档窗口。）
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: false, hasOutline: false, hasBrowser: false) == false)
 }
 
 @Test
-func galleryChildCount_customThreshold() {
-    // 自定义阈值（未来若 Numbers/Word/Excel 差异化）应被尊重。
-    #expect(WindowEventObserver.isGalleryChildCount(3, threshold: 4) == true)
-    #expect(WindowEventObserver.isGalleryChildCount(4, threshold: 4) == false)
+func chooserSignature_collectionListDominates() {
+    // AXCollectionList 命中即定论（即使另有 Outline/Browser）→ 是选择器。
+    #expect(WindowEventObserver.isChooserRoleSignature(
+        hasCollectionList: true, hasOutline: true, hasBrowser: true) == true)
 }

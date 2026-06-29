@@ -470,12 +470,14 @@ final class WindowEventObserver {
             // 这些 App 有三类「无 kAXDocument」窗口（subrole 均 AXStandardWindow）：文件列表、
             // 模板选择器、新建未保存文档。只有「新建未保存文档」该平铺，前两类只居中。
             //
-            // 判据（见 isDocumentChooserGalleryWindow 注释的时间序列实测证据）：
+            // 判据（见 isDocumentChooserGalleryWindow 注释的实测证据）：
             //   - 有 kAXDocument（已保存文档）→ 落到下方正常平铺逻辑。
-            //   - 无 kAXDocument + 子元素数 < 6（文件列表 kids=1 / 模板选择器 kids=5）→ 本分支只居中。
-            //   - 无 kAXDocument + 子元素数 ≥ 6（新建未保存文档 kids=6）→ 落到下方平铺。
-            // （AXTitle 判据曾两次失败：文件列表标题非空致方向错、新文档标题填充延迟 2.85s 致时序错。
-            //  改用子元素数——结构性硬特征，状态切换瞬间即准确，不受标题时序/语言影响。）
+            //   - 无 kAXDocument + 子树含选择器特征 role（AXCollectionList，或 AXOutline+AXBrowser）
+            //     → 本分支只居中。
+            //   - 无 kAXDocument + 子树不含上述特征（新建未保存文档）→ 落到下方平铺。
+            // （childCount 阈值判据已两次失败：只对 Pages 实测，Excel 文件列表 childCount=9 击穿；
+            //  AXTitle 判据也曾失败：文件列表标题非空 + 新文档标题填充延迟。AX role 是结构性硬特征，
+            //  状态切换瞬间即准确，不受子元素计数、标题时序/语言影响。）
             //
             // 关键：本分支【不】锁 processedPIDs、也【不】markCentered —— 否则后续真正文档窗口
             // （含同一窗口保存后获得 kAXDocument）会被第 270 行或 hasCentered 永久挡住，无法平铺
@@ -1015,44 +1017,94 @@ final class WindowEventObserver {
         return !doc.isEmpty
     }
 
-    /// 判断一个无文档窗口是否为「模板选择器 / 文件画廊」（而非新建的未保存文档窗口）。
+    /// 判断一个无文档窗口是否为「模板选择器 / 文件列表」（而非新建的未保存文档窗口）。
     ///
     /// 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口，subrole 均
     /// 为 AXStandardWindow，仅凭 subrole 与 kAXDocument 无法区分：
     ///   - 文件列表（「打开」面板）
-    ///   - 模板选择器
-    ///   - 新建未保存文档（标题「未命名」）
+    ///   - 模板选择器画廊
+    ///   - 新建未保存文档（标题「未命名」/「文档1」/「工作簿2」）
     /// 其中只有「新建未保存文档」应当平铺，前两类只居中。
     ///
-    /// 判据：**窗口直接子元素数 < 6 = 非文档窗口（选择器/文件列表）**。来自实测时间序列
-    /// 证据（Pages，每 0.15s 采样一次，覆盖从模板选择器到点选模板创建文档的全过程）：
-    ///   - 文件列表：kids=1
-    ///   - 模板选择器：kids=5（18 个采样点全部稳定为 5）
-    ///   - 新建文档：kids=6（状态切换瞬间【立即、稳定】跳变为 6，无任何填充延迟）
+    /// 判据：**窗口子树是否含选择器特有的 AX 角色**（而非数子元素数）。来自 2026-06 对
+    /// Excel/Word/Pages/Numbers 的「文件列表 / 模板画廊 / 真实文档」三态实测（osascript 采
+    /// 全子树），选择器窗口稳定含以下 role 组合之一，文档窗口一个都不含：
+    ///   - Office（Word/Excel）文件列表、iWork（Pages/Numbers）模板画廊：含 `AXCollectionList`
+    ///   - iWork（Pages/Numbers）文件列表（「打开」面板）：同时含 `AXOutline` 与 `AXBrowser`
+    /// 实测对照（6 种窗口全部正确）：
+    ///   选择器：Excel 列表✓CollectionList / Word 列表✓CollectionList /
+    ///           Pages 列表✓Outline+Browser / Numbers 列表✓Outline+Browser /
+    ///           Pages 画廊✓CollectionList / Numbers 画廊✓CollectionList
+    ///   文档：  Excel✗ / Word✗ / Pages✗ / Numbers✗（含 AXLayoutArea 等，但都不命中上面组合）
     ///
-    /// 为什么不用 AXTitle（曾尝试过的判据，已两次失败）：
-    ///   1. 方向错：文件列表的标题是「打开」（非空），「标题空=选择器」会把文件列表当成新
-    ///      文档 → 误平铺。
-    ///   2. 时序错：时间序列实测显示，新建文档窗口出现后标题【空了整整 2.85s】才变成「未命名」，
-    ///      而 handle() 在 ~0.45s 就触发——此刻标题还是空的 → 被当成选择器 → 只居中（永远
-    ///      卡在居中态，因为后续不再触发）。这正是 AXTitle 不可靠的根因。
-    /// 子元素数则是结构性硬特征：在窗口状态切换的瞬间就准确，不受标题填充时序、语言影响。
+    /// 为什么不再用 childCount 阈值（曾两次失败）：
+    ///   - `bbfdd1c`(title.isEmpty)、`2912c5d`(childCount<6) 均只对 Pages 实测，对 Excel 失效：
+    ///     实测 Excel 文件列表 childCount=9（远超 6），且 Word 列表=9 / Word 文档=7，跨 App
+    ///     完全无规律，调阈值也修不好（详见 git log + 实测数据 result.txt）。
+    ///   - AX role 是结构性硬特征，不受子元素计数、本地化语言影响。
+    ///
+    /// 为什么不用 AXTitle：见上方 windowHasDocument 注释（时序错 + 跨 App 文案不一致）。
     private func isDocumentChooserGalleryWindow(_ window: AXUIElement) -> Bool {
-        var childrenRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &childrenRef)
-        let count = (childrenRef as? [AXUIElement])?.count ?? 0
-        return Self.isGalleryChildCount(count)
+        var foundCollectionList = false
+        var foundOutline = false
+        var foundBrowser = false
+        subtreeRoles(window, maxDepth: Self.chooserRoleScanDepth) { role in
+            switch role {
+            case "AXCollectionList": foundCollectionList = true
+            case "AXOutline":        foundOutline = true
+            case "AXBrowser":        foundBrowser = true
+            default: break
+            }
+            // 命中 CollectionList 即可定论；Outline+Browser 需两者都找到才定论，故这里只在
+            // 已命中选择器签名时提前终止以省遍历。
+            return Self.isChooserRoleSignature(
+                hasCollectionList: foundCollectionList,
+                hasOutline: foundOutline,
+                hasBrowser: foundBrowser
+            )
+        }
+        return Self.isChooserRoleSignature(
+            hasCollectionList: foundCollectionList,
+            hasOutline: foundOutline,
+            hasBrowser: foundBrowser
+        )
     }
 
-    /// 纯逻辑判定：窗口直接子元素数是否表明这是「非文档窗口」（选择器/文件列表）。
+    /// 递归遍历元素子树，对每个节点的 AXRole 调用 `visit`；`visit` 返回 true 时立即剪枝终止。
     ///
-    /// 与 AX 取值解耦——`isDocumentChooserGalleryWindow` 负责取 childCount，本函数负责阈值判定，
-    /// 这样阈值集中、可单测（无 macOS/AX 依赖），未来要差异化（如 Numbers/Word/Excel）只改这里。
-    /// 阈值基于 Pages 实测时间序列：文件列表 kids=1 / 模板选择器 kids=5 / 新建文档 kids=6。
-    /// count=0（AX 取值失败/暂无子元素）保守地视为非文档窗口 → 只居中，避免对未知窗口强行平铺。
+    /// 深度受 `maxDepth` 限制以防大子树（如 Office 文档窗口）遍历爆炸；实测选择器特征 role 都
+    /// 在 ≤4 层内出现。读取失败/无子元素的节点安全跳过，不崩溃。
+    private func subtreeRoles(
+        _ element: AXUIElement,
+        maxDepth: Int,
+        visit: (String) -> Bool
+    ) {
+        let role = element.axString(kAXRoleAttribute as CFString) ?? ""
+        if visit(role) { return }
+        guard maxDepth > 0 else { return }
+        for child in element.axWindowElements(kAXChildrenAttribute as CFString) {
+            subtreeRoles(child, maxDepth: maxDepth - 1, visit: visit)
+        }
+    }
+
+    /// 选择器子树扫描的最大深度。实测选择器特征 role（AXCollectionList / AXOutline / AXBrowser）
+    /// 都在窗口根下 4 层以内出现；给到 6 留余量，同时避免对 Office 文档这种大子树全量遍历。
+    private static let chooserRoleScanDepth = 6
+
+    /// 纯逻辑判定：给定子树中各特征 role 的命中情况，是否构成「文件列表 / 模板画廊」签名。
+    ///
+    /// 与 AX 取值解耦——`isDocumentChooserGalleryWindow` 负责遍历子树收集 role，本函数负责
+    /// 签名判定，这样规则集中、可单测（无 macOS/AX 依赖），未来要扩展（新 App 的选择器用了
+    /// 别的 role 组合）只改这里。规则（实测验证，见 isDocumentChooserGalleryWindow 注释）：
+    ///   - 含 AXCollectionList（Office 文件列表 + iWork 模板画廊）=> 选择器
+    ///   - 同时含 AXOutline + AXBrowser（iWork「打开」文件列表）=> 选择器
     /// nonisolated：纯逻辑无任何 actor 状态依赖，可脱离 MainActor 在任意上下文（含单测）调用。
-    nonisolated static func isGalleryChildCount(_ count: Int, threshold: Int = 6) -> Bool {
-        return count < threshold
+    nonisolated static func isChooserRoleSignature(
+        hasCollectionList: Bool,
+        hasOutline: Bool,
+        hasBrowser: Bool
+    ) -> Bool {
+        return hasCollectionList || (hasOutline && hasBrowser)
     }
 
     /// bundle id 是否为访达（归一化比较）。
