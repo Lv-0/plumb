@@ -1,7 +1,7 @@
 {
-  "version": "2.0.22",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.22/Plumb-2.0.22.zip",
-  "sha256": "f67c54c11ee7b919c9e9aa91a4ce9409455245fe557949609a1dd056f6f1bf78",
+  "version": "2.0.24",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.24/Plumb-2.0.24.zip",
+  "sha256": "3ff3e7189c69af4954f24086c463ba56a414c19448d5dcdd9ddca321a8edfc4e",
   "notes": {
     "en": "Fixed: Electron-based apps (Postman, SiYuan, and similar) now tile on first open. These apps cold-start with the main process alive but the Accessibility layer not yet ready, so Plumb's window observer registration failed silently and it never learned the window had been created — the window stayed put instead of tiling. Native apps were unaffected (their windows already exist at launch), which is why only some apps failed. Plumb now detects the failure and re-attaches the observer on a short retry loop until the app's Accessibility layer is ready, then tiles normally; the detection retry window for tiling apps was also extended (~8s → ~14s) as a safety net. Native apps are unchanged (no added delay). 176 tests pass.",
     "zh": "修复：基于 Electron 的应用（Postman、SiYuan 等）现在首次打开也能平铺了。这类应用冷启动时主进程已就绪、但 Accessibility 层尚未准备好，导致 Plumb 的窗口观察者注册静默失败、永远不知道窗口已创建——窗口因此停在原地不平铺。原生应用不受影响（启动时窗口已存在），所以此前只有部分应用失败。Plumb 现在会检测到注册失败并在短重试循环中重新连接观察者，直到应用的 Accessibility 层就绪后正常平铺；平铺应用的检测重试窗口也作为兜底从 ~8 秒延长到 ~14 秒。原生应用行为不变（无新增延迟）。176 项测试通过。",
