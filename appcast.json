@@ -1,7 +1,7 @@
 {
-  "version": "2.0.19",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.19/Plumb-2.0.19.zip",
-  "sha256": "d5668ef3c588b052fd70625ffc0c8a5f68dbb44a164dc086a5b31615af040ec7",
+  "version": "2.0.20",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.20/Plumb-2.0.20.zip",
+  "sha256": "635b1c74fa511e085c51dddbe89b66393a2d4429a6f043c79237e55f852be2f0",
   "notes": {
     "en": "Improved: tiling animation is now about 37% faster — tiled windows settle in ~0.8s instead of ~1.25s, while staying smooth. Phase A (slide to center) is 0.28s -> 0.18s; it only moves the window, so shortening it can't cause the layout snap-back the slower pace guarded against. Phase B (enlarge to fill) is 6x120ms -> 4x90ms (0.97s -> 0.61s); each step still writes the size and lets the app relayout, and the final step still force-lands position + size with a target check. Stability is unchanged: the 0.45s pre-delay (prevents coordinate misdetection while the window jitters on activation) and the 0.25s Phase-B settle (prevents apps snapping the size back / 'edges don't fill' bug) are both deliberately left untouched, as are the 120Hz frame rate, the user-drag abort detection, and the slow-app retry loop. If a specific app ever snaps back, the step count and step interval can each be reverted independently. 161 tests pass.",
     "zh": "改进：平铺动画提速约 37%——平铺的窗口现在约 0.8 秒即可完成（此前约 1.25 秒），且依然顺滑。阶段 A（滑到中心）从 0.28s 调整为 0.18s；该阶段只移动窗口、不改变尺寸，因此缩短时长不会引发此前较慢节奏所防范的「布局弹回」问题。阶段 B（放大铺满）从 6 步×120ms 调整为 4 步×90ms（0.97s → 0.61s）；每一步仍会写入尺寸并让应用重新布局，最后一步仍强制将位置+尺寸落地并校验目标。稳定性完全不变：0.45s 预延迟（防止窗口在激活动画中抖动导致坐标空间误判）与 0.25s 阶段-B 稳定期（防止应用把尺寸弹回 /「四边铺不满」缺陷）均刻意保持原样，120Hz 帧率、用户拖动中止检测、慢启动应用重试循环 likewise 不变。若个别应用出现弹回，步数与步进间隔可各自独立回调。161 项测试通过。",
