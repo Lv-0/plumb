@@ -154,3 +154,59 @@ func documentChooserDoesNotAffectShouldTile() async throws {
     #expect(settings.isDocumentChooserApp(bundleIdentifier: "com.microsoft.word") == true)
     #expect(settings.shouldTile(bundleIdentifier: "com.microsoft.word") == false)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// isGalleryChildCount 阈值判定单测。
+//
+// 背景：文档类 App（Pages/Numbers/Word/Excel）有三类「无 kAXDocument」窗口（subrole 均为
+// AXStandardWindow）：文件列表、模板选择器、新建未保存文档。仅凭 kAXDocument 无法区分，
+// 用「窗口直接子元素数」区分（基于 Pages 实测：文件列表 kids=1 / 模板选择器 kids=5 / 新文档 kids=6）。
+// 该判定同时被 handle() 的 chooser 分支与 handleResize 旁路引用，是「文件列表是否被平铺」的
+// 关键开关，故单独锁定以防回归。
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Test
+func galleryChildCount_fileList_isGallery() {
+    // 文件列表（「打开」面板）kids=1 => 非文档窗口，应只居中。
+    #expect(WindowEventObserver.isGalleryChildCount(1) == true)
+}
+
+@Test
+func galleryChildCount_templateGallery_isGallery() {
+    // 模板选择器 kids=5 => 非文档窗口，应只居中。
+    #expect(WindowEventObserver.isGalleryChildCount(5) == true)
+}
+
+@Test
+func galleryChildCount_newDocument_isNotGallery() {
+    // 新建未保存文档 kids=6 => 是文档窗口，应走平铺。
+    #expect(WindowEventObserver.isGalleryChildCount(6) == false)
+}
+
+@Test
+func galleryChildCount_richDocument_isNotGallery() {
+    // 富 UI 新文档（子元素更多）仍应判为文档窗口，走平铺。
+    #expect(WindowEventObserver.isGalleryChildCount(10) == false)
+    #expect(WindowEventObserver.isGalleryChildCount(100) == false)
+}
+
+@Test
+func galleryChildCount_axFetchFailed_isGallery() {
+    // AX 取值失败/暂无子元素回退到 count=0：保守地视为非文档窗口 → 只居中，
+    // 避免对状态未知的窗口强行平铺。
+    #expect(WindowEventObserver.isGalleryChildCount(0) == true)
+}
+
+@Test
+func galleryChildCount_thresholdBoundary() {
+    // 边界：threshold-1 => gallery；threshold => 非文档。锁定默认阈值=6 的语义。
+    #expect(WindowEventObserver.isGalleryChildCount(6 - 1) == true)
+    #expect(WindowEventObserver.isGalleryChildCount(6) == false)
+}
+
+@Test
+func galleryChildCount_customThreshold() {
+    // 自定义阈值（未来若 Numbers/Word/Excel 差异化）应被尊重。
+    #expect(WindowEventObserver.isGalleryChildCount(3, threshold: 4) == true)
+    #expect(WindowEventObserver.isGalleryChildCount(4, threshold: 4) == false)
+}

@@ -917,6 +917,21 @@ final class WindowEventObserver {
                 }
             }
 
+            // 文档类 App 选择器感知（resize 旁路补丁）：
+            // 与 handle() 的 chooser 分支同构。文档 App 必须在平铺白名单内（真文档要平铺），故其
+            // 文件列表/模板画廊窗口一旦 resize（缩略图加载、入场动画）会通过上方 shouldTile 守卫，
+            // 直接走到下面的 tileWindowElementAnimated 被强行平铺——这正是"文件列表界面又被平铺"的根因。
+            // 命中选择器窗口时改为只居中、不平铺；不锁 processedPIDs、不 markCentered（同 handle() 不变量，
+            // 否则后续真文档窗口会被永久挡住无法平铺）。居中不涉及 resize、无"来回拉扯"风险。
+            if self.tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleID),
+               !self.windowHasDocument(windowElement),
+               self.isDocumentChooserGalleryWindow(windowElement)
+            {
+                DiagnosticLog.debug("handle[resize]: document-chooser gallery window — center only, skip retile pid=\(pid)")
+                _ = try? self.service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+                return
+            }
+
             // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
             if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, edgeMargin: edgeMargin) {
                 DiagnosticLog.debug("handle[resize]: window already near tiled target, skip retile")
@@ -1026,7 +1041,18 @@ final class WindowEventObserver {
         var childrenRef: CFTypeRef?
         AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &childrenRef)
         let count = (childrenRef as? [AXUIElement])?.count ?? 0
-        return count < 6
+        return Self.isGalleryChildCount(count)
+    }
+
+    /// 纯逻辑判定：窗口直接子元素数是否表明这是「非文档窗口」（选择器/文件列表）。
+    ///
+    /// 与 AX 取值解耦——`isDocumentChooserGalleryWindow` 负责取 childCount，本函数负责阈值判定，
+    /// 这样阈值集中、可单测（无 macOS/AX 依赖），未来要差异化（如 Numbers/Word/Excel）只改这里。
+    /// 阈值基于 Pages 实测时间序列：文件列表 kids=1 / 模板选择器 kids=5 / 新建文档 kids=6。
+    /// count=0（AX 取值失败/暂无子元素）保守地视为非文档窗口 → 只居中，避免对未知窗口强行平铺。
+    /// nonisolated：纯逻辑无任何 actor 状态依赖，可脱离 MainActor 在任意上下文（含单测）调用。
+    nonisolated static func isGalleryChildCount(_ count: Int, threshold: Int = 6) -> Bool {
+        return count < threshold
     }
 
     /// bundle id 是否为访达（归一化比较）。
