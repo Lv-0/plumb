@@ -35,6 +35,11 @@ final class WindowEventObserver {
 
     private var observer: AXObserver?
     private var observedPID: pid_t?
+    /// observer 通知注册是否失败（AXError.cannotComplete，常见于 Electron 应用冷启动时 AX 未就绪）。
+    /// 为 true 时，attachToFrontmostApp 的 `observedPID == pid` 早退守卫放行，允许重连。
+    private var observerRegistrationFailed: Bool = false
+    /// 注册失败后的重连重试定时器：周期性销毁/重建 observer 并重新注册通知，直到成功或 app 失焦。
+    private var reattachTimer: DispatchSourceTimer?
     /// 已完成居中/平铺的窗口 key（向后兼容 / 防抖）。
     private var centeredWindowKeys: [String] = []
     private var centeredWindowKeySet: Set<String> = []
@@ -109,6 +114,9 @@ final class WindowEventObserver {
         tileStabilizeTimer = nil
         resizeRetileTimer?.cancel()
         resizeRetileTimer = nil
+        reattachTimer?.cancel()
+        reattachTimer = nil
+        observerRegistrationFailed = false
         service.abortActiveAnimations()
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -287,9 +295,13 @@ final class WindowEventObserver {
             return
         }
 
-        if observedPID == app.processIdentifier {
+        if observedPID == app.processIdentifier, !observerRegistrationFailed {
             DiagnosticLog.debug("attach: already observing pid=\(app.processIdentifier) (\(app.bundleIdentifier ?? "?"))")
             return
+        }
+        if observedPID == app.processIdentifier, observerRegistrationFailed {
+            // observer 注册曾失败（Electron 冷启动 AX 未就绪）：放行，触发重连流程。
+            DiagnosticLog.debug("attach: reattaching pid=\(app.processIdentifier) (previous registration failed)")
         }
 
         DiagnosticLog.debug("attach: switching to pid=\(app.processIdentifier) bundle=\(app.bundleIdentifier ?? "?")")
@@ -303,6 +315,9 @@ final class WindowEventObserver {
         initialCenterTimer = nil
         resizeRetileTimer?.cancel()
         resizeRetileTimer = nil
+        reattachTimer?.cancel()
+        reattachTimer = nil
+        observerRegistrationFailed = false
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
@@ -345,26 +360,111 @@ final class WindowEventObserver {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(newObserver), .defaultMode)
 
         let appElement = AXUIElementCreateApplication(pid)
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
-        let r1 = AXObserverAddNotification(newObserver, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
-        let r2 = AXObserverAddNotification(newObserver, appElement, kAXWindowCreatedNotification as CFString, refcon)
-        let r3 = AXObserverAddNotification(newObserver, appElement, kAXResizedNotification as CFString, refcon)
-        DiagnosticLog.debug("attach: observer added; focusedChanged=\(r1.rawValue) windowCreated=\(r2.rawValue) resized=\(r3.rawValue)")
+        let registrationSucceeded = registerNotifications(on: newObserver, appElement: appElement, pid: pid)
+
+        // 注册失败（Electron 冷启动 AX 未就绪，AXError.cannotComplete）：启动重连循环，
+        // 周期性重建 observer 并重新注册，直到成功或 app 失焦。详见 startReattachLoop。
+        observerRegistrationFailed = !registrationSucceeded
+        if observerRegistrationFailed {
+            DiagnosticLog.debug("attach: registration failed (AX not ready) pid=\(pid), starting reattach loop")
+            startReattachLoop(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
+        }
 
         // 不在 attach 当下立即居中：app 刚被激活时 macOS 还在做激活动画，窗口位置/尺寸在抖动，
         // 此时探测坐标空间与读取 visibleFrame 都不稳定，会导致居中位置算错（"切换后居中没考虑
         // Dock 栏"的根因之一）。改为完全交给 startInitialCenteringRetries：它在短延迟后首次触发，
-        // 等同于用户"等动画结束再点立即居中"的效果——此时窗口已稳定，走的是与手动按钮完全相同、
+        // 等同于用户"动画结束后点立即居中"的效果——此时窗口已稳定，走的是与手动按钮完全相同、
         // 已被验证正确的居中路径。
         // （这里刻意不再调用 handle("initial")。立即居中会抢在动画完成前写入，反而出错。）
 
         // Some apps only create their focused window after a short delay (splash screens, permission prompts, etc.).
         // Retry briefly without showing alerts; stop once we successfully process a window or after a timeout.
+        // 即使 observer 注册失败，轮询路径仍会读取 AXWindows，是 observer 漏通知时的兜底。
         startInitialCenteringRetries(
             pid: pid,
             appElement: appElement,
             bundleIdentifier: app.bundleIdentifier
         )
+    }
+
+    /// 注册三个窗口通知到 observer，返回是否全部成功。
+    /// Electron 应用冷启动时 AX 未就绪，AXObserverAddNotification 会返回 cannotComplete（-25204），
+    /// 此时 observer 形同虚设，需由 startReattachLoop 周期性重试。
+    @discardableResult
+    private func registerNotifications(on observer: AXObserver, appElement: AXUIElement, pid: pid_t) -> Bool {
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let r1 = AXObserverAddNotification(observer, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
+        let r2 = AXObserverAddNotification(observer, appElement, kAXWindowCreatedNotification as CFString, refcon)
+        let r3 = AXObserverAddNotification(observer, appElement, kAXResizedNotification as CFString, refcon)
+        let success = r1 == .success && r2 == .success && r3 == .success
+        DiagnosticLog.debug("attach: observer added; focusedChanged=\(r1.rawValue) windowCreated=\(r2.rawValue) resized=\(r3.rawValue) success=\(success)")
+        return success
+    }
+
+    /// 注册失败后的重连循环：每 500ms 重建 observer 并重新注册通知，直到成功或 app 失焦。
+    /// 直接消除「observer 注册失败后永不重连」导致 Electron 应用窗口创建后无通知、不平铺的死路。
+    private func startReattachLoop(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
+        reattachTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        var attempts = 0
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            attempts += 1
+
+            // 前台守卫：app 已不是前台则停止重连。
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                self.reattachTimer?.cancel()
+                self.reattachTimer = nil
+                DiagnosticLog.debug("reattach: stopped (pid=\(pid) no longer frontmost) attempts=\(attempts)")
+                return
+            }
+
+            // 重建 observer 并重新注册。
+            if let oldObserver = self.observer {
+                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(oldObserver), .defaultMode)
+            }
+            self.observer = nil
+            self.observedPID = nil
+
+            var newObserver: AXObserver?
+            let result = AXObserverCreate(pid, { _, element, notification, refcon in
+                guard let refcon else { return }
+                let unmanaged = Unmanaged<WindowEventObserver>.fromOpaque(refcon)
+                let obj = unmanaged.takeUnretainedValue()
+                Task { @MainActor in
+                    obj.handle(notification: notification as String, element: element)
+                }
+            }, &newObserver)
+
+            guard result == .success, let newObserver else {
+                DiagnosticLog.debug("reattach: AXObserverCreate failed attempts=\(attempts) result=\(result.rawValue)")
+                return
+            }
+            self.observer = newObserver
+            self.observedPID = pid
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(newObserver), .defaultMode)
+
+            let success = self.registerNotifications(on: newObserver, appElement: appElement, pid: pid)
+            if success {
+                self.observerRegistrationFailed = false
+                self.reattachTimer?.cancel()
+                self.reattachTimer = nil
+                DiagnosticLog.debug("reattach: succeeded pid=\(pid) attempts=\(attempts)")
+                // 重连成功后重置 initial retry，立即开始处理（窗口可能已就绪）。
+                self.startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: bundleIdentifier)
+                return
+            }
+
+            // 重连上限（15 次 × 500ms ≈ 7.5s），避免无限重试；超时后依赖轮询路径兜底。
+            if attempts >= 15 {
+                self.reattachTimer?.cancel()
+                self.reattachTimer = nil
+                DiagnosticLog.debug("reattach: gave up after \(attempts) attempts pid=\(pid), relying on poll path")
+            }
+        }
+        reattachTimer = timer
+        timer.resume()
     }
 
     @discardableResult
@@ -567,7 +667,7 @@ final class WindowEventObserver {
                     DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
                     return true
                 } else {
-                    // 启动期小窗等：不锁、不标记，让重试继续接力处理后续到达的真正主窗口。
+                    // 动画异步返回，此时窗口尚未放大到目标尺寸——保持 PID 解锁，由 retry 循环在动画完成后确认。                    // 启动期小窗等：不锁、不标记，让重试继续接力处理后续到达的真正主窗口。
                     DiagnosticLog.debug("handle[\(notification)]: tile did not actually enlarge window — keep PID unlocked for retry pid=\(pid)")
                     return false
                 }
@@ -788,7 +888,9 @@ final class WindowEventObserver {
                 return
             }
 
-            let maxAttempts = tilingEnabledForApp ? 24 : 12
+            // maxAttempts：平铺 app 取 40（~14s），覆盖 Electron 冷启动窗口创建延迟（常 >8s）；
+            // 非 tiling app 取 12。即使 observer 注册成功，轮询路径也作为「窗口延迟创建」的兜底。
+            let maxAttempts = tilingEnabledForApp ? 40 : 12
             if attempts >= maxAttempts {
                 self.initialCenterTimer?.cancel()
                 self.initialCenterTimer = nil
