@@ -1,7 +1,7 @@
 {
-  "version": "2.0.24",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.24/Plumb-2.0.24.zip",
-  "sha256": "3ff3e7189c69af4954f24086c463ba56a414c19448d5dcdd9ddca321a8edfc4e",
+  "version": "2.0.25",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.25/Plumb-2.0.25.zip",
+  "sha256": "3ac38e5d9985e0f1bd7bd537f2e65f2b67e3a01990fae244bb20dc211a1f0d6d",
   "notes": {
     "en": "Fixed: Plumb's own settings window now centers correctly. When opening Settings it ended up about 112px too high (visually off-center) because its appear animation (a scale + liquid-glass resize) drifts the window's origin, and the .accessory→.regular activation switch perturbs position further; Plumb's generic centering raced that animation and lost. The window now centers itself precisely once the appear animation finishes (a single exact setFrameOrigin to the screen center), and the generic logic no longer competes with it for Plumb's own window. Other apps' centering/tiling are unchanged. 176 tests pass.",
     "zh": "修复：Plumb 自己的设置窗口现在能正确居中了。打开设置时窗口此前会偏上约 112px（视觉上没居中），原因是出现动画（缩放 + 液态玻璃 resize）会让窗口原点漂移、.accessory→.regular 激活切换进一步扰动位置，而 Plumb 的通用居中逻辑与该动画竞争失败。现在窗口会在出现动画结束后精确居中（一次性 setFrameOrigin 到屏幕正中），且通用逻辑不再对 Plumb 自己的窗口竞争。其他应用的居中/平铺不受影响。176 项测试通过。",
