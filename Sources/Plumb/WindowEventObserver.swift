@@ -182,11 +182,13 @@ final class WindowEventObserver {
             centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
             centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
         }
-        // 同步清除该 pid 的粘性「手动排版」标记：切 Space 视为重新评估排版，
-        // 手动窗口随同居中缓存一起清除（与 processedPIDs 同步语义）。
-        let manualRemoved = manualWindowKeys.filter { $0.hasPrefix(prefix) }.count
-        if manualRemoved > 0 {
-            manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
+        // ⚠️ 切 Space 不清除「手动排版」标记：用户按 Option 手动摆放的窗口必须在切桌面/切屏后保持
+        // 手动（不重新居中/平铺）。只有居中缓存、processedPIDs 被清——让非手动窗口重新评估排版，
+        // 而手动窗口由 handle() 主路径的 manualWindowKeys 守卫继续拦截。
+        //（这是「切屏后手动窗口又被居中」bug 的根因——此前误把 manualWindowKeys 也清了。）
+        let manualKept = manualWindowKeys.filter { $0.hasPrefix(prefix) }.count
+        if manualKept > 0 {
+            DiagnosticLog.debug("spaceDidChange: kept \(manualKept) manual-layout window(s) for pid=\(pid) (not cleared)")
         }
         processedPIDs.remove(pid)
 
@@ -351,9 +353,13 @@ final class WindowEventObserver {
             centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(reactivatedPrefix) }
             centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(reactivatedPrefix) }
         }
-        // 同步清除该 pid 的粘性「手动排版」标记：app 重新激活后旧标记失去意义（窗口可能已重建），
-        // 与 centered 缓存、processedPIDs 同步清理，让重新激活的 app 干净地重新评估排版。
-        manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(reactivatedPrefix) }
+        // ⚠️ App 重新激活（切走再切回）不清除「手动排版」标记：用户手动摆放的窗口必须跨 App 切换保持
+        // 手动。只有居中缓存、processedPIDs 被清——让非手动窗口重新评估，手动窗口由 handle() 守卫拦截。
+        //（用户需求：「切换软件后，手动排版的软件不要触发居中或者平铺」。）
+        let manualKeptOnAttach = manualWindowKeys.filter { $0.hasPrefix(reactivatedPrefix) }.count
+        if manualKeptOnAttach > 0 {
+            DiagnosticLog.debug("attach: kept \(manualKeptOnAttach) manual-layout window(s) for reactivated pid=\(pid) (not cleared)")
+        }
         // Bug #3: 同步清除 per-PID 标记，让 app 重新激活后能重新居中其主窗口。
         processedPIDs.remove(pid)
         var newObserver: AXObserver?
