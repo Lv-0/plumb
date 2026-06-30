@@ -512,6 +512,15 @@ final class WindowEventObserver {
             return handleResize(element: element, forcedPID: forcedPID)
         }
 
+        // 用户按住 Option (⌥) 拖动/分屏窗口时，完全跳过居中与平铺——把布局权交给用户。
+        // Option 是「手动排版」的显式信号。纯早退：不 markCentered、不锁 processedPIDs，
+        // 松开 Option 后下次激活/事件仍按原逻辑处理（与 Atlas/Journal 设置窗口纯早退同构）。
+        // 必须在 resize 分流之后：resize 走独立 handleResize 旁路，Option 检查在旁路内部单独做。
+        if isUserHoldingOption() {
+            DiagnosticLog.debug("handle[\(notification)]: Option key held — manual layout, skip (no center, no tile) pid=\(pid)")
+            return false
+        }
+
         // Bug #3: 本激活周期内此 PID 的主窗口已完成居中/平铺 → 跳过任何后续窗口事件
         //（二级窗口、对话框、标签页弹层等），满足"软件本体居中就行，二级页面不要居中"。
         if processedPIDs.contains(pid) {
@@ -1007,6 +1016,14 @@ final class WindowEventObserver {
             return false
         }
 
+        // 用户按住 Option (⌥) 拖动窗口边缘改尺寸时，跳过重铺——把布局权交给用户。
+        // resize 旁路绕过 processedPIDs 锁（见 828 行注释），故 Option 检查必须在此处独立设置，
+        // 不能只靠 handle() 主路径。纯早退：不安排 retile 定时器，最干净。
+        if isUserHoldingOption() {
+            DiagnosticLog.debug("handle[resize]: Option key held — manual layout, skip retile pid=\(pid)")
+            return false
+        }
+
         // 仅平铺白名单 app 响应 resize；居中类 app 尺寸变化不重铺（保持原行为）。
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
               tilingSettingsStore.load().shouldTile(bundleIdentifier: bundleID)
@@ -1460,6 +1477,18 @@ final class WindowEventObserver {
               !title.isEmpty
         else { return false }
         return Self.journalSettingsTitles.contains(title)
+    }
+
+    /// 判定用户当前是否按住 Option (⌥) 键——作为「手动排版」的显式信号。
+    ///
+    /// 用途：当用户按住 Option 拖动/分屏窗口时，Plumb 完全跳过居中与平铺，
+    /// 把布局权交给用户。Option 是瞬时修饰键，松开即失效，故按事件处理时刻的
+    /// 瞬时状态判定，不追踪历史。
+    ///
+    /// 读取时机：AXObserver 回调与防抖定时器均在主线程执行（main run loop / .main queue），
+    /// NSEvent.modifierFlags 在主线程读取是可靠的。
+    private func isUserHoldingOption() -> Bool {
+        NSEvent.modifierFlags.contains(.option)
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
