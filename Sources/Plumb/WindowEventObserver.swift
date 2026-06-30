@@ -539,6 +539,16 @@ final class WindowEventObserver {
             return false
         }
 
+        // 手记（Journal）设置窗口特例：设置窗口与主窗口 subrole/AXIdentifier/kAXMainWindow 三项硬特征
+        // 完全相同（详见 isJournalSettingsWindow 注释），常规判据全部失效，只能靠 AXTitle 区分。
+        // 必须在主路径此处拦截，否则会被居中/平铺。纯早退：不 markCentered、不锁 processedPIDs。
+        if isJournalBundle(frontmostApp.bundleIdentifier),
+           isJournalSettingsWindow(windowElement)
+        {
+            DiagnosticLog.debug("handle[\(notification)]: Journal settings window — skip (no center, no tile) pid=\(pid)")
+            return false
+        }
+
         // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info/扩展页 等）常报告
         // AXStandardWindow subrole，会绕过 subrole 过滤被误居中/误平铺。命中屏蔽列表且候选不是主窗口
         // 时完全跳过——不平铺、不居中、不 markCentered、不锁 processedPIDs，保持其弹出位置。
@@ -1017,6 +1027,19 @@ final class WindowEventObserver {
         let edgeMargin = tilingSettingsStore.load().effectiveMargin(for: bundleID)
         let windowElement = element
 
+        // 手记（Journal）设置窗口特例（resize 旁路补丁）——【这是本 bug 的根因路径】。
+        // 手记设置窗口打开时的尺寸动画触发 kAXResizedNotification，走本旁路（绕过 processedPIDs 锁），
+        // 设置窗口被强行平铺成全屏（实测 640×533 → 1480×835，被移到左上角）。
+        // handle() 主路径已被 processedPIDs 锁挡住，挡不住 resize 旁路——故必须在此处也拦截。
+        // 判据用 AXTitle（subrole/AXIdentifier/kAXMainWindow 三项硬特征全失效，见 isJournalSettingsWindow）。
+        // 放在防抖定时器之前：连 retile schedule 都不安排，最干净。
+        if isJournalBundle(bundleID),
+           isJournalSettingsWindow(windowElement)
+        {
+            DiagnosticLog.debug("handle[resize]: Journal settings window — skip retile (no tile) pid=\(pid)")
+            return false
+        }
+
         DiagnosticLog.debug("handle[resize]: scheduling retile for pid=\(pid) bundle=\(bundleID)")
 
         // 防抖：每次 resize 重置定时器，停止抖动 ~0.4s 后才评估重铺。
@@ -1310,6 +1333,11 @@ final class WindowEventObserver {
         AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.openai.atlas"
     }
 
+    /// bundle id 是否为手记 Journal（归一化比较）。
+    private func isJournalBundle(_ bundleIdentifier: String?) -> Bool {
+        AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.apple.journal"
+    }
+
     /// 需要屏蔽「二级窗口平铺」的浏览器 bundle id（归一化小写比较）。
     /// 这些 App 的二级窗口（设置/下载/弹窗/PWA/扩展窗）常报告 AXStandardWindow subrole，
     /// 会绕过 subrole 过滤被误平铺。硬编码默认覆盖主流浏览器；访达单独由 isFinderBundle 处理。
@@ -1395,6 +1423,43 @@ final class WindowEventObserver {
     private func isAtlasSettingsWindow(_ window: AXUIElement) -> Bool {
         guard let id = window.axString("AXIdentifier" as CFString) else { return false }
         return id.contains("secondary") && id.contains("settings")
+    }
+
+    /// 手记（Journal）窗口是否为「设置窗口」。
+    ///
+    /// 实证（2026-06，日志 + AX 探查）：手记的设置窗口与主窗口三项硬特征完全相同，无法用常规判据区分——
+    ///   - subrole：两者都是 `AXStandardWindow`（与 Atlas 同类坑）；
+    ///   - AXIdentifier：两者都是 `SceneWindow`（AppKit 默认场景标识，无区分性）；
+    ///   - kAXMainWindowAttribute：设置窗口聚焦时会追踪到设置窗口本身（main==候选），
+    ///     故 `isSecondaryWindowOfApp` 档 2 误判为主窗口 → 屏蔽失效。
+    /// 唯一稳定的区分硬特征是 **AXTitle**：主窗口标题是 app 名「手记/Journal」，
+    /// 设置窗口标题是 AppKit 标准 Settings 窗口标题。
+    ///
+    /// 关键：本判据**同时被 handle() 主路径与 handleResize() 旁路使用**。resize 旁路刻意绕过
+    /// processedPIDs 锁（见 828 行注释），手记设置窗口打开时的尺寸动画会触发 kAXResizedNotification
+    /// → 走 resize 旁路 → 被强行平铺成全屏（用户报告「设置窗口被移到左上角」的根因）。两处都必须拦截。
+    ///
+    /// 多语言：设置窗口标题由 AppKit 在运行时按系统语言生成（不在 app bundle 字符串文件里），
+    /// 是 macOS 数十年不变的固定翻译词汇。这里覆盖 Plumb 支持的语言（zh/en/es/fr/ja）+ 主流语言。
+    /// 作用域收窄：仅在 bundle == com.apple.journal 时判定，避免误伤其他名为「设置」的主窗口。
+    private static let journalSettingsTitles: Set<String> = [
+        "设置", "设置…", "偏好设置", "偏好设置…",           // zh
+        "Settings", "Settings…", "Preferences", "Preferences…",  // en
+        "Configuración", "Configuración…", "Preferencias", "Preferencias…",  // es
+        "Réglages", "Réglages…", "Préférences", "Préférences…",  // fr
+        "設定", "設定…", "環境設定", "環境設定…",           // ja
+        "Einstellungen", "Einstellungen…",              // de
+        "Impostazioni", "Impostazioni…",                // it
+        "Ajustes", "Ajustes…",                          // es (alt)
+        "설정", "설정…",                                // ko
+        "Настройки", "Настройки…"                       // ru
+    ]
+
+    private func isJournalSettingsWindow(_ window: AXUIElement) -> Bool {
+        guard let title = window.axString(kAXTitleAttribute as CFString),
+              !title.isEmpty
+        else { return false }
+        return Self.journalSettingsTitles.contains(title)
     }
 
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
