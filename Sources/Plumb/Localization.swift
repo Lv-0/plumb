@@ -106,6 +106,9 @@ enum L10n {
         // 自动检查更新开关
         case autoCheckUpdates
         case autoCheckUpdatesHint
+        // 手动排版（Option 键）说明
+        case manualLayoutHint
+        case manualLayoutHintDetail
         // 开关 / 无障碍
         case toggleSwitch
         case on, off
@@ -193,6 +196,8 @@ enum L10n {
             .aboutCheckUpdatesHint: "Check for the latest version of Plumb.",
             .autoCheckUpdates: "Check for Updates Automatically",
             .autoCheckUpdatesHint: "When enabled, Plumb checks for updates in the background and when you open Settings.",
+            .manualLayoutHint: "Manual Layout",
+            .manualLayoutHintDetail: "Hold Option (⌥) while dragging or resizing a window to keep it where you put it — Plumb won't auto-center or tile that window until you drag it again without Option.",
             .toggleSwitch: "Switch",
             .on: "On",
             .off: "Off",
@@ -273,6 +278,8 @@ enum L10n {
             .aboutCheckUpdatesHint: "Comprobar la última versión de Plumb.",
             .autoCheckUpdates: "Buscar actualizaciones automáticamente",
             .autoCheckUpdatesHint: "Cuando está activado, Plumb busca actualizaciones en segundo plano y al abrir Ajustes.",
+            .manualLayoutHint: "Maquetación manual",
+            .manualLayoutHintDetail: "Mantén Option (⌥) al arrastrar o cambiar el tamaño de una ventana para dejarla donde quieras: Plumb no la centrará ni la colocará en mosaico hasta que la arrastres de nuevo sin Option.",
             .toggleSwitch: "Interruptor",
             .on: "Activado",
             .off: "Desactivado",
@@ -353,6 +360,8 @@ enum L10n {
             .aboutCheckUpdatesHint: "Rechercher la dernière version de Plumb.",
             .autoCheckUpdates: "Rechercher les mises à jour automatiquement",
             .autoCheckUpdatesHint: "Lorsqu'activé, Plumb recherche les mises à jour en arrière-plan et à l'ouverture des Réglages.",
+            .manualLayoutHint: "Mise en page manuelle",
+            .manualLayoutHintDetail: "Maintenez Option (⌥) en faisant glisser ou redimensionnant une fenêtre pour la laisser où vous voulez : Plumb ne la centrera ni ne la tuilera tant que vous ne la refaites pas glisser sans Option.",
             .toggleSwitch: "Interrupteur",
             .on: "Activé",
             .off: "Désactivé",
@@ -433,6 +442,8 @@ enum L10n {
             .aboutCheckUpdatesHint: "检查 Plumb 的最新版本。",
             .autoCheckUpdates: "自动检查更新",
             .autoCheckUpdatesHint: "开启后，Plumb 会在后台定期检查更新，并在打开设置时自动检查。",
+            .manualLayoutHint: "手动排版",
+            .manualLayoutHintDetail: "拖动或调整窗口大小时按住 Option (⌥)，该窗口就停在原处——Plumb 不会再自动居中或平铺它，直到你不按 Option 再拖动一次该窗口。",
             .toggleSwitch: "开关",
             .on: "开",
             .off: "关",
@@ -513,6 +524,8 @@ enum L10n {
             .aboutCheckUpdatesHint: "Plumb の最新バージョンを確認します。",
             .autoCheckUpdates: "アップデートを自動的に確認",
             .autoCheckUpdatesHint: "オンの時、Plumb はバックグラウンドで定期的に、また設定ウィンドウを開いたときにアップデートを確認します。",
+            .manualLayoutHint: "手動レイアウト",
+            .manualLayoutHintDetail: "ウィンドウのドラッグやリサイズ中に Option (⌥) を押したままにすると、そのウィンドウはその位置に固定されます。Option を押さずに再度ドラッグするまで、Plumb は自動的に中央寄せもタイリングもしません。",
             .toggleSwitch: "スイッチ",
             .on: "オン",
             .off: "オフ",
@@ -596,6 +609,8 @@ enum L10n {
     static var aboutCheckUpdatesHint: String { tr(.aboutCheckUpdatesHint) }
     static var autoCheckUpdates: String { tr(.autoCheckUpdates) }
     static var autoCheckUpdatesHint: String { tr(.autoCheckUpdatesHint) }
+    static var manualLayoutHint: String { tr(.manualLayoutHint) }
+    static var manualLayoutHintDetail: String { tr(.manualLayoutHintDetail) }
     static var toggleSwitch: String { tr(.toggleSwitch) }
     static var on: String { tr(.on) }
     static var off: String { tr(.off) }

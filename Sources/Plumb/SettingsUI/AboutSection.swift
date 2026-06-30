@@ -102,7 +102,27 @@ struct AboutSection: View {
             Divider()
                 .opacity(0.25)
 
-            // 行 4：GitHub 按钮行
+            // 行 4：手动排版（Option 键）说明。纯展示行（无控件），与上方 autoCheckUpdates 行同构：
+            // 图标 + 标题/副标题。提示用户「按住 Option 拖动/改尺寸 = 该窗口粘性手动排版」。
+            HStack(spacing: 12) {
+                Image(systemName: "keyboard")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.manualLayoutHint)
+                        .foregroundStyle(.primary)
+                    Text(L10n.manualLayoutHintDetail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+            }
+
+            Divider()
+                .opacity(0.25)
+
+            // 行 5：GitHub 按钮行
             HStack(spacing: 12) {
                 Image(systemName: "globe")
                     .font(.title3)
