@@ -1,13 +1,13 @@
 {
-  "version": "2.0.28",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.28/Plumb-2.0.28.zip",
-  "sha256": "4cc8fd48614331662c9800b125f797950de4f7741107b942ed2592da77c27e09",
+  "version": "2.0.29",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.29/Plumb-2.0.29.zip",
+  "sha256": "a54a4826cd111a2aa8327e3fea35b72d92560a783c2fa62e2f55091d8aa63c22",
   "notes": {
-    "en": "New: hold Option (⌥) for manual layout. Hold Option while dragging or resizing a window and Plumb steps aside completely — no auto-centering, no re-tiling — so you can place a window exactly where you want it. Option is a transient modifier: release it and normal behavior resumes on the very next event. Works for dragging, resizing, and switching focus. 176 tests pass.",
-    "zh": "新增：按住 Option (⌥) 手动排版。拖动或调整窗口大小时按住 Option，Plumb 完全让位——不自动居中、不重新平铺——你可以把窗口精确摆到想要的位置。Option 是瞬时修饰键：松开后，下一个事件即恢复原有行为。适用于拖动、改尺寸、切换聚焦三种场景。176 项测试通过。",
-    "es": "Novedad: mantén Option (⌥) para maquetación manual. Mantén Option mientras arrastras o cambias el tamaño de una ventana y Plumb se aparta por completo — sin centrado automático, sin re-tiling — para que coloques la ventana exactamente donde quieras. Option es un modificador transitorio: suéltalo y el comportamiento normal se reanuda en el siguiente evento. Funciona al arrastrar, cambiar tamaño y cambiar el foco. 176 pruebas pasan.",
-    "fr": "Nouveau : maintenez Option (⌥) pour une mise en page manuelle. Maintenez Option pendant que vous faites glisser ou redimensionnez une fenêtre et Plumb s'efface complètement — aucun centrage automatique, aucun ré-tiling — afin que vous placiez la fenêtre exactement où vous le souhaitez. Option est un modificateur transitoire : relâchez-le et le comportement normal reprend au prochain événement. Fonctionne pour le glissement, le redimensionnement et le changement de focus. 176 tests réussissent.",
-    "ja": "新機能：Option (⌥) キーを押したまま手動レイアウト。ウィンドウのドラッグやリサイズ中に Option を押したままにすると、Plumb は一切干渉しません——自動中央寄せも、再タイリングもしません——ウィンドウを好きな位置に正確に配置できます。Option は一時的な装飾キーで、離せば次のイベントから通常の動作に戻ります。ドラッグ・リサイズ・フォーカス切替のすべてで機能します。176 テスト成功。"
+    "en": "Improved: Option (⌥) manual layout is now sticky per window. Hold Option while dragging or resizing a window and it stays exactly where you put it — even after you switch apps or change screens, Plumb no longer re-centers or re-tiles that window. Drag it again WITHOUT Option and it snaps right back to its layout position. A new 'Manual Layout' line in the About tab documents the shortcut. 176 tests pass.",
+    "zh": "改进：Option (⌥) 手动排版现在按窗口粘性生效。按住 Option 拖动或调整窗口大小后，该窗口就停在原处——即使切换软件或屏幕，Plumb 也不再对它自动居中或平铺。不按 Option 再拖动一次，窗口立即吸附回排版位。关于页新增「手动排版」说明行。176 项测试通过。",
+    "es": "Mejorado: la maquetación manual con Option (⌥) ahora es persistente por ventana. Mantén Option al arrastrar o cambiar el tamaño de una ventana y se queda donde la pusiste — aunque cambies de app o de pantalla, Plumb ya no la vuelve a centrar ni a colocar en mosaico. Arrástrala de nuevo SIN Option y vuelve a su posición de maquetación. Una nueva línea 'Maquetación manual' en la pestaña Acerca de documenta el atajo. 176 pruebas pasan.",
+    "fr": "Amélioré : la mise en page manuelle avec Option (⌥) est désormais persistante par fenêtre. Maintenez Option en faisant glisser ou redimensionnant une fenêtre et elle reste exactement où vous la mettez — même après avoir changé d'app ou d'écran, Plumb ne la recentre ni ne la tuile. Faites-la glisser à nouveau SANS Option et elle reprend sa position de mise en page. Une nouvelle ligne « Mise en page manuelle » dans l'onglet À propos documente le raccourci. 176 tests réussissent.",
+    "ja": "改善：Option (⌥) の手動レイアウトがウィンドウ単位で固定されるようになりました。Option を押しながらウィンドウのドラッグやリサイズを行うと、アプリ切替や画面変更の後も Plumb はそのウィンドウを中央寄せもタイリングもしなくなります。Option を押さずに再度ドラッグすると、元のレイアウト位置に戻ります。「について」タブに「手動レイアウト」の説明行を追加しました。176 テスト成功。"
   },
   "minOS": "26.0"
 }
