@@ -32,6 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
+    /// 后台「自动检查更新」定期定时器。
+    /// Plumb 是菜单栏常驻 agent，启动检查只在 applicationDidFinishLaunching 跑一次；
+    /// 本定时器在 app 长驻期间每 backgroundCheckMinInterval（6h）静默检查一次，
+    /// 让运行很久不重启的用户也能收到更新提示。复用 centerOnceOnLaunch 的 DispatchSourceTimer 模式。
+    /// 随 app 生命周期，无需显式 invalidate（与 launchCenterTimer 同模式）。
+    private var backgroundUpdateTimer: DispatchSourceTimer?
+
     /// 逃生口（菜单栏图标隐藏时）的「连续两次打开」判定器。
     /// 若距上次打开 ≤ threshold 秒即视为「连续两次打开」→ 弹出设置；超过则重新计数。
     /// 纯逻辑状态机（无 macOS 依赖），threshold 与计数细节见 `ReopenDetector`（可单测）。
@@ -61,6 +68,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dmgMonitor.start()
         eventObserver.start()
         centerOnceOnLaunch()
+        // 注入「自动检查更新」开关判定闭包：读 settings.autoCheckUpdates。
+        // 之后所有自动检查路径（启动、后台定时器、打开设置）经此统一判定，关闭时全部跳过。
+        UpdateCoordinator.shared.autoCheckUpdatesProvider = { [tilingSettingsStore] in
+            tilingSettingsStore.load().autoCheckUpdates
+        }
+        UpdateCoordinator.shared.checkForUpdatesInBackground()
+        scheduleBackgroundUpdateChecks()
+    }
+
+    /// 启动后台「自动检查更新」定期定时器：每 6h（backgroundCheckMinInterval）静默检查一次。
+    /// 复用 UpdateCoordinator.checkForUpdatesInBackground()：自带开关判定与节流（避免与启动检查、
+    /// 打开设置检查重复请求）。系统休眠期间 DispatchSourceTimer 暂停，唤醒后由启动/打开设置检查补位。
+    private func scheduleBackgroundUpdateChecks() {
+        backgroundUpdateTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now() + UpdateConfig.backgroundCheckMinInterval,
+            repeating: UpdateConfig.backgroundCheckMinInterval
+        )
+        timer.setEventHandler { [weak self] in
+            self?.triggerBackgroundUpdateCheck()
+        }
+        backgroundUpdateTimer = timer
+        timer.resume()
+    }
+
+    /// 定时器触发的后台检查入口（独立方法便于弱引用调用）。
+    private func triggerBackgroundUpdateCheck() {
         UpdateCoordinator.shared.checkForUpdatesInBackground()
     }
 

@@ -7,14 +7,20 @@ import SwiftUI
 //
 // 职责：展示当前软件版本号（取自 AppVersion.current，即 CFBundleShortVersionString），
 //   「检查更新」按钮（复用 UpdateCoordinator 的模态弹窗反馈，使隐藏菜单栏图标时也能更新），
+//   「自动检查更新」开关（PillToggle，绑定 SettingsView 的 settings.autoCheckUpdates 自动落盘），
 //   以及一个可点击打开 GitHub 仓库主页（https://github.com/Lv-0/plumb）的按钮。
 //
-// 说明：纯展示视图，无状态、无持久化。版本号每次显示时实时读取（计算属性）；
+// 说明：除 autoCheckUpdates 绑定外，无其它状态/持久化。版本号每次显示时实时读取（计算属性）；
 //   GitHub 按钮点击即用 NSWorkspace.shared.open 在默认浏览器打开，无前置条件。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 关于段：版本号行 + GitHub 按钮行，整体放在与权限卡片一致的 Liquid Glass 容器里。
 struct AboutSection: View {
+    /// 与 SettingsView 同源的设置绑定：改这里即触发其 `.onChange(of: settings) → store.save`，
+    /// 避免另起数据源导致 stale 覆盖（与 PermissionsSection.hideStatusBarIcon 同模式）。
+    /// 控制「自动」更新检查（启动/后台定期/打开设置）；手动检查不受此开关限。
+    @Binding var autoCheckUpdates: Bool
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -73,7 +79,30 @@ struct AboutSection: View {
             Divider()
                 .opacity(0.25)
 
-            // 行 3：GitHub 按钮行
+            // 行 3：自动检查更新开关行。与 PermissionsSection.hideStatusBarIconCard 同构：
+            // 图标 + 标题/副标题 + 右侧 PillToggle。绑定 $autoCheckUpdates 即经 SettingsView 的
+            // `.onChange(of: settings) → store.save` 自动落盘，无需本视图另写持久化。
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.clockwise.circle")   // 周期性自动检查的语义图标
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.autoCheckUpdates)
+                        .foregroundStyle(.primary)
+                    Text(L10n.autoCheckUpdatesHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+                PillToggle(isOn: $autoCheckUpdates)
+                    .animation(.spring(duration: 0.32, bounce: 0.25), value: autoCheckUpdates)
+            }
+
+            Divider()
+                .opacity(0.25)
+
+            // 行 4：GitHub 按钮行
             HStack(spacing: 12) {
                 Image(systemName: "globe")
                     .font(.title3)

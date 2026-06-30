@@ -103,6 +103,9 @@ enum L10n {
         case aboutGitHubHint
         case aboutViewOnGitHub
         case aboutCheckUpdatesHint
+        // 自动检查更新开关
+        case autoCheckUpdates
+        case autoCheckUpdatesHint
         // 开关 / 无障碍
         case toggleSwitch
         case on, off
@@ -188,6 +191,8 @@ enum L10n {
             .aboutGitHubHint: "View source code and report issues.",
             .aboutViewOnGitHub: "View on GitHub",
             .aboutCheckUpdatesHint: "Check for the latest version of Plumb.",
+            .autoCheckUpdates: "Check for Updates Automatically",
+            .autoCheckUpdatesHint: "When enabled, Plumb checks for updates in the background and when you open Settings.",
             .toggleSwitch: "Switch",
             .on: "On",
             .off: "Off",
@@ -266,6 +271,8 @@ enum L10n {
             .aboutGitHubHint: "Ver código fuente y reportar problemas.",
             .aboutViewOnGitHub: "Ver en GitHub",
             .aboutCheckUpdatesHint: "Comprobar la última versión de Plumb.",
+            .autoCheckUpdates: "Buscar actualizaciones automáticamente",
+            .autoCheckUpdatesHint: "Cuando está activado, Plumb busca actualizaciones en segundo plano y al abrir Ajustes.",
             .toggleSwitch: "Interruptor",
             .on: "Activado",
             .off: "Desactivado",
@@ -344,6 +351,8 @@ enum L10n {
             .aboutGitHubHint: "Voir le code source et signaler des problèmes.",
             .aboutViewOnGitHub: "Voir sur GitHub",
             .aboutCheckUpdatesHint: "Rechercher la dernière version de Plumb.",
+            .autoCheckUpdates: "Rechercher les mises à jour automatiquement",
+            .autoCheckUpdatesHint: "Lorsqu'activé, Plumb recherche les mises à jour en arrière-plan et à l'ouverture des Réglages.",
             .toggleSwitch: "Interrupteur",
             .on: "Activé",
             .off: "Désactivé",
@@ -422,6 +431,8 @@ enum L10n {
             .aboutGitHubHint: "查看源代码与提交问题。",
             .aboutViewOnGitHub: "在 GitHub 上查看",
             .aboutCheckUpdatesHint: "检查 Plumb 的最新版本。",
+            .autoCheckUpdates: "自动检查更新",
+            .autoCheckUpdatesHint: "开启后，Plumb 会在后台定期检查更新，并在打开设置时自动检查。",
             .toggleSwitch: "开关",
             .on: "开",
             .off: "关",
@@ -500,6 +511,8 @@ enum L10n {
             .aboutGitHubHint: "ソースコードの確認と問題の報告。",
             .aboutViewOnGitHub: "GitHub で見る",
             .aboutCheckUpdatesHint: "Plumb の最新バージョンを確認します。",
+            .autoCheckUpdates: "アップデートを自動的に確認",
+            .autoCheckUpdatesHint: "オンの時、Plumb はバックグラウンドで定期的に、また設定ウィンドウを開いたときにアップデートを確認します。",
             .toggleSwitch: "スイッチ",
             .on: "オン",
             .off: "オフ",
@@ -581,6 +594,8 @@ enum L10n {
     static var aboutGitHubHint: String { tr(.aboutGitHubHint) }
     static var aboutViewOnGitHub: String { tr(.aboutViewOnGitHub) }
     static var aboutCheckUpdatesHint: String { tr(.aboutCheckUpdatesHint) }
+    static var autoCheckUpdates: String { tr(.autoCheckUpdates) }
+    static var autoCheckUpdatesHint: String { tr(.autoCheckUpdatesHint) }
     static var toggleSwitch: String { tr(.toggleSwitch) }
     static var on: String { tr(.on) }
     static var off: String { tr(.off) }

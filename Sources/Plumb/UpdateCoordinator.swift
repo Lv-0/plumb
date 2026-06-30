@@ -42,13 +42,23 @@ final class UpdateCoordinator {
     /// 当前下载 Task（用于 Cancel 时协作式取消）。
     private var currentDownloadTask: Task<Void, Never>?
 
+    /// 是否允许「自动」检查更新（启动、后台定期、打开设置）的判定闭包。
+    /// 默认返回 true（保持既有行为）；AppDelegate 启动时注入真实读取（读 settings.autoCheckUpdates）。
+    /// 仅用于收敛所有自动路径的开关判定；手动检查（checkForUpdatesManually）不受此闭包影响。
+    /// 之所以用闭包而非直接读 store：解耦 UpdateCoordinator 与设置存储，便于单测注入固定值。
+    var autoCheckUpdatesProvider: () -> Bool = { true }
+
     private var osVersion: AppVersion {
         let raw = ProcessInfo.processInfo.operatingSystemVersion
         return AppVersion(major: raw.majorVersion, minor: raw.minorVersion, patch: raw.patchVersion)
     }
 
     /// 启动后台静默检查。失败完全静默（不打扰）；节流避免每次启动都请求。
+    /// 调用方：AppDelegate 启动时、后台 6h 定时器、SettingsView 打开设置时。
+    /// 开关判定：autoCheckUpdatesProvider 返回 false 时直接返回（不写 lastCheckKey，
+    /// 保证用户重新开启开关时可立即检查）。手动检查路径不受此开关影响。
     func checkForUpdatesInBackground() {
+        guard autoCheckUpdatesProvider() else { return } // 自动检查被用户关闭 → 跳过。
         let defaults = UserDefaults.standard
         if let last = defaults.object(forKey: UpdateConfig.lastCheckKey) as? Double,
            Date().timeIntervalSince1970 - last < UpdateConfig.backgroundCheckMinInterval {

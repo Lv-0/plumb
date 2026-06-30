@@ -38,7 +38,7 @@ struct AppTilingSettings: Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case isEnabled, edgeMargin, tiledBundleIDs, hideSystemAppsInPicker
         case centerEnabled, centeredBundleIDs, documentChooserBundleIDs
-        case perAppMargins, hideStatusBarIcon
+        case perAppMargins, hideStatusBarIcon, autoCheckUpdates
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +53,9 @@ struct AppTilingSettings: Equatable, Codable {
         perAppMargins = try c.decodeIfPresent([String: CGFloat].self, forKey: .perAppMargins) ?? [:]
         // 后增字段：旧 settings.json 不含此键 → 回退 false（默认显示图标，保持既有行为）。
         hideStatusBarIcon = try c.decodeIfPresent(Bool.self, forKey: .hideStatusBarIcon) ?? false
+        // 后增字段：旧 settings.json 不含此键 → 回退 true（默认开启自动检查，保持既有行为）。
+        // 控制「自动」更新检查（启动、后台定期、打开设置）；手动检查（菜单项/关于页按钮）不受限。
+        autoCheckUpdates = try c.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates) ?? true
     }
 
     /// 显式成员初始化器。自定义了 init(from:) 后编译器不再合成默认成员初始化器，
@@ -66,7 +69,8 @@ struct AppTilingSettings: Equatable, Codable {
         centeredBundleIDs: Set<String>,
         documentChooserBundleIDs: Set<String>,
         perAppMargins: [String: CGFloat] = [:],
-        hideStatusBarIcon: Bool = false
+        hideStatusBarIcon: Bool = false,
+        autoCheckUpdates: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.edgeMargin = edgeMargin
@@ -77,6 +81,7 @@ struct AppTilingSettings: Equatable, Codable {
         self.documentChooserBundleIDs = documentChooserBundleIDs
         self.perAppMargins = perAppMargins
         self.hideStatusBarIcon = hideStatusBarIcon
+        self.autoCheckUpdates = autoCheckUpdates
     }
 
     /// 默认启用"文档选择器感知"的 App 集合。
@@ -103,6 +108,11 @@ struct AppTilingSettings: Equatable, Codable {
     /// 隐藏后无菜单栏入口，设置界面只能通过「连续两次打开 Plumb」的逃生口重新进入
     ///（详见 AppDelegate.applicationShouldHandleReopen）。
     var hideStatusBarIcon: Bool
+
+    /// 是否自动检查更新（默认 true = 开启，保持既有行为）。
+    /// 控制所有「自动」检查路径：启动检查、后台定期检查、打开设置时的检查。
+    /// 关闭时这些路径全部跳过；手动检查（菜单栏「检查更新…」与关于页按钮）不受此开关限制。
+    var autoCheckUpdates: Bool
 
     /// 居中功能总开关（默认开启，保持既有行为）。
     var centerEnabled: Bool
@@ -151,7 +161,8 @@ struct AppTilingSettings: Equatable, Codable {
             centeredBundleIDs: normalizedCenterIDs,
             documentChooserBundleIDs: normalizedChooserIDs,
             perAppMargins: normalizedPerApp,
-            hideStatusBarIcon: hideStatusBarIcon
+            hideStatusBarIcon: hideStatusBarIcon,
+            autoCheckUpdates: autoCheckUpdates
         )
     }
 
@@ -225,6 +236,7 @@ final class AppTilingSettingsStore {
         static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
         static let perAppMargins = "tiling.perAppMargins"
         static let hideStatusBarIcon = "appearance.hideStatusBarIcon"
+        static let autoCheckUpdates = "updates.autoCheckUpdates"
     }
 
     private let defaults: UserDefaults
@@ -318,7 +330,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppMargins=\(s.perAppMargins.count) hideIcon=\(s.hideStatusBarIcon)"
+        "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppMargins=\(s.perAppMargins.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -400,9 +412,11 @@ final class AppTilingSettingsStore {
         let hasCenteredBundleIDs = defaults.object(forKey: Keys.centeredBundleIDs) != nil
         let hasDocumentChooserBundleIDs = defaults.object(forKey: Keys.documentChooserBundleIDs) != nil
         let hasHideStatusBarIcon = defaults.object(forKey: Keys.hideStatusBarIcon) != nil
+        let hasAutoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) != nil
 
         if !hasEnabled, !hasMargin, !hasBundleIDs, !hasHideSystemApps,
-           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs, !hasHideStatusBarIcon {
+           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs, !hasHideStatusBarIcon,
+           !hasAutoCheckUpdates {
             return .default
         }
 
@@ -425,6 +439,9 @@ final class AppTilingSettingsStore {
         let hideStatusBarIcon = hasHideStatusBarIcon
             ? defaults.bool(forKey: Keys.hideStatusBarIcon)
             : AppTilingSettings.default.hideStatusBarIcon
+        let autoCheckUpdates = hasAutoCheckUpdates
+            ? defaults.bool(forKey: Keys.autoCheckUpdates)
+            : AppTilingSettings.default.autoCheckUpdates
 
         return AppTilingSettings(
             isEnabled: isEnabled,
@@ -435,7 +452,8 @@ final class AppTilingSettingsStore {
             centeredBundleIDs: Set(centeredBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             perAppMargins: perAppMargins,
-            hideStatusBarIcon: hideStatusBarIcon
+            hideStatusBarIcon: hideStatusBarIcon,
+            autoCheckUpdates: autoCheckUpdates
         ).normalized()
     }
 
@@ -451,5 +469,6 @@ final class AppTilingSettingsStore {
         let perAppDouble = Dictionary(uniqueKeysWithValues: normalized.perAppMargins.map { ($0.key, Double($0.value)) })
         defaults.set(perAppDouble, forKey: Keys.perAppMargins)
         defaults.set(normalized.hideStatusBarIcon, forKey: Keys.hideStatusBarIcon)
+        defaults.set(normalized.autoCheckUpdates, forKey: Keys.autoCheckUpdates)
     }
 }

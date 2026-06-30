@@ -76,6 +76,9 @@ struct SettingsView: View {
             DiagnosticLog.debug("SettingsUI: window OPENED (first task) loaded=\(store.summary(forLog: settings))")
             refreshApps()
             observeWorkspaceAppLaunches()
+            // 打开设置时静默触发一次后台检查（受开关控制、含 6h 节流，频繁开关不会重复请求）；
+            // 用户想强制检查可用关于页「检查更新」按钮（手动路径，不节流、不受开关限）。
+            UpdateCoordinator.shared.checkForUpdatesInBackground()
         }
         .onReceive(NotificationCenter.default.publisher(for: SettingsWindowNotifications.windowDidShow)) { _ in
             // 设置窗口每次显示时重新扫描：AppDelegate 缓存了控制器单例，
@@ -83,6 +86,8 @@ struct SettingsView: View {
             // 让"打开设置 → 安装新应用 → 关闭再打开设置"能立即看到新应用。
             DiagnosticLog.debug("SettingsUI: window SHOW (reopen)")
             refreshApps()
+            // 重开设置同样静默触发后台检查（节流内不会与首次打开重复请求）。
+            UpdateCoordinator.shared.checkForUpdatesInBackground()
         }
         .onDisappear {
             // 窗口关闭时移除观察者，避免泄漏；下次 `.task` 会重新注册。
@@ -171,7 +176,7 @@ struct SettingsView: View {
         case .permissions:
             PermissionsSection(hideStatusBarIcon: $settings.hideStatusBarIcon)
         case .about:
-            AboutSection()
+            AboutSection(autoCheckUpdates: $settings.autoCheckUpdates)
         }
     }
 }
