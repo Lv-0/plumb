@@ -273,11 +273,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         centerItem.target = self
         centerItem.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
 
-        // 快速开关：自动居中 / 自动平铺（勾选状态由 validateMenuItem 在菜单打开时从 store 推导，
+        // 快速开关：自动居中 / 自动平铺（勾选状态由 menuNeedsChange 在菜单打开时从 store 推导，
         // 与设置窗口改动天然同步）。放在主操作之后、设置… 之前，属高频状态控制项。
         let autoCenterItem = menu.addItem(withTitle: L10n.menuAutoCentering, action: #selector(toggleAutoCentering), keyEquivalent: "")
         autoCenterItem.target = self
-        autoCenterItem.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
+        autoCenterItem.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
 
         let autoTileItem = menu.addItem(withTitle: L10n.menuAutoTiling, action: #selector(toggleAutoTiling), keyEquivalent: "")
         autoTileItem.target = self
