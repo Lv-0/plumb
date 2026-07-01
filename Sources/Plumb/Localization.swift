@@ -49,6 +49,8 @@ enum L10n {
         // 菜单栏
         case menuSubtitle
         case centerNow
+        case menuAutoCentering
+        case menuAutoTiling
         case settings
         case accessibilityPermission
         case screenRecordingPermission
@@ -88,6 +90,7 @@ enum L10n {
         case permissionsIntro
         case accessibility
         case screenRecording
+        case inputMonitoring
         case granted
         case notGranted
         case openSettings
@@ -149,6 +152,8 @@ enum L10n {
         .en: [
             .menuSubtitle: "Window Centering · Tiling",
             .centerNow: "Center Now",
+            .menuAutoCentering: "Auto-Centering",
+            .menuAutoTiling: "Auto-Tiling",
             .settings: "Settings…",
             .accessibilityPermission: "Accessibility Permission…",
             .screenRecordingPermission: "Screen Recording Permission…",
@@ -181,6 +186,7 @@ enum L10n {
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
+            .inputMonitoring: "Input Monitoring",
             .granted: "Granted",
             .notGranted: "Not Granted",
             .openSettings: "Open Settings…",
@@ -231,6 +237,8 @@ enum L10n {
         .es: [
             .menuSubtitle: "Centrado de ventanas · Mosaico",
             .centerNow: "Centrar ahora",
+            .menuAutoCentering: "Centrado automático",
+            .menuAutoTiling: "Mosaico automático",
             .settings: "Ajustes…",
             .accessibilityPermission: "Permiso de accesibilidad…",
             .screenRecordingPermission: "Permiso de grabación de pantalla…",
@@ -263,6 +271,7 @@ enum L10n {
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
+            .inputMonitoring: "Monitorización de entrada",
             .granted: "Concedido",
             .notGranted: "No concedido",
             .openSettings: "Abrir ajustes…",
@@ -313,6 +322,8 @@ enum L10n {
         .fr: [
             .menuSubtitle: "Centrage de fenêtre · Mosaïque",
             .centerNow: "Centrer maintenant",
+            .menuAutoCentering: "Centrage automatique",
+            .menuAutoTiling: "Mosaïque automatique",
             .settings: "Réglages…",
             .accessibilityPermission: "Permission d'accèsibilité…",
             .screenRecordingPermission: "Permission d'enregistrement d'écran…",
@@ -345,6 +356,7 @@ enum L10n {
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
+            .inputMonitoring: "Surveillance des entrées",
             .granted: "Accordée",
             .notGranted: "Non accordée",
             .openSettings: "Ouvrir les réglages…",
@@ -395,6 +407,8 @@ enum L10n {
         .zh: [
             .menuSubtitle: "窗口居中 · 平铺",
             .centerNow: "立即居中",
+            .menuAutoCentering: "自动居中",
+            .menuAutoTiling: "自动平铺",
             .settings: "设置…",
             .accessibilityPermission: "辅助功能权限…",
             .screenRecordingPermission: "屏幕录制权限…",
@@ -427,6 +441,7 @@ enum L10n {
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
+            .inputMonitoring: "输入监听",
             .granted: "已授权",
             .notGranted: "未授权",
             .openSettings: "打开设置…",
@@ -477,6 +492,8 @@ enum L10n {
         .ja: [
             .menuSubtitle: "ウィンドウ中央寄せ · タイル",
             .centerNow: "今すぐ中央寄せ",
+            .menuAutoCentering: "自動中央寄せ",
+            .menuAutoTiling: "自動タイル",
             .settings: "設定…",
             .accessibilityPermission: "アクセシビリティ権限…",
             .screenRecordingPermission: "画面収録権限…",
@@ -509,6 +526,7 @@ enum L10n {
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
+            .inputMonitoring: "入力監視",
             .granted: "許可済み",
             .notGranted: "未許可",
             .openSettings: "設定を開く…",
@@ -562,6 +580,8 @@ enum L10n {
 
     static var menuSubtitle: String { tr(.menuSubtitle) }
     static var centerNow: String { tr(.centerNow) }
+    static var menuAutoCentering: String { tr(.menuAutoCentering) }
+    static var menuAutoTiling: String { tr(.menuAutoTiling) }
     static var settings: String { tr(.settings) }
     static var accessibilityPermission: String { tr(.accessibilityPermission) }
     static var screenRecordingPermission: String { tr(.screenRecordingPermission) }
@@ -594,6 +614,7 @@ enum L10n {
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }
+    static var inputMonitoring: String { tr(.inputMonitoring) }
     static var granted: String { tr(.granted) }
     static var notGranted: String { tr(.notGranted) }
     static var openSettings: String { tr(.openSettings) }

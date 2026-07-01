@@ -27,4 +27,11 @@ enum SettingsWindowNotifications {
     /// 实现「拨动开关 → 图标立即消失/出现」。用通知解耦：设置 UI 不持有 AppDelegate。
     static let statusBarIconVisibilityChanged =
         Notification.Name("plumb.settings.statusBarIconVisibilityChanged")
+
+    /// 设置（如总开关）经设置窗口以外的入口被改动时发出。
+    /// 触发场景：菜单栏下拉的「自动居中 / 自动平铺」快速开关——AppDelegate 拨动后发本通知，
+    /// 已打开的 SettingsView 监听后 settings = store.load() 重载本地状态，
+    /// 使菜单与设置窗口双向同步。方向与 statusBarIconVisibilityChanged 相反（那是设置→AppDelegate）。
+    static let settingsChangedExternally =
+        Notification.Name("plumb.settings.settingsChangedExternally")
 }

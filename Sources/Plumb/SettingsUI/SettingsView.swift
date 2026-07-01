@@ -104,6 +104,11 @@ struct SettingsView: View {
             DiagnosticLog.debug("SettingsUI: settings changed → save")
             store.save(new)
         }
+        // 菜单栏下拉的「自动居中 / 自动平铺」快速开关拨动后经 settingsChangedExternally 通知本视图；
+        // 重载本地 settings @State，使设置窗口与菜单状态保持一致（双向同步的「菜单→设置窗口」方向）。
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowNotifications.settingsChangedExternally)) { _ in
+            settings = store.load()
+        }
     }
 
     /// 后台重新扫描已安装应用并更新 `apps`。

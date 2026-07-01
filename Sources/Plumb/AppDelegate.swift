@@ -161,6 +161,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 菜单栏下拉「自动居中」快速开关：翻转 centerEnabled 总开关并落盘，
+    /// 随后通知设置窗口重载本地状态（菜单→设置窗口同步）。
+    /// 生效路径：shouldCenter(bundleID:) 守卫 centerEnabled——关掉后自动居中主循环不再居中任何窗口。
+    @objc private func toggleAutoCentering() {
+        var s = tilingSettingsStore.load()
+        s.centerEnabled.toggle()
+        tilingSettingsStore.save(s)
+        NotificationCenter.default.post(name: SettingsWindowNotifications.settingsChangedExternally, object: nil)
+    }
+
+    /// 菜单栏下拉「自动平铺」快速开关：翻转 isEnabled 总开关并落盘，
+    /// 随后通知设置窗口重载本地状态（菜单→设置窗口同步）。
+    /// 生效路径：shouldTile(bundleID:) 守卫 isEnabled——关掉后平铺白名单内的 app 也不再被平铺。
+    @objc private func toggleAutoTiling() {
+        var s = tilingSettingsStore.load()
+        s.isEnabled.toggle()
+        tilingSettingsStore.save(s)
+        NotificationCenter.default.post(name: SettingsWindowNotifications.settingsChangedExternally, object: nil)
+    }
+
+    /// 菜单打开前由 AppKit 自动调用（NSUserInterfaceValidations）。读取最新 store 状态设勾选标记，
+    /// 使菜单项 `.state` 与设置窗口改动天然同步（设置窗口→菜单方向无需额外通知）。
+    /// 返回 true 保证两项始终可点（menu.autoenablesItems 已设 false）。
+    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let s = tilingSettingsStore.load()
+        switch item.action {
+        case #selector(toggleAutoCentering):
+            item.state = s.centerEnabled ? .on : .off
+        case #selector(toggleAutoTiling):
+            item.state = s.isEnabled ? .on : .off
+        default:
+            break
+        }
+        return true
+    }
+
     @objc private func openSettings() {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(store: tilingSettingsStore)
@@ -231,6 +267,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let centerItem = menu.addItem(withTitle: L10n.centerNow, action: #selector(centerNow), keyEquivalent: "")
         centerItem.target = self
         centerItem.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
+
+        // 快速开关：自动居中 / 自动平铺（勾选状态由 validateMenuItem 在菜单打开时从 store 推导，
+        // 与设置窗口改动天然同步）。放在主操作之后、设置… 之前，属高频状态控制项。
+        let autoCenterItem = menu.addItem(withTitle: L10n.menuAutoCentering, action: #selector(toggleAutoCentering), keyEquivalent: "")
+        autoCenterItem.target = self
+        autoCenterItem.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
+
+        let autoTileItem = menu.addItem(withTitle: L10n.menuAutoTiling, action: #selector(toggleAutoTiling), keyEquivalent: "")
+        autoTileItem.target = self
+        autoTileItem.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: nil)
 
         // 设置…
         let settingsItem = menu.addItem(withTitle: L10n.settings, action: #selector(openSettings), keyEquivalent: ",")
