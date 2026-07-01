@@ -2,6 +2,24 @@ import AppKit
 import ApplicationServices
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARK: - TransientDetector
+//
+// 纯几何判据（非 @MainActor，便于单测）：判定窗口是否为"瞬态"窗口
+//（登录窗 / 启动 splash / 二维码 / 小工具窗），供居中路径决定是否锁定 PID。
+// ─────────────────────────────────────────────────────────────────────────────
+enum TransientDetector {
+    /// 面积比阈值：窗口面积 ÷ 最大屏 visibleFrame 面积 < 此值 → 瞬态。
+    static let coverageThreshold: CGFloat = 0.5
+
+    /// 面积比 < 阈值 → 瞬态。largestVisibleFrameArea ≤ 0 → 保守返回 false（正常锁，避免无限重试）。
+    static func isTransient(size: CGSize, largestVisibleFrameArea: CGFloat) -> Bool {
+        guard largestVisibleFrameArea > 0 else { return false }
+        let coverage = (size.width * size.height) / largestVisibleFrameArea
+        return coverage < coverageThreshold
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MARK: - WindowEventObserver
 //
 // 模块角色：自动居中/平铺的"事件入口 + 生命周期编排器"。
@@ -775,6 +793,17 @@ final class WindowEventObserver {
 
         do {
             try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+            // 瞬态窗（登录/splash/二维码/小工具窗）：居中它但【不】锁 PID、不 markCentered，
+            // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被居中锁定。
+            // 修复 WeChat 等「先登录窗后主窗口」app：登录窗居中即锁死 PID，导致 3.5s 后到达的
+            // 聊天主窗口被 processedPIDs 守卫永久跳过（「第一次打开不居中」根因）。
+            // 与平铺路径 didWindowActuallyTile=false（启动期小窗）/ document-chooser gallery
+            // / DMG installer 分支的「不锁」不变量同构。
+            // 返回 false 让 retry 循环不停（仅 handle 返回 true 才停），与平铺小窗分支 return false 一致。
+            if looksLikeTransientWindow(windowElement) {
+                DiagnosticLog.debug("handle[\(notification)]: centered transient window — keep PID unlocked for retry pid=\(pid)")
+                return false
+            }
             markCentered(windowElement: windowElement, pid: pid)
             processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
             DiagnosticLog.debug("handle[\(notification)]: CENTERED pid=\(pid)")
@@ -1303,6 +1332,25 @@ final class WindowEventObserver {
         else { return false }
         let tol: CGFloat = 16
         return size.width >= target.width - tol && size.height >= target.height - tol
+    }
+
+    /// 窗口是否是"瞬态"窗口（登录窗 / 启动 splash / 二维码 / 小工具窗）——即非真正的主窗口。
+    ///
+    /// 用于居中路径的「不锁 PID」判据（见 applyLayout 居中分支）：当 app 首次启动先弹一个小
+    /// 登录/splash 窗时，居中它但保持 PID 解锁，让 startInitialCenteringRetries 继续接力，
+    /// 直到真正主窗口到达。与平铺路径 didWindowActuallyTile=false / document-chooser gallery
+    /// / DMG 分支同构（"瞬态窗不锁，让真窗口有机会被处理"）。
+    ///
+    /// 判据：窗口面积 ÷ 最大屏 visibleFrame 面积 < 0.5 → 瞬态。仅用尺寸（坐标空间无关），
+    /// 分母取所有屏中最大的 visibleFrame（保守，避免解析窗口所在屏的坐标空间复杂性）。
+    /// 实测：WeChat 登录窗 280×380 ≈ 5%；WeChat 真窗口 >90%；阈值 0.5 选择空间充裕。
+    ///
+    /// 读取尺寸失败 → 保守返回 false（视为非瞬态 / 主窗口 → 正常锁 PID），与 didWindowActuallyTile
+    /// 的保守 false 一致（避免无法读取时无限重试）。
+    private func looksLikeTransientWindow(_ windowElement: AXUIElement) -> Bool {
+        guard let size = sizeAttributeValue(windowElement) else { return false }
+        let maxVisibleArea = NSScreen.screens.map { $0.visibleFrame.width * $0.visibleFrame.height }.max() ?? 0
+        return TransientDetector.isTransient(size: size, largestVisibleFrameArea: maxVisibleArea)
     }
 
     private func pointAttributeValue(_ windowElement: AXUIElement) -> CGPoint? {
