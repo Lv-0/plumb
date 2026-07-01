@@ -78,7 +78,7 @@ final class SelfTestTileAppDelegate: NSObject, NSApplicationDelegate {
         let service = WindowCenteringService()
         self.service = service
         do {
-            try service.tileWindowElementAnimated(window, pid: pid, appElement: appEl, edgeMargin: 16) { [weak self] in
+            try service.tileWindowElementAnimated(window, pid: pid, appElement: appEl, insets: TileInsets(all: 16)) { [weak self] in
                 guard let self else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     let after = self.readFrame(window)

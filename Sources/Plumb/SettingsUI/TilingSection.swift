@@ -142,7 +142,7 @@ struct TilingSection: View {
                             : L10n.tilingFootnoteOff,
                         selected: $settings.tiledBundleIDs,
                         apps: apps,
-                        perAppMargins: $settings.perAppMargins,
+                        perAppInsets: $settings.perAppInsets,
                         defaultMargin: settings.edgeMargin
                     )
                     .transition(lastDirectionForward ? .move(edge: .trailing) : .move(edge: .leading))

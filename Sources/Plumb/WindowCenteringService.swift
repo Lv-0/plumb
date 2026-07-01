@@ -394,7 +394,7 @@ final class WindowCenteringService {
         }
     }
 
-    func tileWindowElement(_ windowElement: AXUIElement, pid: pid_t? = nil, appElement: AXUIElement? = nil, edgeMargin: CGFloat) throws {
+    func tileWindowElement(_ windowElement: AXUIElement, pid: pid_t? = nil, appElement: AXUIElement? = nil, insets: TileInsets) throws {
         if let appElement, isApplicationInFullscreen(appElement) {
             throw WindowCenteringError.fullscreenWindow
         }
@@ -433,7 +433,7 @@ final class WindowCenteringService {
         }
 
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
-        let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+        let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
 
         let sizeResult = resizeWindowWithFallback(windowElement, newSize: targetFrame.size)
         if !sizeResult.didResize {
@@ -490,7 +490,7 @@ final class WindowCenteringService {
         _ windowElement: AXUIElement,
         pid: pid_t? = nil,
         appElement: AXUIElement? = nil,
-        edgeMargin: CGFloat,
+        insets: TileInsets,
         completion: (() -> Void)? = nil
     ) throws {
         if let appElement, isApplicationInFullscreen(appElement) {
@@ -531,7 +531,7 @@ final class WindowCenteringService {
         }
 
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
-        let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+        let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
         DiagnosticLog.debug("tile-animator: detect pid=\(pid.map(String.init) ?? "?") rawPos=\(currentPosition) size=\(windowSize) visibleFrame=\(visibleFrame) space=\(context.space) targetFrame=\(targetFrame)")
         // 防止同一窗口叠加动画 / 重试重叠。
         let animKey = animationKey(for: windowElement, pid: pid, kind: "tile")
@@ -901,12 +901,12 @@ final class WindowCenteringService {
 
     // MARK: - 共享解算 / 动画辅助
 
-    /// 只读查询：返回给定窗口在当前屏幕上的平铺目标 frame（`visibleFrame` 内缩 edgeMargin）。
+    /// 只读查询：返回给定窗口在当前屏幕上的平铺目标 frame（`visibleFrame` 内缩四向 insets）。
     /// 复用与平铺动画相同的坐标空间探测与 `WindowGeometry.tiledFrame` 计算，但不写任何 AX 属性、
     /// 也不启动动画。供 `WindowEventObserver.isWindowNearTiledTarget` 判断"窗口是否已铺满、
     /// 可停止重试"使用——替换此前无法访问内部接口时的粗略面积启发式。
     /// 读取失败或无法确定坐标空间时返回 nil。
-    func tiledTargetFrame(for windowElement: AXUIElement, pid: pid_t?, edgeMargin: CGFloat) -> CGRect? {
+    func tiledTargetFrame(for windowElement: AXUIElement, pid: pid_t?, insets: TileInsets) -> CGRect? {
         guard
             let currentPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
             let windowSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
@@ -924,7 +924,7 @@ final class WindowCenteringService {
                 primaryTopY: primaryTopY
             ) {
                 let visibleFrame = effectiveVisibleFrame(for: cgContext.screen)
-                return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+                return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
             }
         }
         guard let context = detectWindowContext(
@@ -934,7 +934,7 @@ final class WindowCenteringService {
             primaryTopY: primaryTopY
         ) else { return nil }
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
-        return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, edgeMargin: edgeMargin)
+        return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
     }
 
 

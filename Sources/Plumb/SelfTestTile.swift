@@ -81,7 +81,7 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
         // Use the ANIMATED path — this is where commit 0fc9703's AXFrame
         // size-bounce fix lives (completion forces the exact targetFrame).
         do {
-            try service.tileWindowElementAnimated(windowElement, pid: pid, appElement: appElement, edgeMargin: 16) { [weak self] in
+            try service.tileWindowElementAnimated(windowElement, pid: pid, appElement: appElement, insets: TileInsets(all: 16)) { [weak self] in
                 guard let self else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     let after = Self.readFrame(windowElement)

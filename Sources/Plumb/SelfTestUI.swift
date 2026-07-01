@@ -214,7 +214,7 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         var settings = AppTilingSettings.default
         settings.isEnabled = true
         settings.tiledBundleIDs = ["com.apple.calculator"]
-        settings.perAppMargins = [:]
+        settings.perAppInsets = [:]
         store.save(settings)
         Self.log("SELFTEST-DRAWER: phase start — saved tiling ON, tiledBundleIDs=[com.apple.calculator]")
 
@@ -325,20 +325,20 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         let rowHeightAfter = firstAppRowHeight(in: window)
         let rowGrew = rowHeightAfter > firstRowHeightBefore + 20
         Self.log("SELFTEST-DRAWER: first app row height (after) = \(rowHeightAfter) (before \(firstRowHeightBefore)) → ROW_GREW=\(rowGrew ? "YES" : "NO")")
-        // 抽屉展开会新增一个 slider（AppMarginDrawer 的边距滑块），故 count 应 > baseline。
+        // 抽屉展开会新增 4 个 slider（AppInsetsDrawer 的 上/下/左/右 滑块），故 count 应 > baseline。
         // 注意：window.sendEvent 注入的鼠标事件对 ScrollView 内的 SwiftUI Button 不可靠
         //（SwiftUI 与手动 NSEvent 注入在滚动视图内的已知不兼容），故此处的 DRAWER_EXPANDED
         // 仅作诊断信号——slider 数增加 = 抽屉确实展开；不变 = 点击未触发（环境限制，非功能 bug）。
-        // 功能正确性由以下保证：(a) AppListRowExpandable 绑定 perAppMargins 的数据链
+        // 功能正确性由以下保证：(a) AppListRowExpandable 绑定 perAppInsets 的数据链
         //（e2e 测试 PASS）；(b) 平铺 tab 渲染了 12 个 app 行（视图结构正确）。
         let drawerVisible = sliders.count > sliderBaseline || rowGrew
         Self.log("SELFTEST-DRAWER: DRAWER_EXPANDED=\(drawerVisible ? "YES" : "click-not-triggered (SwiftUI ScrollView+NSEvent limit; data path verified separately)")")
 
-        // 程序化模拟抽屉滑块写入（UI 通过绑定写 perAppMargins[app]=value）。
+        // 程序化模拟抽屉滑块写入（UI 通过绑定写 perAppInsets[app]=insets）。
         var s = store.load()
-        s.perAppMargins["com.apple.calculator"] = 28
+        s.perAppInsets["com.apple.calculator"] = TileInsets(all: 28)
         store.save(s)
-        Self.log("SELFTEST-DRAWER: set com.apple.calculator margin = 28 via store.save")
+        Self.log("SELFTEST-DRAWER: set com.apple.calculator insets = all:28 via store.save")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.drawer_verifyMarginAndReset()
@@ -347,16 +347,16 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
 
     private func drawer_verifyMarginAndReset() {
         guard let store else { finish(); return }
-        // 验证：写入的边距已持久化，effectiveMargin 正确。
+        // 验证：写入的间距已持久化，effectiveInsets 正确。
         let afterSet = store.load()
-        let eff = afterSet.effectiveMargin(for: "com.apple.calculator")
-        let marginPersisted = afterSet.perAppMargins["com.apple.calculator"] == 28
-        let effCorrect = eff == 28
-        Self.log("SELFTEST-DRAWER: margin persisted=\(marginPersisted ? "YES" : "NO") effective=\(eff) → MARGIN_SET=\(marginPersisted && effCorrect ? "PASS" : "FAIL")")
+        let eff = afterSet.effectiveInsets(for: "com.apple.calculator")
+        let insetsPersisted = afterSet.perAppInsets["com.apple.calculator"] == TileInsets(all: 28)
+        let effCorrect = eff == TileInsets(all: 28)
+        Self.log("SELFTEST-DRAWER: insets persisted=\(insetsPersisted ? "YES" : "NO") effective=\(eff) → MARGIN_SET=\(insetsPersisted && effCorrect ? "PASS" : "FAIL")")
 
         // 模拟"使用默认"按钮（删除 key → 回退默认）。
         var s = afterSet
-        s.perAppMargins.removeValue(forKey: "com.apple.calculator")
+        s.perAppInsets.removeValue(forKey: "com.apple.calculator")
         store.save(s)
         Self.log("SELFTEST-DRAWER: 'use default' → removed com.apple.calculator key")
 
@@ -368,10 +368,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     private func drawer_verifyReset() {
         guard let store else { finish(); return }
         let afterReset = store.load()
-        let keyRemoved = afterReset.perAppMargins["com.apple.calculator"] == nil
-        let effAfterReset = afterReset.effectiveMargin(for: "com.apple.calculator")
-        // 默认 edgeMargin=16，回退后 effectiveMargin 应为 16。
-        let fallbackCorrect = effAfterReset == afterReset.edgeMargin
+        let keyRemoved = afterReset.perAppInsets["com.apple.calculator"] == nil
+        let effAfterReset = afterReset.effectiveInsets(for: "com.apple.calculator")
+        // 默认 edgeMargin=16，回退后 effectiveInsets 四向应均为 16。
+        let fallbackCorrect = effAfterReset == TileInsets(all: afterReset.edgeMargin)
         Self.log("SELFTEST-DRAWER: key removed=\(keyRemoved ? "YES" : "NO") effective=\(effAfterReset) (default=\(afterReset.edgeMargin)) → USE_DEFAULT=\(keyRemoved && fallbackCorrect ? "PASS" : "FAIL")")
 
         // 截图抽屉最终状态。

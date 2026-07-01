@@ -89,6 +89,7 @@ enum L10n {
         case perAppMarginHint
         case useDefaultMargin
         case perAppMarginDefaultBadge
+        case marginTop, marginBottom, marginLeft, marginRight
         // 权限段
         case permissionsIntro
         case accessibility
@@ -182,9 +183,13 @@ enum L10n {
             .tilingSubtabAllowlist: "Tiling Apps",
             .tilingSubtabDocument: "Document Apps",
             .documentChooserDisabledHint: "Add to tiling list first",
-            .perAppMarginHint: "Tap an app to set a custom margin; apps without one use the default margin.",
+            .perAppMarginHint: "Tap an app to set top/bottom/left/right margins; apps without one use the default margin.",
             .useDefaultMargin: "Use Default",
             .perAppMarginDefaultBadge: "Default",
+            .marginTop: "Top",
+            .marginBottom: "Bottom",
+            .marginLeft: "Left",
+            .marginRight: "Right",
             .permissionsIntro: "Plumb needs the following permissions to control window positions.",
             .accessibility: "Accessibility",
             .screenRecording: "Screen Recording",
@@ -267,9 +272,13 @@ enum L10n {
             .tilingSubtabAllowlist: "Apps en mosaico",
             .tilingSubtabDocument: "Apps de documentos",
             .documentChooserDisabledHint: "Añade primero a la lista de mosaico",
-            .perAppMarginHint: "Toca una app para fijar un margen personalizado; las apps sin ajuste usan el margen predeterminado.",
+            .perAppMarginHint: "Toca una app para fijar márgenes arriba/abajo/izquierda/derecha; las apps sin ajuste usan el margen predeterminado.",
             .useDefaultMargin: "Usar predeterminado",
             .perAppMarginDefaultBadge: "Predeterminado",
+            .marginTop: "Arriba",
+            .marginBottom: "Abajo",
+            .marginLeft: "Izquierda",
+            .marginRight: "Derecha",
             .permissionsIntro: "Plumb necesita los siguientes permisos para controlar las posiciones de las ventanas.",
             .accessibility: "Accesibilidad",
             .screenRecording: "Grabación de pantalla",
@@ -352,9 +361,13 @@ enum L10n {
             .tilingSubtabAllowlist: "Apps en mosaïque",
             .tilingSubtabDocument: "Apps de documents",
             .documentChooserDisabledHint: "Ajoutez d'abord à la liste de mosaïque",
-            .perAppMarginHint: "Touchez une app pour définir une marge personnalisée ; les apps sans réglage utilisent la marge par défaut.",
+            .perAppMarginHint: "Touchez une app pour définir les marges haut/bas/gauche/droite ; les apps sans réglage utilisent la marge par défaut.",
             .useDefaultMargin: "Par défaut",
             .perAppMarginDefaultBadge: "Par défaut",
+            .marginTop: "Haut",
+            .marginBottom: "Bas",
+            .marginLeft: "Gauche",
+            .marginRight: "Droite",
             .permissionsIntro: "Plumb a besoin des permissions suivantes pour contrôler les positions des fenêtres.",
             .accessibility: "Accessibilité",
             .screenRecording: "Enregistrement d'écran",
@@ -437,9 +450,13 @@ enum L10n {
             .tilingSubtabAllowlist: "平铺应用列表",
             .tilingSubtabDocument: "文档类 App",
             .documentChooserDisabledHint: "先加入平铺列表",
-            .perAppMarginHint: "点击应用可单独设置边距；未单独设置的应用使用默认边距。",
+            .perAppMarginHint: "点击应用可单独设置上/下/左/右边距；未单独设置的应用使用默认边距。",
             .useDefaultMargin: "使用默认",
             .perAppMarginDefaultBadge: "默认",
+            .marginTop: "上",
+            .marginBottom: "下",
+            .marginLeft: "左",
+            .marginRight: "右",
             .permissionsIntro: "Plumb 需要以下权限才能控制窗口位置。",
             .accessibility: "辅助功能",
             .screenRecording: "屏幕录制",
@@ -522,9 +539,13 @@ enum L10n {
             .tilingSubtabAllowlist: "タイル対象アプリ",
             .tilingSubtabDocument: "書類アプリ",
             .documentChooserDisabledHint: "まずタイリングリストに追加",
-            .perAppMarginHint: "アプリをタップして個別の余白を設定できます。設定のないアプリはデフォルトの余白を使います。",
+            .perAppMarginHint: "アプリをタップして上/下/左/右の余白を個別に設定できます。設定のないアプリはデフォルトの余白を使います。",
             .useDefaultMargin: "デフォルトを使用",
             .perAppMarginDefaultBadge: "デフォルト",
+            .marginTop: "上",
+            .marginBottom: "下",
+            .marginLeft: "左",
+            .marginRight: "右",
             .permissionsIntro: "Plumb がウィンドウの位置を制御するには以下の権限が必要です。",
             .accessibility: "アクセシビリティ",
             .screenRecording: "画面収録",
@@ -613,6 +634,10 @@ enum L10n {
     static var perAppMarginHint: String { tr(.perAppMarginHint) }
     static var useDefaultMargin: String { tr(.useDefaultMargin) }
     static var perAppMarginDefaultBadge: String { tr(.perAppMarginDefaultBadge) }
+    static var marginTop: String { tr(.marginTop) }
+    static var marginBottom: String { tr(.marginBottom) }
+    static var marginLeft: String { tr(.marginLeft) }
+    static var marginRight: String { tr(.marginRight) }
     static var permissionsIntro: String { tr(.permissionsIntro) }
     static var accessibility: String { tr(.accessibility) }
     static var screenRecording: String { tr(.screenRecording) }

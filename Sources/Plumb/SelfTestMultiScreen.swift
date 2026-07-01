@@ -66,7 +66,7 @@ final class SelfTestMultiScreenDelegate: NSObject, NSApplicationDelegate {
         let expectedA = 1
         let pickOK_A = (pickedA == expectedA)
         // Tile against the SELECTED screen's visibleFrame (not the primary's).
-        let tileA = WindowGeometry.tiledFrame(visibleFrame: secondaryVisible, edgeMargin: 16)
+        let tileA = WindowGeometry.tiledFrame(visibleFrame: secondaryVisible, insets: TileInsets(all: 16))
         let staysSecondaryA = tileA.minX >= secondaryVisible.minX && tileA.maxX <= secondaryVisible.maxX
         Self.log("MULTI Case A (window on secondary):")
         Self.log("  window center=\(winCenterA) → picked screen \(pickedA ?? -1) (expected \(expectedA)) \(pickOK_A ? "✓" : "✗")")
@@ -78,7 +78,7 @@ final class SelfTestMultiScreenDelegate: NSObject, NSApplicationDelegate {
         let pickedB = ScreenSelection.screenIndex(forCenter: winCenterB, inScreens: screens)
         let expectedB = 0
         let pickOK_B = (pickedB == expectedB)
-        let tileB = WindowGeometry.tiledFrame(visibleFrame: primaryVisible, edgeMargin: 16)
+        let tileB = WindowGeometry.tiledFrame(visibleFrame: primaryVisible, insets: TileInsets(all: 16))
         let staysPrimaryB = tileB.minX >= primaryVisible.minX && tileB.maxX <= primaryVisible.maxX
         Self.log("MULTI Case B (window on primary):")
         Self.log("  window center=\(winCenterB) → picked screen \(pickedB ?? -1) (expected \(expectedB)) \(pickOK_B ? "✓" : "✗")")

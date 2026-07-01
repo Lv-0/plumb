@@ -8,7 +8,7 @@ import CoreGraphics
 // 职责：把"居中 / 约束 / 平铺 / 可用区 inset"这些数学下沉为纯函数：
 //   - centeredOrigin   ：在 visibleFrame 内居中（含 best-effort 夹取，不溢出）。
 //   - constrainedOrigin：把任意原点约束进 bounds（用于把远离屏幕的窗口先拉回可视区）。
-//   - tiledFrame       ：visibleFrame 内缩 edgeMargin 得到平铺目标（带防负保护）。
+//   - tiledFrame       ：visibleFrame 内缩四向 insets 得到平铺目标（带防负/防塌缩保护）。
 //   - insetsFromVisibleFrame：从 frame 与 visibleFrame 反推逐边 inset（让 Dock 在
 //     左/右/下、菜单栏在顶的逐屏差异可独立测试）。
 //
@@ -57,21 +57,31 @@ enum WindowGeometry {
         return CGPoint(x: constrainedX.rounded(), y: constrainedY.rounded())
     }
 
-    static func tiledFrame(visibleFrame: CGRect, edgeMargin: CGFloat) -> CGRect {
-        let margin = max(0, edgeMargin)
+    /// visibleFrame 内缩四向 insets 得到平铺目标（带防负/防塌缩保护）。
+    ///
+    /// - 逐侧 clamp 到非负，并限制单侧不超过 `(dim-1)/2`，保证同轴两侧之和 ≤ dim-1，
+    ///   永不把帧塌缩到 <1px。
+    /// - visibleFrame 为左下原点坐标系（NSScreen 约定）：`bottom` 加到 minY，`top` 从高度里扣。
+    /// - 结果四舍五入到整像素（与 AX 写入一致，便于测试断言）。
+    static func tiledFrame(visibleFrame: CGRect, insets: TileInsets) -> CGRect {
+        let maxInsetX = max(0, (visibleFrame.width - 1) / 2)
+        let maxInsetY = max(0, (visibleFrame.height - 1) / 2)
 
-        let safeInsetX = min(margin, max(0, (visibleFrame.width - 1) / 2))
-        let safeInsetY = min(margin, max(0, (visibleFrame.height - 1) / 2))
+        let left = min(max(0, insets.left), maxInsetX)
+        let right = min(max(0, insets.right), maxInsetX)
+        let top = min(max(0, insets.top), maxInsetY)
+        let bottom = min(max(0, insets.bottom), maxInsetY)
 
-        let frame = visibleFrame.insetBy(dx: safeInsetX, dy: safeInsetY)
-        let safeWidth = max(1, frame.width)
-        let safeHeight = max(1, frame.height)
+        let x = visibleFrame.minX + left
+        let y = visibleFrame.minY + bottom
+        let width = max(1, visibleFrame.width - left - right)
+        let height = max(1, visibleFrame.height - top - bottom)
 
         return CGRect(
-            x: frame.origin.x.rounded(),
-            y: frame.origin.y.rounded(),
-            width: safeWidth.rounded(),
-            height: safeHeight.rounded()
+            x: x.rounded(),
+            y: y.rounded(),
+            width: width.rounded(),
+            height: height.rounded()
         )
     }
 

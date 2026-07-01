@@ -637,8 +637,8 @@ final class WindowEventObserver {
     ) -> Bool {
         let tilingSettings = tilingSettingsStore.load()
         let shouldTile = tilingSettings.shouldTile(bundleIdentifier: bundleIdentifier)
-        // per-app 边距：该 app 单独设置过 → 用自定义值；否则回退全局 edgeMargin。
-        let effectiveMargin = tilingSettings.effectiveMargin(for: bundleIdentifier)
+        // per-app 间距：该 app 单独设置过 → 用其四向 insets；否则回退全局 edgeMargin 铺满 4 向。
+        let effectiveInsets = tilingSettings.effectiveInsets(for: bundleIdentifier)
         if shouldTile {
             // 每个"激活周期"内同一窗口只平铺一次：首次平铺后若再收到聚焦/创建通知，
             // 直接跳过，避免重试与重复事件反复触发"先居中再放大"动画，导致窗口被来回
@@ -733,21 +733,21 @@ final class WindowEventObserver {
                 pid: pid,
                 appElement: appElement,
                 primaryWindow: windowElement,
-                edgeMargin: effectiveMargin
+                insets: effectiveInsets
             ) {
                 // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
                 // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
                 // 典型场景：SiYuan 等 Electron 应用首次启动先弹加载小窗，若在此小窗上锁了 PID，
                 // 随后到达的真正主窗口会被 Bug #3 守卫永久跳过（"第一次打开不平铺"的根因）。
                 // 与上方 document-chooser / DMG 分支的「不锁」不变量同构。
-                if didWindowActuallyTile(tiledWindow, pid: pid, edgeMargin: effectiveMargin) {
+                if didWindowActuallyTile(tiledWindow, pid: pid, insets: effectiveInsets) {
                     markCentered(windowElement: tiledWindow, pid: pid)
                     processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
                     startTileStabilizationRetries(
                         pid: pid,
                         appElement: appElement,
                         windowElement: tiledWindow,
-                        edgeMargin: effectiveMargin
+                        insets: effectiveInsets
                     )
                     DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
                     return true
@@ -989,7 +989,7 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         windowElement: AXUIElement,
-        edgeMargin: CGFloat
+        insets: TileInsets
     ) {
         tileStabilizeTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -1015,7 +1015,7 @@ final class WindowEventObserver {
             }
 
             // 仅当窗口明显未达到平铺目标（尺寸偏小）时才重新触发，已基本铺满则停止重试。
-            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, edgeMargin: edgeMargin) {
+            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
                 self.tileStabilizeTimer?.cancel()
                 self.tileStabilizeTimer = nil
                 return
@@ -1025,7 +1025,7 @@ final class WindowEventObserver {
                 windowElement,
                 pid: pid,
                 appElement: appElement,
-                edgeMargin: edgeMargin
+                insets: insets
             )
 
             if attempts >= 5 {
@@ -1109,7 +1109,7 @@ final class WindowEventObserver {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        let edgeMargin = tilingSettingsStore.load().effectiveMargin(for: bundleID)
+        let insets = tilingSettingsStore.load().effectiveInsets(for: bundleID)
         let windowElement = element
 
         // 手记（Journal）设置窗口特例（resize 旁路补丁）——【这是本 bug 的根因路径】。
@@ -1183,7 +1183,7 @@ final class WindowEventObserver {
             }
 
             // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
-            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, edgeMargin: edgeMargin) {
+            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
                 DiagnosticLog.debug("handle[resize]: window already near tiled target, skip retile")
                 return
             }
@@ -1193,7 +1193,7 @@ final class WindowEventObserver {
                 windowElement,
                 pid: pid,
                 appElement: appElement,
-                edgeMargin: edgeMargin
+                insets: insets
             )
         }
         resizeRetileTimer = timer
@@ -1272,12 +1272,12 @@ final class WindowEventObserver {
     /// 窗口当前尺寸是否已接近平铺目标（用于停止平铺稳定重试）。
     ///
     /// 通过 `service.tiledTargetFrame` 拿到该窗口在其屏幕上的真实平铺目标（visibleFrame 内缩
-    /// edgeMargin），再比较窗口当前 宽/高 与目标 宽/高 的差值是否在容差内。
+    /// 四向 insets），再比较窗口当前 宽/高 与目标 宽/高 的差值是否在容差内。
     /// 替换此前"窗口面积 >= 主屏可视区 80%"的粗略启发式——后者无法区分不同屏幕尺寸、
-    /// 也无法反映 edgeMargin 配置。失败时返回 false（保守地继续重试）。
-    private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, edgeMargin: CGFloat) -> Bool {
+    /// 也无法反映 insets 配置。失败时返回 false（保守地继续重试）。
+    private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
         guard let size = sizeAttributeValue(windowElement),
-              let target = service.tiledTargetFrame(for: windowElement, pid: pid, edgeMargin: edgeMargin)
+              let target = service.tiledTargetFrame(for: windowElement, pid: pid, insets: insets)
         else { return false }
         let tol: CGFloat = 16
         return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
@@ -1297,9 +1297,9 @@ final class WindowEventObserver {
     ///
     /// 语义配合：返回 false 时调用方应【不】markCentered、【不】锁 processedPIDs，
     /// 与上方 document-chooser / DMG 分支的「不锁」不变量同构——让真正主窗口有机会被处理。
-    private func didWindowActuallyTile(_ windowElement: AXUIElement, pid: pid_t, edgeMargin: CGFloat) -> Bool {
+    private func didWindowActuallyTile(_ windowElement: AXUIElement, pid: pid_t, insets: TileInsets) -> Bool {
         guard let size = sizeAttributeValue(windowElement),
-              let target = service.tiledTargetFrame(for: windowElement, pid: pid, edgeMargin: edgeMargin)
+              let target = service.tiledTargetFrame(for: windowElement, pid: pid, insets: insets)
         else { return false }
         let tol: CGFloat = 16
         return size.width >= target.width - tol && size.height >= target.height - tol
@@ -1652,7 +1652,7 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         primaryWindow: AXUIElement,
-        edgeMargin: CGFloat
+        insets: TileInsets
     ) -> AXUIElement? {
         var candidates: [AXUIElement] = []
 
@@ -1674,7 +1674,7 @@ final class WindowEventObserver {
                     window,
                     pid: pid,
                     appElement: appElement,
-                    edgeMargin: edgeMargin
+                    insets: insets
                 )
                 if firstTiledWindow == nil {
                     firstTiledWindow = window

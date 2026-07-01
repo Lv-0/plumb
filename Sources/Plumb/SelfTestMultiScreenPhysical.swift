@@ -104,7 +104,7 @@ final class SelfTestMultiScreenPhysicalDelegate: NSObject, NSApplicationDelegate
         let beforeTile = curFrame
         Self.log("MULTI-PHYS: tiling (no prior center) on \(originalLabel), before=\(stringify(beforeTile))")
         do {
-            try service.tileWindowElementAnimated(window, pid: app.processIdentifier, appElement: AXUIElementCreateApplication(app.processIdentifier), edgeMargin: 16)
+            try service.tileWindowElementAnimated(window, pid: app.processIdentifier, appElement: AXUIElementCreateApplication(app.processIdentifier), insets: TileInsets(all: 16))
         } catch {
             Self.log("MULTI-PHYS: tile threw: \(error)")
         }

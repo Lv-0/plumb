@@ -53,7 +53,7 @@ final class SelfTestGeometryDelegate: NSObject, NSApplicationDelegate {
         guard let window else { finish(); return }
 
         // The EXACT computation the engine uses (pure, no AX).
-        let target = WindowGeometry.tiledFrame(visibleFrame: visible, edgeMargin: 16)
+        let target = WindowGeometry.tiledFrame(visibleFrame: visible, insets: TileInsets(all: 16))
         Self.log("GEO: screen visibleFrame=\(visible)")
         Self.log("GEO: tiledFrame target = \(Self.stringify(target))")
 

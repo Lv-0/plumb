@@ -27,10 +27,10 @@ struct AppListSection: View {
     /// 是否显示「全部打开 / 全部关闭」批量操作行。默认 false，仅居中段传 true。
     /// 平铺白名单页与文档类 App 页不传，保持原样（零回归）。
     var showsBulkActions: Bool = false
-    /// 可选：per-app 边距抽屉。非 nil 时，列表行使用可展开的 AppListRowExpandable
-    ///（点击 app 下拉出边距滑块），并显示一行 per-app 边距说明脚注。
+    /// 可选：per-app 间距抽屉。非 nil 时，列表行使用可展开的 AppListRowExpandable
+    ///（点击 app 下拉出上/下/左/右四个方向间距滑块），并显示一行 per-app 间距说明脚注。
     /// 仅平铺白名单页传值；居中/文档页不传 → 仍用原 AppListRow（零回归）。
-    var perAppMargins: Binding<[String: CGFloat]>? = nil
+    var perAppInsets: Binding<[String: TileInsets]>? = nil
     var defaultMargin: CGFloat = AppTilingSettings.defaultEdgeMargin
 
     @State private var query: String = ""
@@ -109,8 +109,8 @@ struct AppListSection: View {
             // 应用列表：选中在前 —— 切换开关时平滑重排。
             LazyVStack(spacing: 2) {
                 ForEach(sortedFilteredApps, id: \.bundleID) { app in
-                    if let perAppMargins {
-                        // 平铺白名单页：可展开边距抽屉的行。
+                    if let perAppInsets {
+                        // 平铺白名单页：可展开间距抽屉的行。
                         AppListRowExpandable(
                             app: app,
                             defaultMargin: defaultMargin,
@@ -122,7 +122,7 @@ struct AppListSection: View {
                                     withAnimation(.spring(duration: 0.35, bounce: 0.15)) {}
                                 }
                             ),
-                            perAppMargins: perAppMargins,
+                            perAppInsets: perAppInsets,
                             isDisabled: isRowDisabled?(app) ?? false
                         )
                     } else {
