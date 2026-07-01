@@ -3,19 +3,20 @@ import SwiftUI
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - AppListRow / PillToggle (SettingsUI)
 //
-// 模块角色：设置列表的单行视图与自绘药丸开关。
+// 模块角色：设置列表的单行视图与开关。
 //
-// AppListRow：图标 + 名称 + 药丸开关。点击图标/名称区或药丸均可切换；
+// AppListRow：图标 + 名称 + 开关。点击图标/名称区或开关均可切换；
 //   用 Button（非 onTapGesture）承载，两个独立命中区不互相吞点击。
 //
-// PillToggle：自绘轨道 + 液态玻璃滑块的胶囊形开关，避免系统 Toggle 在 macOS 上的复选框外观。
-//   开启填充强调色、滑块右滑；滑块用 .glassEffect 做成折射透镜。用 Button 承载点击，
-//   玻璃作背景层 allowsHitTesting(false) 排除参与命中测试（修复"开关点击不灵"）。
+// PillToggle：自绘轨道 + 立体玻璃质感滑块。滑块用 LinearGradient(顶亮→底暗) + 顶部椭圆
+//   高光 overlay + 多层 shadow 合成"玻璃球"质感——纯 SwiftUI，不依赖系统 Liquid Glass 材质
+//   （.glassEffect() 与系统 Toggle 的玻璃材质在 NSGlassEffectView 窗口内都渲染近乎透明，
+//   系统限制）。用 Button 承载点击，玻璃作背景层 allowsHitTesting(false) 排除参与命中测试
+//   （修复"开关点击不灵"）。对外接口（isOn / isDisabled）不变，7 个调用点零改动。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 设置列表的单个应用行：图标 + 名称 + 药丸开关。
-/// 药丸开关使用 Liquid Glass 材质，符合 macOS 26 设计语言。
-/// 交互：点击整行（图标/名称区域）切换开关；药丸本身也可独立点击。
+/// 设置列表的单个应用行：图标 + 名称 + 开关。
+/// 交互：点击整行（图标/名称区域）切换开关；开关本身也可独立点击。
 /// 关键：行用 Button 而非 onTapGesture，PillToggle 也用 Button，
 /// 两者各自独立的命中区域不会互相吞点击。
 ///
@@ -86,11 +87,17 @@ struct AppListRow: View {
     }
 }
 
-/// 药丸形（胶囊）滑动开关：自绘轨道 + 液态玻璃滑块，避免系统 Toggle 在 macOS 上的复选框外观。
-/// 开启时轨道填充强调色，滑块滑到右侧；关闭时轨道为中性玻璃色。
-/// 滑块本身为液态玻璃透镜（.glassEffect），折射轨道颜色；轨道保持轻填充不做玻璃，
-/// 避免玻璃叠玻璃窗口变磨砂。用 Button 承载点击，命中区域稳定，不被 glassEffect 吞掉。
+/// 药丸形（胶囊）滑动开关：自绘轨道 + 立体玻璃质感滑块。
 ///
+/// 为什么不用系统材质：`.glassEffect()` modifier 与系统 Toggle(.switch) 的 Liquid Glass 材质
+/// 在本窗口（NSGlassEffectView 玻璃窗口）内都渲染近乎透明/无质感（系统限制：glass 采样不到
+/// glass 背后的内容，glass-on-glass 被抑制）。故改用纯 SwiftUI 合成滑块质感：
+///   - 主体 Circle + LinearGradient（顶亮 → 底暗）= 球体明暗
+///   - 顶部小椭圆白色高光 overlay = 镜面反光
+///   - 多层 shadow = 浮起深度
+/// 不依赖任何系统材质采样，在玻璃窗口里稳定可见。
+///
+/// 对外接口（`isOn`、`isDisabled`）与原自绘版本完全一致，7 个调用点零改动。
 /// `isDisabled`：置灰且不可点击（默认 false）。用于依赖未满足时的行（如未平铺的文档类 App）。
 struct PillToggle: View {
     @Binding var isOn: Bool
@@ -109,16 +116,11 @@ struct PillToggle: View {
             }
         } label: {
             ZStack {
+                // 轨道：开启强调色、关闭中性半透明
                 Capsule(style: .continuous)
                     .fill(isOn ? Color.accentColor : Color.primary.opacity(0.12))
-                // 滑块：液态玻璃透镜，折射轨道颜色。半透明白作底色让折射更柔和；
-                // .interactive() 提供按下的缩放/高光反馈（替代原投影）。玻璃材质自带高光，
-                // 故去掉 .shadow，叠加投影反而显脏。仅滑块做玻璃，轨道保持轻填充，
-                // 避免玻璃叠玻璃窗口变磨砂。
-                Circle()
-                    .fill(Color.white.opacity(0.55))
-                    .frame(width: knobSize, height: knobSize)
-                    .glassEffect(.regular.interactive(), in: .circle)
+                // 滑块：立体玻璃质感（纯 SwiftUI 合成，见上文说明）。
+                knob
                     .offset(x: knobOffset)
             }
             .frame(width: trackWidth, height: trackHeight)
@@ -127,9 +129,8 @@ struct PillToggle: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .background(
-            // 极淡半透明背景层，allowsHitTesting(false) 彻底排除参与命中测试，
+            // 极淡半透明背景层，allowsHitTesting(false) 排除参与命中测试，
             // 保证 Button 始终能接收点击（修复"开关点击不灵"问题）。
-            // 不用 .glassEffect：窗口已是晶莹液态玻璃，叠 glass 会变磨砂。
             Capsule(style: .continuous)
                 .fill(Color.primary.opacity(0.05))
                 .allowsHitTesting(false)
@@ -137,6 +138,40 @@ struct PillToggle: View {
         .accessibilityLabel(Text(L10n.toggleSwitch))
         .accessibilityValue(Text(L10n.toggleState(isOn)))
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// 立体玻璃质感滑块：球体明暗渐变 + 顶部镜面高光 + 多层投影。
+    private var knob: some View {
+        Circle()
+            .fill(
+                // 顶亮（白）→ 底暗（中灰）：较强的明暗对比，在明亮玻璃窗口上肉眼可辨的球体质感。
+                // 此前用 0.82 对比太淡，与原版纯白圆几乎无差别；拉到 0.65 让玻璃感一眼可见。
+                LinearGradient(
+                    colors: [Color.white, Color(white: 0.65)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                // 深色细描边：勾勒球体边缘，增强立体感与对比，是"一眼能看出质感"的关键
+                Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.22), radius: 1.5, x: 0, y: 1)    // 主投影：浮起感
+            .shadow(color: .black.opacity(0.08), radius: 0.5, x: 0, y: 0.5)  // 紧贴投影：边缘清晰
+            .overlay(
+                // 顶部小椭圆高光：镜面反光，是"玻璃球"质感的关键
+                Ellipse()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.95), Color.white.opacity(0.0)],
+                            startPoint: .top,
+                            endPoint: .center
+                        )
+                    )
+                    .frame(width: knobSize * 0.7, height: knobSize * 0.45)
+                    .offset(y: -knobSize * 0.18)
+            )
+            .frame(width: knobSize, height: knobSize)
     }
 
     private var knobOffset: CGFloat {
