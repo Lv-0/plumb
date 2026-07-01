@@ -1,13 +1,13 @@
 {
-  "version": "2.0.33",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.33/Plumb-2.0.33.zip",
-  "sha256": "02c23778e34dcb686074236fa27daeb28b59ddeee7ce96ee72ada54e69227802",
+  "version": "2.0.34",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.34/Plumb-2.0.34.zip",
+  "sha256": "649ded6c2d2d232d710528eb008d1c98657d45a7d197d93c47a9fc06cf9ca7c1",
   "notes": {
-    "en": "Improved: Option (⌥) manual layout is now sticky per window. Hold Option while dragging or resizing a window and it stays exactly where you put it — even after you switch apps or change screens, Plumb no longer re-centers or re-tiles that window. Drag it again WITHOUT Option and it snaps right back to its layout position. A new 'Manual Layout' line in the About tab documents the shortcut. 176 tests pass.",
-    "zh": "改进：Option (⌥) 手动排版现在按窗口粘性生效。按住 Option 拖动或调整窗口大小后，该窗口就停在原处——即使切换软件或屏幕，Plumb 也不再对它自动居中或平铺。不按 Option 再拖动一次，窗口立即吸附回排版位。关于页新增「手动排版」说明行。176 项测试通过。",
-    "es": "Mejorado: la maquetación manual con Option (⌥) ahora es persistente por ventana. Mantén Option al arrastrar o cambiar el tamaño de una ventana y se queda donde la pusiste — aunque cambies de app o de pantalla, Plumb ya no la vuelve a centrar ni a colocar en mosaico. Arrástrala de nuevo SIN Option y vuelve a su posición de maquetación. Una nueva línea 'Maquetación manual' en la pestaña Acerca de documenta el atajo. 176 pruebas pasan.",
-    "fr": "Amélioré : la mise en page manuelle avec Option (⌥) est désormais persistante par fenêtre. Maintenez Option en faisant glisser ou redimensionnant une fenêtre et elle reste exactement où vous la mettez — même après avoir changé d'app ou d'écran, Plumb ne la recentre ni ne la tuile. Faites-la glisser à nouveau SANS Option et elle reprend sa position de mise en page. Une nouvelle ligne « Mise en page manuelle » dans l'onglet À propos documente le raccourci. 176 tests réussissent.",
-    "ja": "改善：Option (⌥) の手動レイアウトがウィンドウ単位で固定されるようになりました。Option を押しながらウィンドウのドラッグやリサイズを行うと、アプリ切替や画面変更の後も Plumb はそのウィンドウを中央寄せもタイリングもしなくなります。Option を押さずに再度ドラッグすると、元のレイアウト位置に戻ります。「について」タブに「手動レイアウト」の説明行を追加しました。176 テスト成功。"
+    "en": "Refreshed UI: the toggle switches in Settings now use a Liquid Glass lens for the knob — it subtly refracts the track color beneath, matching the macOS 26 design language. Cleaned up: removed the now-redundant 'Manual Layout' hint line from the About tab (the Option-key manual layout feature itself is unchanged). 176 tests pass.",
+    "zh": "界面焕新：设置里的开关滑块改用液态玻璃透镜，能轻微折射下方轨道颜色，贴合 macOS 26 设计语言。清理：移除关于页中冗余的「手动排版」说明行（Option 键手动排版功能本身不变）。176 项测试通过。",
+    "es": "Interfaz renovada: los interruptores en Ajustes ahora usan un lente de cristal líquido para el deslizador que refracta sutilmente el color de la pista debajo, siguiendo el lenguaje de diseño de macOS 26. Limpieza: se eliminó la línea de pista redundante 'Maquetación manual' en la pestaña Acerca de (la función de maquetación manual con Option permanece sin cambios). 176 pruebas pasan.",
+    "fr": "Interface rafraîchie : les commutateurs des Réglages utilisent désormais un lens en verre liquide pour le curseur, qui réfracte subtilement la couleur de la piste en dessous, dans l'esprit du design macOS 26. Nettoyage : suppression de la ligne d'indication désormais redondante « Mise en page manuelle » dans l'onglet À propos (la fonctionnalité de mise en page manuelle avec Option est inchangée). 176 tests réussissent.",
+    "ja": "UI リフレッシュ：設定のトグルスイッチのつまみが Liquid Glass レンズになり、下のトラック色を繊細に屈折させる、macOS 26 のデザイン言語に合わせた表現に。「について」タブの冗長な「手動レイアウト」案内行を削除（Option キーの手動レイアウト機能自体は変更なし）。176 テスト成功。"
   },
   "minOS": "26.0"
 }
