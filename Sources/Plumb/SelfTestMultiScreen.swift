@@ -6,7 +6,7 @@ import ApplicationServices
 /// Requirement 4 ("app 原先在哪个屏幕上就应该在哪个屏幕上进行居中/平铺,
 /// 不同屏幕逐屏计算 Dock/分辨率") is driven by pure logic:
 ///   - ScreenSelection.screenIndex(forCenter:inScreens:) → which screen
-///   - WindowGeometry.tiledFrame(visibleFrame:edgeMargin:) → per-screen rect
+///   - WindowGeometry.tiledFrame(visibleFrame:insets:) → per-screen rect
 ///
 /// This harness simulates a dual-monitor layout (primary + secondary with
 /// different sizes/Dock positions) and proves the center-point-ownership

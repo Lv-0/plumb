@@ -32,7 +32,7 @@ func perAppInsetsRoundTripViaFile() async throws {
 
     let input = AppTilingSettings(
         isEnabled: true,
-        edgeMargin: 16,
+        edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.a", "com.b"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -57,7 +57,7 @@ func perAppInsetsMirroredToUserDefaults() async throws {
 
     let input = AppTilingSettings(
         isEnabled: true,
-        edgeMargin: 16,
+        edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.a"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -101,7 +101,7 @@ func perAppInsetsNormalizedOnSave() async throws {
 
     let input = AppTilingSettings(
         isEnabled: true,
-        edgeMargin: 16,
+        edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -145,6 +145,7 @@ func perAppInsetsSurviveJsonDecodeWithoutKey() async throws {
 
     let loaded = store.load()
     #expect(loaded.perAppInsets.isEmpty)
-    #expect(loaded.edgeMargin == 20)
+    // 历史标量 edgeMargin=20 → 迁移为全局 edgeInsets 四向 20。
+    #expect(loaded.edgeInsets == TileInsets(all: 20))
     #expect(loaded.effectiveInsets(for: "com.a") == TileInsets(all: 20)) // 无 per-app → 全局默认
 }

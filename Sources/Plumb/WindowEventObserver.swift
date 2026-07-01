@@ -637,7 +637,7 @@ final class WindowEventObserver {
     ) -> Bool {
         let tilingSettings = tilingSettingsStore.load()
         let shouldTile = tilingSettings.shouldTile(bundleIdentifier: bundleIdentifier)
-        // per-app 间距：该 app 单独设置过 → 用其四向 insets；否则回退全局 edgeMargin 铺满 4 向。
+        // per-app 间距：该 app 单独设置过 → 用其四向 insets；否则回退全局 edgeInsets。
         let effectiveInsets = tilingSettings.effectiveInsets(for: bundleIdentifier)
         if shouldTile {
             // 每个"激活周期"内同一窗口只平铺一次：首次平铺后若再收到聚焦/创建通知，

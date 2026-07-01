@@ -31,7 +31,8 @@ struct AppListSection: View {
     ///（点击 app 下拉出上/下/左/右四个方向间距滑块），并显示一行 per-app 间距说明脚注。
     /// 仅平铺白名单页传值；居中/文档页不传 → 仍用原 AppListRow（零回归）。
     var perAppInsets: Binding<[String: TileInsets]>? = nil
-    var defaultMargin: CGFloat = AppTilingSettings.defaultEdgeMargin
+    /// 全局默认四向间距（顶部卡片 edgeInsets），供抽屉内"使用默认"按钮回退。
+    var defaultInsets: TileInsets = AppTilingSettings.default.edgeInsets
 
     @State private var query: String = ""
     /// 搜索框焦点：显式 @FocusState。用于：
@@ -113,7 +114,7 @@ struct AppListSection: View {
                         // 平铺白名单页：可展开间距抽屉的行。
                         AppListRowExpandable(
                             app: app,
-                            defaultMargin: defaultMargin,
+                            defaultInsets: defaultInsets,
                             isOn: Binding(
                                 get: { selected.contains(app.bundleID) },
                                 set: { on in

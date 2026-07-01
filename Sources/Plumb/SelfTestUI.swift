@@ -370,9 +370,9 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         let afterReset = store.load()
         let keyRemoved = afterReset.perAppInsets["com.apple.calculator"] == nil
         let effAfterReset = afterReset.effectiveInsets(for: "com.apple.calculator")
-        // 默认 edgeMargin=16，回退后 effectiveInsets 四向应均为 16。
-        let fallbackCorrect = effAfterReset == TileInsets(all: afterReset.edgeMargin)
-        Self.log("SELFTEST-DRAWER: key removed=\(keyRemoved ? "YES" : "NO") effective=\(effAfterReset) (default=\(afterReset.edgeMargin)) → USE_DEFAULT=\(keyRemoved && fallbackCorrect ? "PASS" : "FAIL")")
+        // 默认 edgeInsets 四向 16，回退后 effectiveInsets 应等于全局 edgeInsets。
+        let fallbackCorrect = effAfterReset == afterReset.edgeInsets
+        Self.log("SELFTEST-DRAWER: key removed=\(keyRemoved ? "YES" : "NO") effective=\(effAfterReset) (default=\(afterReset.edgeInsets)) → USE_DEFAULT=\(keyRemoved && fallbackCorrect ? "PASS" : "FAIL")")
 
         // 截图抽屉最终状态。
         if let window = controller?.window, let cv = window.contentView {

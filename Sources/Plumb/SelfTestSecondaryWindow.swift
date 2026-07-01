@@ -134,7 +134,7 @@ final class SelfTestSecondaryWindowDelegate: NSObject, NSApplicationDelegate {
         let store = AppTilingSettingsStore()
         let settings = AppTilingSettings(
             isEnabled: true,
-            edgeMargin: 16,
+            edgeInsets: TileInsets(all: 16),
             tiledBundleIDs: ["com.apple.textedit"],
             hideSystemAppsInPicker: true,
             centerEnabled: true,

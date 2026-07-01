@@ -38,7 +38,7 @@ func documentChooserRoundTripAndNormalization() async throws {
 
     let input = AppTilingSettings(
         isEnabled: true,
-        edgeMargin: 16,
+        edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.apple.iwork.pages", "com.microsoft.word"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -110,7 +110,7 @@ func documentChooserExplicitEmptyPersists() async throws {
 func isDocumentChooserAppSemantics() async throws {
     // 启用 + 在列表内 => true（大小写/空格归一化）。
     let withDefaults = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
         centeredBundleIDs: [],
@@ -128,7 +128,7 @@ func isDocumentChooserAppSemantics() async throws {
 
     // 空集合 => false（即便 bundleId 非空）。
     let empty = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
         centeredBundleIDs: [],
@@ -143,7 +143,7 @@ func documentChooserDoesNotAffectShouldTile() async throws {
     // 选择器感知列表与平铺白名单相互独立：isDocumentChooserApp 不改变 shouldTile 语义。
     // 即一个 App 必须同时在 tiledBundleIDs 内才会被平铺。
     let settings = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16,
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: [],   // 空白名单 => 无人被平铺
         hideSystemAppsInPicker: true,
         centerEnabled: true,

@@ -72,7 +72,7 @@ final class SelfTestDocumentChooserDelegate: NSObject, NSApplicationDelegate {
         let store = AppTilingSettingsStore()
         let settings = AppTilingSettings(
             isEnabled: true,
-            edgeMargin: 16,
+            edgeInsets: TileInsets(all: 16),
             tiledBundleIDs: [bundleID],
             hideSystemAppsInPicker: true,
             centerEnabled: true,
@@ -114,9 +114,9 @@ final class SelfTestDocumentChooserDelegate: NSObject, NSApplicationDelegate {
         }
         let docAttr = readDocument(gallery)
         let galleryFrame = readFrame(gallery)
-        // 平铺目标：visibleFrame 内缩 edgeMargin。判定是否"被平铺"看尺寸是否接近铺满。
+        // 平铺目标：visibleFrame 内缩四向 insets（自检用 TileInsets(all:16)）。判定是否"被平铺"看尺寸是否接近铺满。
         let screen = NSScreen.main?.visibleFrame ?? .zero
-        let tiledW = screen.width - 32   // edgeMargin*2
+        let tiledW = screen.width - 32   // 16*2（左右各 16）
         let tiledH = screen.height - 32
         let nearTiled = abs(galleryFrame.width - tiledW) < 40 && abs(galleryFrame.height - tiledH) < 40
         Self.log("SELFTEST-DOC: gallery document attr = '\(docAttr)' (expect empty for chooser)")

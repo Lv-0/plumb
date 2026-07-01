@@ -18,7 +18,7 @@ private func tilingSettings(
 ) -> AppTilingSettings {
     AppTilingSettings(
         isEnabled: enabled,
-        edgeMargin: globalMargin,
+        edgeInsets: TileInsets(all: globalMargin),
         tiledBundleIDs: tiled,
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -32,7 +32,7 @@ private func tilingSettings(
 
 @Test
 func effectiveInsets_fallsBackToGlobalWhenAppNotInMap() async throws {
-    // app 不在 perAppInsets → 回退全局 edgeMargin 铺满 4 向。
+    // app 不在 perAppInsets → 回退全局 edgeInsets。
     let s = tilingSettings(globalMargin: 16, perApp: [:])
     #expect(s.effectiveInsets(for: "com.example.app") == TileInsets(all: 16))
 }

@@ -44,7 +44,7 @@ func settingsStoreRoundTripAndNormalization() async throws {
 
     let input = AppTilingSettings(
         isEnabled: true,
-        edgeMargin: 999,
+        edgeInsets: TileInsets(all: 999),
         tiledBundleIDs: [" COM.Example.App ", "com.example.app", "com.example.other"],
         hideSystemAppsInPicker: false,
         centerEnabled: true,
@@ -56,7 +56,7 @@ func settingsStoreRoundTripAndNormalization() async throws {
     let loaded = store.load()
 
     #expect(loaded.isEnabled)
-    #expect(loaded.edgeMargin == AppTilingSettings.maximumEdgeMargin)
+    #expect(loaded.edgeInsets == TileInsets(all: AppTilingSettings.maximumEdgeMargin))
     #expect(loaded.tiledBundleIDs == ["com.example.app", "com.example.other"])
     #expect(loaded.hideSystemAppsInPicker == false)
     #expect(loaded.centerEnabled == true)
@@ -82,7 +82,7 @@ func settingsStoreCenteringRoundTrip() async throws {
 
     let input = AppTilingSettings(
         isEnabled: false,
-        edgeMargin: AppTilingSettings.defaultEdgeMargin,
+        edgeInsets: TileInsets(all: AppTilingSettings.defaultEdgeMargin),
         tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: false,
@@ -110,7 +110,7 @@ func settingsStoreCenteringRoundTrip() async throws {
 func shouldCenterSemantics() async throws {
     // 关闭 => 永不自动居中。
     let disabled = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: false,
         centeredBundleIDs: ["com.apple.safari"],
@@ -121,7 +121,7 @@ func shouldCenterSemantics() async throws {
 
     // 开启 + 空列表 => 全部居中（向后兼容）。
     let empty = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
         centeredBundleIDs: [],
@@ -132,7 +132,7 @@ func shouldCenterSemantics() async throws {
 
     // 开启 + 非空列表 => 仅列表内（大小写/空格归一化）。
     let allowlist = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16, tiledBundleIDs: [],
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
         centeredBundleIDs: ["com.apple.safari", "com.google.chrome"],

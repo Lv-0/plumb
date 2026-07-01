@@ -64,23 +64,18 @@ struct TilingSection: View {
 
             Divider().opacity(0.2)
 
-            // 边距滑块
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 12) {
-                    Text(L10n.margin)
-                        .foregroundStyle(.primary)
-                    Slider(value: $settings.edgeMargin,
-                           in: AppTilingSettings.minimumEdgeMargin...AppTilingSettings.maximumEdgeMargin)
-                        .disabled(!settings.isEnabled)
-                    Text("\(Int(settings.edgeMargin.rounded())) px")
-                        .foregroundStyle(settings.isEnabled ? .secondary : .tertiary)
-                        .monospacedDigit()
-                        .frame(width: 56, alignment: .trailing)
-                }
+            // 边距：上/下/左/右 四向，各一行（滑块 + 可直接输入数字）。
+            // 复用与 app 抽屉相同的 MarginRow（支持滑块拖动与数字输入两种方式）。
+            VStack(alignment: .leading, spacing: 8) {
+                MarginRow(label: L10n.marginTop, value: Binding(get: { settings.edgeInsets.top }, set: { settings.edgeInsets.top = $0 })) {}
+                MarginRow(label: L10n.marginBottom, value: Binding(get: { settings.edgeInsets.bottom }, set: { settings.edgeInsets.bottom = $0 })) {}
+                MarginRow(label: L10n.marginLeft, value: Binding(get: { settings.edgeInsets.left }, set: { settings.edgeInsets.left = $0 })) {}
+                MarginRow(label: L10n.marginRight, value: Binding(get: { settings.edgeInsets.right }, set: { settings.edgeInsets.right = $0 })) {}
                 Text(L10n.marginHint)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            .disabled(!settings.isEnabled)
             .opacity(settings.isEnabled ? 1.0 : 0.55)
         }
         .padding(.horizontal, 16)
@@ -143,7 +138,7 @@ struct TilingSection: View {
                         selected: $settings.tiledBundleIDs,
                         apps: apps,
                         perAppInsets: $settings.perAppInsets,
-                        defaultMargin: settings.edgeMargin
+                        defaultInsets: settings.edgeInsets
                     )
                     .transition(lastDirectionForward ? .move(edge: .trailing) : .move(edge: .leading))
                 case .document:

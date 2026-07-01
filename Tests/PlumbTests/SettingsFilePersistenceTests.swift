@@ -35,7 +35,7 @@ func filePersistenceRoundTrip() async throws {
     }
 
     let input = AppTilingSettings(
-        isEnabled: true, edgeMargin: 24,
+        isEnabled: true, edgeInsets: TileInsets(all: 24),
         tiledBundleIDs: ["com.microsoft.word", "com.apple.safari"],
         hideSystemAppsInPicker: false,
         centerEnabled: false,
@@ -74,7 +74,7 @@ func filePersistenceMigrationFromUserDefaults() async throws {
     let loaded = store.load()
     // 从 UserDefaults 读到数据。
     #expect(loaded.isEnabled == true)
-    #expect(loaded.edgeMargin == 32)
+    #expect(loaded.edgeInsets == TileInsets(all: 32))
     #expect(loaded.tiledBundleIDs == ["com.microsoft.word"])
     // 迁移：文件应已生成。
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
@@ -132,7 +132,7 @@ func filePersistenceDoubleWrite() async throws {
     }
 
     let input = AppTilingSettings(
-        isEnabled: true, edgeMargin: 40,
+        isEnabled: true, edgeInsets: TileInsets(all: 40),
         tiledBundleIDs: ["com.apple.xcode"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,

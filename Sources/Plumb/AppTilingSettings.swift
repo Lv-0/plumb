@@ -7,11 +7,11 @@ import Foundation
 // 模块角色：平铺与居中的设置模型 + 持久化。
 //
 // TileInsets：平铺时窗口与屏幕四边（上/下/左/右）的独立间距。替代此前的单个统一
-//   标量边距，让每个 App 可单独设置上下左右间距；全局 edgeMargin 仍为标量，作为
-//   "使用默认"时四向统一的回退基准。
+//   标量边距，全局与每个 App 都可独立设置上下左右间距；未单独设置 perAppInsets 的 App
+//   回退全局 edgeInsets。
 //
 // 数据模型 AppTilingSettings：
-//   - isEnabled / edgeMargin / tiledBundleIDs     ：平铺总开关、全局统一间距、平铺白名单。
+//   - isEnabled / edgeInsets / tiledBundleIDs     ：平铺总开关、全局四向间距、平铺白名单。
 //   - centerEnabled / centeredBundleIDs           ：居中总开关与居中白名单
 //     （空列表 => 居中全部；非空 => 仅列表内；关闭 => 永不自动居中）。
 //   - perAppInsets                                 ：每个 app 单独的上/下/左/右间距（key=归一化 bundle id）。
@@ -34,8 +34,8 @@ import Foundation
 
 /// 平铺时窗口与屏幕四边的独立间距（上/下/左/右）。
 ///
-/// 替代此前单个统一标量边距：每个 App 可单独配置上下左右四个方向。
-/// 全局 `edgeMargin` 仍为标量，作为「使用默认」时四向统一的回退基准
+/// 全局与每个 App 都用此四向模型：全局 `edgeInsets` 是默认间距，
+/// perAppInsets 中未单独设置的 App 回退到全局 `edgeInsets`
 ///（见 `AppTilingSettings.effectiveInsets(for:)`）。
 ///
 /// 坐标约定：`visibleFrame` 为左下原点坐标系（macOS NSScreen 约定），
@@ -67,28 +67,36 @@ struct AppTilingSettings: Equatable, Codable {
     static let minimumEdgeMargin: CGFloat = 0
     static let maximumEdgeMargin: CGFloat = 400
 
-    // 自定义 Codable：perAppInsets（后增字段，旧 settings.json 不含此键）与历史标量
-    // perAppMargins 都需用 decodeIfPresent 回退，否则旧文件解码会失败。
-    //   - perAppInsets：新模型（四向间距）；缺失 → 见下方迁移逻辑。
-    //   - perAppMargins：旧标量模型（统一边距）；仅用于一次性迁移 → TileInsets(all:)，
-    //     迁移完成后由 save() 写入 perAppInsets、不再双写 perAppMargins。
-    //   注意：perAppMargins 不进 CodingKeys（否则合成 Encodable 会因无对应存储属性而失败），
+    // 自定义 Codable：edgeInsets（后增四向字段，旧 settings.json 不含此键）与历史标量
+    // edgeMargin / perAppMargins 都需用 decodeIfPresent 回退，否则旧文件解码会失败。
+    //   - edgeInsets：全局四向间距；缺失 → 见下方迁移逻辑。
+    //   - edgeMargin：旧全局标量；仅用于一次性迁移 → TileInsets(all:)。
+    //   - perAppInsets：per-app 四向间距；缺失 → 见下方迁移逻辑。
+    //   - perAppMargins：旧 per-app 标量；仅用于一次性迁移 → TileInsets(all:)。
+    //   注意：历史标量键不进 CodingKeys（否则合成 Encodable 会因无对应存储属性而失败），
     //   仅在下面的 _LegacyKeys 单独声明，仅供 init(from:) 解码旧文件。
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, edgeMargin, tiledBundleIDs, hideSystemAppsInPicker
+        case isEnabled, edgeInsets, tiledBundleIDs, hideSystemAppsInPicker
         case centerEnabled, centeredBundleIDs, documentChooserBundleIDs
         case perAppInsets, hideStatusBarIcon, autoCheckUpdates
     }
 
-    /// 仅用于解码旧 settings.json 的历史标量键 perAppMargins。不参与编码（已迁移至 perAppInsets）。
+    /// 仅用于解码旧 settings.json 的历史标量键。不参与编码（已迁移至四向模型）。
     private enum _LegacyKeys: String, CodingKey {
-        case perAppMargins
+        case edgeMargin, perAppMargins
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
-        edgeMargin = try c.decodeIfPresent(CGFloat.self, forKey: .edgeMargin) ?? Self.defaultEdgeMargin
+        // 全局四向间距：新键 edgeInsets；缺失时从历史标量 edgeMargin 一次性迁移。
+        if let decoded = try c.decodeIfPresent(TileInsets.self, forKey: .edgeInsets) {
+            edgeInsets = decoded
+        } else {
+            let legacyContainer = try decoder.container(keyedBy: _LegacyKeys.self)
+            let legacyScalar = try legacyContainer.decodeIfPresent(CGFloat.self, forKey: .edgeMargin) ?? Self.defaultEdgeMargin
+            edgeInsets = TileInsets(all: legacyScalar)
+        }
         tiledBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .tiledBundleIDs) ?? []
         hideSystemAppsInPicker = try c.decodeIfPresent(Bool.self, forKey: .hideSystemAppsInPicker) ?? true
         centerEnabled = try c.decodeIfPresent(Bool.self, forKey: .centerEnabled) ?? true
@@ -117,7 +125,7 @@ struct AppTilingSettings: Equatable, Codable {
     /// 故在此显式提供，供 .default、normalized()、持久化层、测试构造使用。
     init(
         isEnabled: Bool,
-        edgeMargin: CGFloat,
+        edgeInsets: TileInsets,
         tiledBundleIDs: Set<String>,
         hideSystemAppsInPicker: Bool,
         centerEnabled: Bool,
@@ -128,7 +136,7 @@ struct AppTilingSettings: Equatable, Codable {
         autoCheckUpdates: Bool = true
     ) {
         self.isEnabled = isEnabled
-        self.edgeMargin = edgeMargin
+        self.edgeInsets = edgeInsets
         self.tiledBundleIDs = tiledBundleIDs
         self.hideSystemAppsInPicker = hideSystemAppsInPicker
         self.centerEnabled = centerEnabled
@@ -155,7 +163,8 @@ struct AppTilingSettings: Equatable, Codable {
     ]
 
     var isEnabled: Bool
-    var edgeMargin: CGFloat
+    /// 全局默认四向间距。未单独设置 perAppInsets 的 app 回退到此项。
+    var edgeInsets: TileInsets
     var tiledBundleIDs: Set<String>
     var hideSystemAppsInPicker: Bool
 
@@ -180,13 +189,13 @@ struct AppTilingSettings: Equatable, Codable {
     var documentChooserBundleIDs: Set<String>
 
     /// 每个 app 单独的平铺四向间距（key = 归一化 bundle id）。
-    /// key 不存在或 bundle id 为 nil → 回退全局 `edgeMargin` 铺满 4 向（满足"没单独设置用默认"）。
+    /// key 不存在或 bundle id 为 nil → 回退全局 `edgeInsets`（满足"没单独设置用默认"）。
     /// value 各方向经 `normalized()` 钳制到 `[minimumEdgeMargin, maximumEdgeMargin]`，key 归一化存储。
     var perAppInsets: [String: TileInsets]
 
     static let `default` = AppTilingSettings(
         isEnabled: false,
-        edgeMargin: defaultEdgeMargin,
+        edgeInsets: TileInsets(all: defaultEdgeMargin),
         tiledBundleIDs: [],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -199,7 +208,13 @@ struct AppTilingSettings: Equatable, Codable {
         let normalizedTileIDs = Set(tiledBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedCenterIDs = Set(centeredBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
         let normalizedChooserIDs = Set(documentChooserBundleIDs.map(Self.normalizeBundleID).filter { !$0.isEmpty })
-        let normalizedMargin = clamp(edgeMargin, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin)
+        // 全局四向间距：逐方向钳制到合法范围。
+        let normalizedEdge = TileInsets(
+            top: clamp(edgeInsets.top, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin),
+            bottom: clamp(edgeInsets.bottom, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin),
+            left: clamp(edgeInsets.left, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin),
+            right: clamp(edgeInsets.right, min: Self.minimumEdgeMargin, max: Self.maximumEdgeMargin)
+        )
         // per-app 间距：key 归一化、空 key 剔除、value 四向各自钳制到合法范围。
         var normalizedPerApp: [String: TileInsets] = [:]
         for (rawKey, rawInsets) in perAppInsets {
@@ -214,7 +229,7 @@ struct AppTilingSettings: Equatable, Codable {
         }
         return AppTilingSettings(
             isEnabled: isEnabled,
-            edgeMargin: normalizedMargin,
+            edgeInsets: normalizedEdge,
             tiledBundleIDs: normalizedTileIDs,
             hideSystemAppsInPicker: hideSystemAppsInPicker,
             centerEnabled: centerEnabled,
@@ -227,7 +242,7 @@ struct AppTilingSettings: Equatable, Codable {
     }
 
     /// 该 app 平铺时使用的有效四向间距。
-    /// - bundle id 不在 `perAppInsets`（或为 nil、归一化后为空）→ 回退全局 `edgeMargin` 铺满 4 向；
+    /// - bundle id 不在 `perAppInsets`（或为 nil、归一化后为空）→ 回退全局 `edgeInsets`；
     /// - 否则返回该 app 的自定义四向间距（已归一化、钳制）。
     /// 这是 per-app 平铺间距的核心解析入口，满足"没单独设置用默认"语义。
     func effectiveInsets(for bundleIdentifier: String?) -> TileInsets {
@@ -235,7 +250,7 @@ struct AppTilingSettings: Equatable, Codable {
         if !normalized.isEmpty, let custom = perAppInsets[normalized] {
             return custom
         }
-        return TileInsets(all: edgeMargin)
+        return edgeInsets
     }
 
     func shouldTile(bundleIdentifier: String?) -> Bool {
@@ -288,13 +303,14 @@ struct AppTilingSettings: Equatable, Codable {
 final class AppTilingSettingsStore {
     private enum Keys {
         static let enabled = "tiling.enabled"
-        static let edgeMargin = "tiling.edgeMargin"
+        static let edgeInsets = "tiling.edgeInsets"
         static let bundleIDs = "tiling.bundleIDs"
         static let hideSystemApps = "tiling.hideSystemAppsInPicker"
         static let centerEnabled = "centering.enabled"
         static let centeredBundleIDs = "centering.bundleIDs"
         static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
         static let perAppInsets = "tiling.perAppInsets"
+        static let legacyEdgeMargin = "tiling.edgeMargin"        // 仅读取用于一次性迁移
         static let legacyPerAppMargins = "tiling.perAppMargins"   // 仅读取用于一次性迁移
         static let hideStatusBarIcon = "appearance.hideStatusBarIcon"
         static let autoCheckUpdates = "updates.autoCheckUpdates"
@@ -391,7 +407,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-            "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) margin=\(Int(s.edgeMargin)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
+            "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) insets=t\(Int(s.edgeInsets.top))b\(Int(s.edgeInsets.bottom))l\(Int(s.edgeInsets.left))r\(Int(s.edgeInsets.right)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -466,7 +482,8 @@ final class AppTilingSettingsStore {
 
     private func loadFromUserDefaults() -> AppTilingSettings {
         let hasEnabled = defaults.object(forKey: Keys.enabled) != nil
-        let hasMargin = defaults.object(forKey: Keys.edgeMargin) != nil
+        let hasEdgeInsets = defaults.object(forKey: Keys.edgeInsets) != nil
+        let hasLegacyEdgeMargin = defaults.object(forKey: Keys.legacyEdgeMargin) != nil
         let hasBundleIDs = defaults.object(forKey: Keys.bundleIDs) != nil
         let hasHideSystemApps = defaults.object(forKey: Keys.hideSystemApps) != nil
         let hasCenterEnabled = defaults.object(forKey: Keys.centerEnabled) != nil
@@ -477,7 +494,7 @@ final class AppTilingSettingsStore {
         let hasHideStatusBarIcon = defaults.object(forKey: Keys.hideStatusBarIcon) != nil
         let hasAutoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) != nil
 
-        if !hasEnabled, !hasMargin, !hasBundleIDs, !hasHideSystemApps,
+        if !hasEnabled, !hasEdgeInsets, !hasLegacyEdgeMargin, !hasBundleIDs, !hasHideSystemApps,
            !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs,
            !hasPerAppInsets, !hasLegacyPerAppMargins, !hasHideStatusBarIcon,
            !hasAutoCheckUpdates {
@@ -485,7 +502,21 @@ final class AppTilingSettingsStore {
         }
 
         let isEnabled = hasEnabled ? defaults.bool(forKey: Keys.enabled) : AppTilingSettings.default.isEnabled
-        let edgeMargin = hasMargin ? defaults.double(forKey: Keys.edgeMargin) : AppTilingSettings.default.edgeMargin
+        // 全局四向间距：新键 edgeInsets（[String: Double] 的 top/bottom/left/right）；
+        // 缺失时从历史标量 edgeMargin 一次性迁移 → TileInsets(all:)。
+        var edgeInsets: TileInsets
+        if let dirs = defaults.dictionary(forKey: Keys.edgeInsets) as? [String: Double] {
+            edgeInsets = TileInsets(
+                top: CGFloat(dirs["top"] ?? 0),
+                bottom: CGFloat(dirs["bottom"] ?? 0),
+                left: CGFloat(dirs["left"] ?? 0),
+                right: CGFloat(dirs["right"] ?? 0)
+            )
+        } else if hasLegacyEdgeMargin {
+            edgeInsets = TileInsets(all: CGFloat(defaults.double(forKey: Keys.legacyEdgeMargin)))
+        } else {
+            edgeInsets = AppTilingSettings.default.edgeInsets
+        }
         let bundleIDsArray = defaults.array(forKey: Keys.bundleIDs) as? [String] ?? []
         let hideSystemApps = hasHideSystemApps ? defaults.bool(forKey: Keys.hideSystemApps) : AppTilingSettings.default.hideSystemAppsInPicker
         let centerEnabled = hasCenterEnabled ? defaults.bool(forKey: Keys.centerEnabled) : AppTilingSettings.default.centerEnabled
@@ -525,7 +556,7 @@ final class AppTilingSettingsStore {
 
         return AppTilingSettings(
             isEnabled: isEnabled,
-            edgeMargin: edgeMargin,
+            edgeInsets: edgeInsets,
             tiledBundleIDs: Set(bundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             hideSystemAppsInPicker: hideSystemApps,
             centerEnabled: centerEnabled,
@@ -539,7 +570,15 @@ final class AppTilingSettingsStore {
 
     private func saveToUserDefaults(_ normalized: AppTilingSettings) {
         defaults.set(normalized.isEnabled, forKey: Keys.enabled)
-        defaults.set(Double(normalized.edgeMargin), forKey: Keys.edgeMargin)
+        // 全局四向间距镜像双写：[String: Double]（top/bottom/left/right）。
+        // 不再双写旧键 tiling.edgeMargin（仅读取迁移用）——首次 save 后旧键即被新键取代。
+        let edgeDict: [String: Double] = [
+            "top": Double(normalized.edgeInsets.top),
+            "bottom": Double(normalized.edgeInsets.bottom),
+            "left": Double(normalized.edgeInsets.left),
+            "right": Double(normalized.edgeInsets.right)
+        ]
+        defaults.set(edgeDict, forKey: Keys.edgeInsets)
         defaults.set(Array(normalized.tiledBundleIDs).sorted(), forKey: Keys.bundleIDs)
         defaults.set(normalized.hideSystemAppsInPicker, forKey: Keys.hideSystemApps)
         defaults.set(normalized.centerEnabled, forKey: Keys.centerEnabled)

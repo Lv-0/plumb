@@ -32,7 +32,7 @@ func e2e_setAppInsets_persistsAcrossProcessAndEffectiveAfterRestart() async thro
     }
 
     var settings = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16,
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.slack", "com.tinyspell.terminal", "com.apple.safari"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -65,7 +65,7 @@ func e2e_useDefault_resetsToGlobalAndPersists() async throws {
     }
 
     var settings = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16,
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.slack"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -98,7 +98,7 @@ func e2e_defaultMarginChangePropagatesToAllDefaultApps() async throws {
     }
 
     var settings = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16,
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.slack", "com.apple.safari"],
         hideSystemAppsInPicker: true,
         centerEnabled: true,
@@ -108,9 +108,9 @@ func e2e_defaultMarginChangePropagatesToAllDefaultApps() async throws {
     settings.perAppInsets["com.slack"] = TileInsets(all: 30)   // slack 自定义
     store.save(settings)
 
-    // 顶部全局滑块从 16 → 24。
+    // 顶部全局四向从 16 → 24。
     var loaded = store.load()
-    loaded.edgeMargin = 24
+    loaded.edgeInsets = TileInsets(all: 24)
     store.save(loaded)
 
     // 同一 store 重载（save 双写保证文件+UserDefaults 一致，模拟真实重启）。
@@ -152,7 +152,7 @@ func e2e_effectiveInsetsFeedsTiledFrameGeometry() async throws {
 
     // app A 自定义边距 40（四向），app B 走默认 16（四向）。
     let settingsA = AppTilingSettings(
-        isEnabled: true, edgeMargin: 16,
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
         tiledBundleIDs: ["com.a", "com.b"],
         hideSystemAppsInPicker: true, centerEnabled: true,
         centeredBundleIDs: [], documentChooserBundleIDs: [],
@@ -237,4 +237,80 @@ func e2e_legacyPerAppMarginsUserDefaultsMigratedToInsets() async throws {
     // 历史标量 28 → 迁移为四向统一 28。
     #expect(loaded.perAppInsets["com.slack"] == TileInsets(all: 28))
     #expect(loaded.effectiveInsets(for: "com.slack") == TileInsets(all: 28))
+}
+
+// MARK: - 旧格式迁移（全局标量 edgeMargin → edgeInsets 四向）
+
+@Test
+func e2e_legacyGlobalEdgeMarginJsonMigratedToEdgeInsets() async throws {
+    // 旧版 settings.json 只含历史标量键 edgeMargin（无 edgeInsets）→ 解码应迁移为全局四向统一。
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    // 旧版 JSON 无 documentChooserBundleIDs 键 → 解码回退到默认 4 个 chooser，
+    // 使文件列表条目数 ≥ .default，避免 load() 一致性守卫误判（与本测试无关）。
+    let legacyJSON = """
+    {"isEnabled": true, "edgeMargin": 24, "tiledBundleIDs": ["com.slack", "com.other"],
+     "hideSystemAppsInPicker": true, "centerEnabled": true, "centeredBundleIDs": []}
+    """
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    try legacyJSON.write(to: fileURL, atomically: true, encoding: .utf8)
+
+    let loaded = store.load()
+    // 历史标量 24 → 迁移为全局 edgeInsets 四向 24；未单独设置的 app 回退到此值。
+    #expect(loaded.edgeInsets == TileInsets(all: 24))
+    #expect(loaded.effectiveInsets(for: "com.slack") == TileInsets(all: 24))
+}
+
+@Test
+func e2e_legacyGlobalEdgeMarginUserDefaultsMigratedToEdgeInsets() async throws {
+    // 旧版 UserDefaults 只含历史标量键 tiling.edgeMargin → 读取应迁移为 edgeInsets 四向统一。
+    let (defaults, tmpDir, _, store, suiteName) = makeIsolated()
+    defer {
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    // 直接往 UserDefaults 写旧标量键，不写文件（触发 load 走 UserDefaults 回退）。
+    defaults.set(24.0, forKey: "tiling.edgeMargin")
+    defaults.set(true, forKey: "tiling.enabled")
+
+    let loaded = store.load()
+    // 历史标量 24 → 迁移为全局 edgeInsets 四向 24。
+    #expect(loaded.edgeInsets == TileInsets(all: 24))
+    #expect(loaded.effectiveInsets(for: "com.anything") == TileInsets(all: 24))
+}
+
+@Test
+func e2e_globalEdgeInsetsRoundTripAsymmetric() async throws {
+    // 全局 edgeInsets 四向独立，落盘后读回应保留四向不对称值。
+    let (_, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    var settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(top: 8, bottom: 40, left: 16, right: 24),
+        tiledBundleIDs: ["com.slack"],
+        hideSystemAppsInPicker: true, centerEnabled: true,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: AppTilingSettings.defaultDocumentChooserBundleIDs
+    )
+    // 赋一个 per-app inset，避免 load() 一致性守卫（空 perAppInsets + 少量 tiled < .default 的 4 个 chooser）误判。
+    settings.perAppInsets["com.slack"] = TileInsets(all: 30)
+    store.save(settings)
+
+    // 模拟重启。
+    let freshDefaults = UserDefaults(suiteName: "Plumb.tests.fresh.\(UUID().uuidString)")!
+    let freshStore = AppTilingSettingsStore(defaults: freshDefaults, settingsFileURL: fileURL)
+    let loaded = freshStore.load()
+
+    #expect(loaded.edgeInsets == TileInsets(top: 8, bottom: 40, left: 16, right: 24))
+    // com.slack 有自定义 inset（30）；未自定义的 app（com.other）回退到全局不对称值。
+    #expect(loaded.effectiveInsets(for: "com.slack") == TileInsets(all: 30))
+    #expect(loaded.effectiveInsets(for: "com.other") == TileInsets(top: 8, bottom: 40, left: 16, right: 24))
 }
