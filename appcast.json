@@ -1,7 +1,7 @@
 {
-  "version": "2.0.29",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.29/Plumb-2.0.29.zip",
-  "sha256": "a54a4826cd111a2aa8327e3fea35b72d92560a783c2fa62e2f55091d8aa63c22",
+  "version": "2.0.30",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.30/Plumb-2.0.30.zip",
+  "sha256": "7cf40a2fc1c552d99b743099c03bce623636d46fa58a8818ec885cbc47c8372f",
   "notes": {
     "en": "Improved: Option (⌥) manual layout is now sticky per window. Hold Option while dragging or resizing a window and it stays exactly where you put it — even after you switch apps or change screens, Plumb no longer re-centers or re-tiles that window. Drag it again WITHOUT Option and it snaps right back to its layout position. A new 'Manual Layout' line in the About tab documents the shortcut. 176 tests pass.",
     "zh": "改进：Option (⌥) 手动排版现在按窗口粘性生效。按住 Option 拖动或调整窗口大小后，该窗口就停在原处——即使切换软件或屏幕，Plumb 也不再对它自动居中或平铺。不按 Option 再拖动一次，窗口立即吸附回排版位。关于页新增「手动排版」说明行。176 项测试通过。",
