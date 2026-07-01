@@ -66,6 +66,9 @@ enum L10n {
         case searchApps
         case bulkSelectAll
         case bulkDeselectAll
+        // 居中段
+        case enableAutoCentering
+        case enableAutoCenteringHint
         // 平铺段
         case enableAutoTiling
         case enableAutoTilingHint
@@ -168,6 +171,8 @@ enum L10n {
             .searchApps: "Search Apps",
             .bulkSelectAll: "Select All",
             .bulkDeselectAll: "Deselect All",
+            .enableAutoCentering: "Enable Auto-Centering",
+            .enableAutoCenteringHint: "When enabled, windows are auto-centered. Turn off to disable all auto-centering.",
             .enableAutoTiling: "Enable Auto-Tiling",
             .enableAutoTilingHint: "When enabled, checked apps below are auto-tiled onto the screen.",
             .margin: "Margin",
@@ -253,6 +258,8 @@ enum L10n {
             .searchApps: "Buscar apps",
             .bulkSelectAll: "Seleccionar todo",
             .bulkDeselectAll: "Deseleccionar todo",
+            .enableAutoCentering: "Activar centrado automático",
+            .enableAutoCenteringHint: "Cuando está activado, las ventanas se centran automáticamente. Desactívalo para deshabilitar todo el centrado automático.",
             .enableAutoTiling: "Activar mosaico automático",
             .enableAutoTilingHint: "Cuando está activado, las apps marcadas abajo se colocan en mosaico en la pantalla automáticamente.",
             .margin: "Margen",
@@ -338,6 +345,8 @@ enum L10n {
             .searchApps: "Rechercher des apps",
             .bulkSelectAll: "Tout sélectionner",
             .bulkDeselectAll: "Tout désélectionner",
+            .enableAutoCentering: "Activer le centrage automatique",
+            .enableAutoCenteringHint: "Lorsque c'est activé, les fenêtres sont centrées automatiquement. Désactivez pour désactiver tout le centrage automatique.",
             .enableAutoTiling: "Activer la mosaïque automatique",
             .enableAutoTilingHint: "Lorsque c'est activé, les apps cochées ci-dessous sont placées en mosaïque à l'écran automatiquement.",
             .margin: "Marge",
@@ -423,6 +432,8 @@ enum L10n {
             .searchApps: "搜索应用",
             .bulkSelectAll: "全部打开",
             .bulkDeselectAll: "全部关闭",
+            .enableAutoCentering: "启用自动居中",
+            .enableAutoCenteringHint: "开启后窗口自动居中；关闭则停用所有自动居中。",
             .enableAutoTiling: "启用自动平铺",
             .enableAutoTilingHint: "开启后，勾选下方应用时会自动平铺到屏幕。",
             .margin: "边距",
@@ -508,6 +519,8 @@ enum L10n {
             .searchApps: "アプリを検索",
             .bulkSelectAll: "すべて選択",
             .bulkDeselectAll: "すべて解除",
+            .enableAutoCentering: "自動中央寄せを有効化",
+            .enableAutoCenteringHint: "オンにするとウィンドウが自動的に中央寄せされます。オフにすると自動中央寄せをすべて無効化します。",
             .enableAutoTiling: "自動タイルを有効化",
             .enableAutoTilingHint: "オンにすると、下のチェックしたアプリが自動的に画面にタイル配置されます。",
             .margin: "余白",
@@ -596,6 +609,8 @@ enum L10n {
     static var searchApps: String { tr(.searchApps) }
     static var bulkSelectAll: String { tr(.bulkSelectAll) }
     static var bulkDeselectAll: String { tr(.bulkDeselectAll) }
+    static var enableAutoCentering: String { tr(.enableAutoCentering) }
+    static var enableAutoCenteringHint: String { tr(.enableAutoCenteringHint) }
     static var enableAutoTiling: String { tr(.enableAutoTiling) }
     static var enableAutoTilingHint: String { tr(.enableAutoTilingHint) }
     static var margin: String { tr(.margin) }

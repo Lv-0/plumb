@@ -214,27 +214,62 @@ enum AppListFilter {
     }
 }
 
-/// 居中段的滚动容器包装。
+/// 居中段：顶部总开关卡片（绑定 centerEnabled）+ 滚动应用列表。
 /// 关键修复：此前使用 `AppListSection(...).contentView`（计算属性间接访问），
 /// 这会破坏 SwiftUI 的视图标识，导致 @FocusState/@State 绑定失效 → 搜索框无法聚焦。
 /// 平铺段（TilingSection）直接使用 `AppListSection(...)`（走 body）则正常。
 /// 现统一为直接使用 body，与平铺段一致。
 struct CenteringSection: View {
     let footnote: String
+    @Binding var centerEnabled: Bool
     @Binding var selected: Set<String>
     let apps: [InstalledAppInfo]
 
     var body: some View {
-        ScrollView {
-            AppListSection(
-                footnote: footnote,
-                selected: $selected,
-                apps: apps,
-                showsBulkActions: true
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(spacing: 0) {
+            // 顶部固定卡片：居中总开关（与平铺段 headerCard 同范式，但无边距滑块）。
+            headerCard
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 4)
+
+            ScrollView {
+                AppListSection(
+                    footnote: footnote,
+                    selected: $selected,
+                    apps: apps,
+                    showsBulkActions: true
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollContentBackground(.hidden)
         }
-        .scrollContentBackground(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - 顶部固定卡片
+
+    /// 居中总开关，复刻 TilingSection.headerCard 的总开关行 + 圆角卡片容器（无边距滑块）。
+    private var headerCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.enableAutoCentering)
+                    .foregroundStyle(.primary)
+                Text(L10n.enableAutoCenteringHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 12)
+            PillToggle(isOn: $centerEnabled)
+                .animation(.spring(duration: 0.32, bounce: 0.25), value: centerEnabled)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            // 与平铺段同：极淡填充做卡片分区，保留窗口单一折射（不叠 .glassEffect）。
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
     }
 }
 

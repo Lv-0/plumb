@@ -173,6 +173,7 @@ struct SettingsView: View {
         case .centering:
             CenteringSection(
                 footnote: L10n.centeringFootnote,
+                centerEnabled: $settings.centerEnabled,
                 selected: $settings.centeredBundleIDs,
                 apps: apps
             )
