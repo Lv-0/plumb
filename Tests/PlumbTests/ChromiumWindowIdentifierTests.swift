@@ -40,6 +40,25 @@ func chromiumIdentifier_extensionPage_isSecondary() {
 }
 
 @Test
+func chromiumIdentifier_atlasSettingsWindow_isSecondary() {
+    // ChatGPT Atlas（com.openai.atlas）二级页面被自动平铺的回归测试。
+    // 现象：聚焦主窗口时同时打开的设置/弹窗二级窗口，经 tilePendingWindows 枚举
+    // 全部 AXWindow 后被一并平铺。修复在 tilePendingWindows 内对屏蔽 App 的二级窗口
+    // 滤除——而滤除的前提是 AXIdentifier 能正确判为 secondary。这里锁定该判据。
+    // 实测（2026-06）Atlas 设置窗口 AXIdentifier：
+    let id = #"{"secondary":{"type":"settings"},"type":"secondary"}"#
+    #expect(ChromiumWindowIdentifier.classify(axIdentifier: id) == .secondary)
+}
+
+@Test
+func chromiumIdentifier_atlasPopupSecondaryWindow_isSecondary() {
+    // ChatGPT Atlas 二级弹窗（非设置类）：同样必须判为 secondary，
+    // 这样 isSecondaryWindowOfApp 能在 tilePendingWindows 内滤除它。
+    let id = #"{"secondary":{"type":"popup"},"type":"secondary"}"#
+    #expect(ChromiumWindowIdentifier.classify(axIdentifier: id) == .secondary)
+}
+
+@Test
 func chromiumIdentifier_nonJsonIdentifier_returnsNil() {
     // 非 Chromium 的 AXIdentifier（或无 JSON 结构）：返回 nil，调用方回退到 kAXMainWindowAttribute。
     #expect(ChromiumWindowIdentifier.classify(axIdentifier: "some-window-id") == nil)

@@ -751,7 +751,8 @@ final class WindowEventObserver {
                 pid: pid,
                 appElement: appElement,
                 primaryWindow: windowElement,
-                insets: effectiveInsets
+                insets: effectiveInsets,
+                bundleIdentifier: bundleIdentifier
             ) {
                 // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
                 // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
@@ -1574,7 +1575,7 @@ final class WindowEventObserver {
 
     /// 判定候选窗口是否为该 App 的【非主】窗口（即二级窗口）。
     ///
-    /// 判据分两档（按可靠性顺序）：
+    /// 判据分三档（按可靠性顺序）：
     ///
     /// **1. Chromium 浏览器 → AXIdentifier 的 `type` 字段（实测最可靠）**
     ///   Chromium 窗口 AXIdentifier 是结构化 JSON（实测 2026-06）：主窗口
@@ -1583,7 +1584,14 @@ final class WindowEventObserver {
     ///   二级窗口聚焦时会追踪聚焦窗，把扩展设置页误报成主窗口。AXIdentifier 的 type 字段
     ///   是更稳定的硬特征。这里复用 ChromiumWindowIdentifier 解析 type 字段。
     ///
-    /// **2. 其它 App（Safari/Firefox/访达 等）→ `kAXMainWindowAttribute`（回退）**
+    /// **1.5. 访达（Finder）→ AXIdentifier（实测稳定）**
+    ///   与 Chromium / Journal 同坑：Finder 的二级窗口（显示简介/连接服务器/访达设置/复制进度等）
+    ///   在聚焦时 kAXMainWindowAttribute 全部误报为该二级窗口本身（isMain=true），档 2 失效。
+    ///   实测（2026-07）AXIdentifier 是稳定判据：普通文件夹窗口恒为 `"FinderWindow"`，
+    ///   各类二级窗口为其它值（`"Info"`/`"FinderSettings"`/`"_NS:182"` 等）。命中 Finder 时
+    ///   `id == "FinderWindow"` 视为主窗口（不跳过），否则视为二级窗口（跳过）。
+    ///
+    /// **2. 其它 App（Safari/Firefox 等）→ `kAXMainWindowAttribute`（回退）**
     ///   候选窗口 ≠ 主窗口即视为二级窗口。这是结构性硬特征，由系统维护。
     ///   实测（2026-06）：Chrome 打开扩展弹窗/设置页时弹出的独立小窗口（如 390x171）确实
     ///   ≠ kAXMainWindowAttribute（main!=cand），本判据能正确识别它为二级窗口并跳过。
@@ -1604,6 +1612,20 @@ final class WindowEventObserver {
                 return classification == .secondary
             }
             // 分类失败（无 AXIdentifier / 非 JSON / 无 type）：落到档 2 回退。
+        }
+
+        // 档 1.5：访达（Finder）用 AXIdentifier 判定。
+        // 与 Chromium / Journal 同坑：Finder 的二级窗口（显示简介/连接服务器/访达设置/复制进度等）
+        // 在聚焦时 kAXMainWindowAttribute 全部误报为该二级窗口本身（isMain=true），档 2 失效。
+        // 实测（2026-07）AXIdentifier 是稳定判据：普通文件夹窗口恒为 "FinderWindow"，
+        // 各类二级窗口为其它值（"Info"/"FinderSettings"/"_NS:182"/复制进度窗 等）。
+        // 故 Finder 命中时：id == "FinderWindow" → 主窗口（不跳过）；否则 → 二级窗口（跳过）。
+        // id 读不到（nil）时落到档 2，保持保守语义（避免误跳过真正的主窗口）。
+        if isFinderBundle(bundleIdentifier) {
+            if let id = window.axString("AXIdentifier" as CFString) {
+                return id != "FinderWindow"
+            }
+            // 无 AXIdentifier：落到档 2 回退。
         }
 
         // 档 2：kAXMainWindowAttribute 判定。
@@ -1700,8 +1722,17 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         primaryWindow: AXUIElement,
-        insets: TileInsets
+        insets: TileInsets,
+        bundleIdentifier: String?
     ) -> AXUIElement? {
+        // 浏览器/访达二级窗口屏蔽：本方法会枚举该 App 的所有 AXWindow 并逐个平铺，
+        // 若不同步屏蔽，则聚焦主窗口时同时打开的二级窗口（设置/扩展/弹窗）会被一并平铺——
+        // 这正是用户报告的「ChatGPT Atlas 二级页面被自动平铺」根因（handle() 主路径的候选
+        // 是主窗口，主路径守卫放行；但 tilePendingWindows 的内部循环对二级窗口无任何保护）。
+        // 与 handle()/handleResize() 守卫一致：命中屏蔽列表（浏览器/访达）且候选是该 App 的
+        // 非主窗口时跳过，保持其弹出尺寸/位置。主窗口不受影响。
+        let shielded = shieldedFromSecondaryWindowTiling(bundleIdentifier)
+
         var candidates: [AXUIElement] = []
 
         if isAutoCenterEligibleWindow(primaryWindow) {
@@ -1713,6 +1744,12 @@ final class WindowEventObserver {
                 continue
             }
             candidates.append(window)
+        }
+        // 滤除被屏蔽 App 的二级窗口：仅在命中屏蔽列表时判定，避免给文档类 App 等增加开销。
+        if shielded {
+            candidates = candidates.filter {
+                !isSecondaryWindowOfApp($0, appElement: appElement, bundleIdentifier: bundleIdentifier)
+            }
         }
         var firstTiledWindow: AXUIElement?
         for window in candidates {
