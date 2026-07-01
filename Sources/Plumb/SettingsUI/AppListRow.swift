@@ -8,9 +8,9 @@ import SwiftUI
 // AppListRow：图标 + 名称 + 药丸开关。点击图标/名称区或药丸均可切换；
 //   用 Button（非 onTapGesture）承载，两个独立命中区不互相吞点击。
 //
-// PillToggle：自绘轨道+滑块的胶囊形开关，避免系统 Toggle 在 macOS 上的复选框外观。
-//   开启填充强调色、滑块右滑；用 Button 承载点击，玻璃作背景层 allowsHitTesting(false)
-//   排除参与命中测试（修复"开关点击不灵"）。
+// PillToggle：自绘轨道 + 液态玻璃滑块的胶囊形开关，避免系统 Toggle 在 macOS 上的复选框外观。
+//   开启填充强调色、滑块右滑；滑块用 .glassEffect 做成折射透镜。用 Button 承载点击，
+//   玻璃作背景层 allowsHitTesting(false) 排除参与命中测试（修复"开关点击不灵"）。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 设置列表的单个应用行：图标 + 名称 + 药丸开关。
@@ -86,9 +86,10 @@ struct AppListRow: View {
     }
 }
 
-/// 药丸形（胶囊）滑动开关：自绘轨道 + 滑块，避免系统 Toggle 在 macOS 上的复选框外观。
+/// 药丸形（胶囊）滑动开关：自绘轨道 + 液态玻璃滑块，避免系统 Toggle 在 macOS 上的复选框外观。
 /// 开启时轨道填充强调色，滑块滑到右侧；关闭时轨道为中性玻璃色。
-/// 用 Button 承载点击，命中区域稳定，不被 glassEffect 吞掉。
+/// 滑块本身为液态玻璃透镜（.glassEffect），折射轨道颜色；轨道保持轻填充不做玻璃，
+/// 避免玻璃叠玻璃窗口变磨砂。用 Button 承载点击，命中区域稳定，不被 glassEffect 吞掉。
 ///
 /// `isDisabled`：置灰且不可点击（默认 false）。用于依赖未满足时的行（如未平铺的文档类 App）。
 struct PillToggle: View {
@@ -110,11 +111,14 @@ struct PillToggle: View {
             ZStack {
                 Capsule(style: .continuous)
                     .fill(isOn ? Color.accentColor : Color.primary.opacity(0.12))
-                // 滑块
+                // 滑块：液态玻璃透镜，折射轨道颜色。半透明白作底色让折射更柔和；
+                // .interactive() 提供按下的缩放/高光反馈（替代原投影）。玻璃材质自带高光，
+                // 故去掉 .shadow，叠加投影反而显脏。仅滑块做玻璃，轨道保持轻填充，
+                // 避免玻璃叠玻璃窗口变磨砂。
                 Circle()
-                    .fill(Color.white)
-                    .shadow(color: .black.opacity(0.18), radius: 1, y: 0.5)
+                    .fill(Color.white.opacity(0.55))
                     .frame(width: knobSize, height: knobSize)
+                    .glassEffect(.regular.interactive(), in: .circle)
                     .offset(x: knobOffset)
             }
             .frame(width: trackWidth, height: trackHeight)
