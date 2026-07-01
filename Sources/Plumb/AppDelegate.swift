@@ -19,7 +19,10 @@ import AppKit
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    // NSMenuDelegate：状态栏菜单打开前（menuNeedsChange）刷新两个总开关的勾选标记，
+    // 让用户从菜单栏即可看到当前开/关状态。menu.autoenablesItems=false 时 AppKit 不再调用
+    // validateMenuItem，故改用 menuNeedsChange 这条与开关无关的刷新路径。
     private let centeringService = WindowCenteringService()
     private let tilingSettingsStore = AppTilingSettingsStore()
     private let dmgMonitor = DmgMountMonitor()
@@ -181,20 +184,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: SettingsWindowNotifications.settingsChangedExternally, object: nil)
     }
 
-    /// 菜单打开前由 AppKit 自动调用（NSUserInterfaceValidations）。读取最新 store 状态设勾选标记，
-    /// 使菜单项 `.state` 与设置窗口改动天然同步（设置窗口→菜单方向无需额外通知）。
-    /// 返回 true 保证两项始终可点（menu.autoenablesItems 已设 false）。
-    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    /// 菜单打开前由 AppKit 调用（NSMenuDelegate）。读最新 store 状态为两个总开关设勾选标记（.on 显示 ✓），
+    /// 使菜单项状态与设置窗口改动天然同步（设置窗口→菜单方向无需额外通知）。
+    /// 用 menuNeedsChange 而非 validateMenuItem：menu.autoenablesItems=false 时后者不会被调用，
+    /// 两个总开关会因此无勾选标记；前者在菜单每次打开时必定触发，与该开关无关。
+    func menuNeedsUpdate(_ menu: NSMenu) {
         let s = tilingSettingsStore.load()
-        switch item.action {
-        case #selector(toggleAutoCentering):
-            item.state = s.centerEnabled ? .on : .off
-        case #selector(toggleAutoTiling):
-            item.state = s.isEnabled ? .on : .off
-        default:
-            break
+        for item in menu.items {
+            switch item.action {
+            case #selector(toggleAutoCentering):
+                item.state = s.centerEnabled ? .on : .off
+            case #selector(toggleAutoTiling):
+                item.state = s.isEnabled ? .on : .off
+            default:
+                break
+            }
         }
-        return true
     }
 
     @objc private func openSettings() {
@@ -295,6 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+
+        // 设为菜单委托：菜单每次打开前触发 menuNeedsChange，刷新两个总开关的勾选标记，
+        // 让用户从下拉即可看到当前开/关状态（autoenablesItems=false 下 validateMenuItem 不被调用）。
+        menu.delegate = self
     }
 
     /// 从状态栏移除水滴图标（「隐藏菜单栏图标」开启或切换时调用）。
