@@ -178,6 +178,23 @@ final class WindowCenteringService {
     /// 必然落后写入值，这是物理正常的；只有接近末段仍大幅落后才可能是真弹回。
     private static let smoothPhaseBBounceBackMinProgress: CGFloat = 0.6
 
+    // MARK: - Phase-B 收尾 settle-and-recheck 时序参数
+    //
+    // 动画末帧（finalizePhaseB）读回尺寸时，部分重型 app（如 Pages 新建文稿）的内部 layout
+    // 引擎跟不上 60Hz 写入——读回的是 layout 还没追平的旧尺寸（实测 Pages 60Hz 突发下回读恒为
+    // 1356，但单次写 + ~1s settle 能完美达到目标 1480）。若此时直接锚定+接受，会把滞后尺寸当
+    // 成最终值，窗口「放大了一部分」。
+    //
+    // settle-and-recheck：保持动画锁，多轮 × 较短间隔地重写 endSize 并重读，给 layout 追平时间。
+    // 既覆盖 Pages 的 ~1s layout 追平，又避免单次长延迟阻塞动画锁。
+
+    /// 每轮 settle 之间的延迟（毫秒）。300ms 足以让 Pages layout 追平一帧写入。
+    private static let settleDelayMs: Int = 300
+
+    /// settle 最大轮数。300ms × 3 ≈ 0.9s，覆盖 Pages layout 追平；仍未达成则视为 app 真硬限
+    /// （终端按字符网格），走 top-left 锚定接受实际尺寸（与无 settle 的兜底语义一致）。
+    private static let settleMaxRounds: Int = 3
+
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
 
@@ -696,6 +713,7 @@ final class WindowCenteringService {
                 context: context,
                 primaryTopY: primaryTopY,
                 pid: pid,
+                animKey: animKey,
                 via: "smooth-noop",
                 finishActive: finishActive,
                 completion: completion
@@ -736,6 +754,7 @@ final class WindowCenteringService {
                     context: context,
                     primaryTopY: primaryTopY,
                     pid: pid,
+                    animKey: animKey,
                     via: "smooth",
                     finishActive: finishActive,
                     completion: completion
@@ -841,6 +860,7 @@ final class WindowCenteringService {
                     context: context,
                     primaryTopY: primaryTopY,
                     pid: pid,
+                    animKey: animKey,
                     via: "robust",
                     finishActive: finishActive,
                     completion: completion
@@ -856,7 +876,13 @@ final class WindowCenteringService {
         timer.resume()
     }
 
-    /// Phase-B 收尾（丝滑与稳健共用）：强制 pos+size 落地、读回实际尺寸、必要时重新居中、清锁。
+    /// Phase-B 收尾（丝滑与稳健共用）：强制 pos+size 落地、读回实际尺寸、必要时 settle-and-recheck、清锁。
+    ///
+    /// 尺寸已达成（差 ≤4px）：走快速路径，立即锚定+清锁。
+    /// 尺寸未达成：两种可能——(a) app 真有硬上限（终端按字符网格 snap）；(b) 重型 app（Pages 新建文稿）
+    /// 的 layout 滞后于 60Hz 写入，读回的是未追平的旧尺寸。两者无法在收尾瞬间区分，故统一走
+    /// `scheduleSettleAndAnchor`：保持动画锁、多轮重写+重读，给 layout 追平时间。settle 后仍达不到
+    /// 才视为真硬限，走 top-left 锚定接受实际尺寸。
     private func finalizePhaseB(
         windowElement: AXUIElement,
         endSize: CGSize,
@@ -866,6 +892,7 @@ final class WindowCenteringService {
         context: WindowContext,
         primaryTopY: CGFloat,
         pid: pid_t?,
+        animKey: String?,
         via: String,
         finishActive: @escaping () -> Void,
         completion: (() -> Void)?
@@ -876,11 +903,134 @@ final class WindowCenteringService {
         if let pid {
             _ = tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
         }
-        // 终端类 app（如 electerm）按字符行网格 snap，高度可能无法精确到目标。
-        // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸**保持左上角锚定**——
-        // 以 targetFrame 的左/上边为锚点，按实际尺寸重算右/下边距（而非重新居中）。
-        // 重新居中会破坏平铺要求的左上角锚定和四向 insets（Pages 新建文稿漂移的根因）；
-        // 左上角锚定保证左/上边距严格等于目标 insets，右/下边距随实际尺寸放宽。
+        // 读回实际尺寸。若与目标差异较大，可能是 app layout 滞后（Pages 60Hz 写入下回读恒为旧值）。
+        let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
+            // 尺寸未达成：保持动画锁，settle-and-recheck。finishActive/completion 延后到 settle 内调用。
+            DiagnosticLog.debug("tile-animator: phase B size not reached via=\(via) actual=\(actualSize) target=\(endSize) — scheduling settle")
+            scheduleSettleAndAnchor(
+                windowElement: windowElement,
+                endSize: endSize,
+                targetAXOrigin: targetAXOrigin,
+                targetFrame: targetFrame,
+                context: context,
+                primaryTopY: primaryTopY,
+                pid: pid,
+                animKey: animKey,
+                via: via,
+                firstOutcome: sizeOutcome,
+                finishActive: finishActive,
+                completion: completion
+            )
+            return
+        }
+        // 尺寸已达成（或读不到）：走快速收尾，立即锚定+清锁。
+        emitFinalAnchor(
+            windowElement: windowElement,
+            endSize: endSize,
+            targetAXOrigin: targetAXOrigin,
+            targetFrame: targetFrame,
+            context: context,
+            primaryTopY: primaryTopY,
+            pid: pid,
+            via: via,
+            sizeOutcome: sizeOutcome,
+            finishActive: finishActive,
+            completion: completion
+        )
+    }
+
+    /// settle-and-recheck：动画收尾时尺寸未达成（重型 app layout 滞后），保持动画锁、多轮重写+重读。
+    ///
+    /// 复用 activeTileTimer 通道（`stop()`、前台守卫已覆盖其生命周期）。最多 `settleMaxRounds` 轮，
+    /// 每轮间隔 `settleDelayMs`：重写 pos+size → 读回 → 达成或到上限即终止。保持动画锁到 settle
+    /// 结束，顺带挡住 app layout-settling 期间到达的 move/resize 通知被误判为「用户拖动」而标记 manual。
+    private func scheduleSettleAndAnchor(
+        windowElement: AXUIElement,
+        endSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        animKey: String?,
+        via: String,
+        firstOutcome: ResizeOutcome,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        activeTileTimer = timer
+        var round = 0
+        timer.schedule(deadline: .now() + .milliseconds(Self.settleDelayMs), repeating: .milliseconds(Self.settleDelayMs))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            // 前台守卫（与 runPhaseBSmooth/Robust 一致）：切走即终止，用最后一轮读到的尺寸收尾。
+            if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                DiagnosticLog.debug("tile-animator: settle aborted (pid=\(pid) no longer frontmost)")
+                self.emitFinalAnchor(
+                    windowElement: windowElement,
+                    endSize: endSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: via,
+                    sizeOutcome: firstOutcome,
+                    finishActive: finishActive,
+                    completion: completion
+                )
+                return
+            }
+            round += 1
+            // 重写 pos+size（pos 也重写，防 layout 滚动期间 origin 漂）。
+            _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
+            let outcome = self.resizeWindowWithFallback(windowElement, newSize: endSize)
+            let now = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+            let reached = now.map { abs($0.width - endSize.width) <= 4 && abs($0.height - endSize.height) <= 4 } ?? false
+            DiagnosticLog.debug("tile-animator: settle round=\(round)/\(Self.settleMaxRounds) via=\(via) wrote=\(endSize) read=\(now.map { String(describing: $0) } ?? "nil") reached=\(reached)")
+            if reached || round >= Self.settleMaxRounds {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                self.emitFinalAnchor(
+                    windowElement: windowElement,
+                    endSize: endSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: reached ? "\(via)+settle" : "\(via)+settle-giveup",
+                    sizeOutcome: outcome,
+                    finishActive: finishActive,
+                    completion: completion
+                )
+            }
+            // 未达成且未到上限：下一轮（重复定时器自动触发）。
+        }
+        timer.resume()
+    }
+
+    /// 最终锚定 + 清锁收尾（快速路径与 settle 路径共用，保证两条路径的锚定语义完全一致）。
+    ///
+    /// 读回 actualSize：若与 endSize 差异大（app 拒绝缩放/settle 后仍未追平），按实际尺寸**保持
+    /// 左上角锚定**——以 targetFrame 的左/上边为锚点，按实际尺寸重算右/下边距（而非重新居中）。
+    private func emitFinalAnchor(
+        windowElement: AXUIElement,
+        endSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        via: String,
+        sizeOutcome: ResizeOutcome,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
         let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
             let anchoredBL = WindowGeometry.topLeftAnchoredOrigin(targetFrame: targetFrame, actualSize: actualSize)
