@@ -178,6 +178,12 @@ final class WindowCenteringService {
     /// 必然落后写入值，这是物理正常的；只有接近末段仍大幅落后才可能是真弹回。
     private static let smoothPhaseBBounceBackMinProgress: CGFloat = 0.6
 
+    /// 大跨度放大直接走稳健 Phase-B。Pages/Numbers 新文稿与极小 Safari 的共同点是从较小
+    /// 起始尺寸放到接近平铺目标，60Hz 连续写 size 容易让目标 app 的 layout/AX 读回滞后；
+    /// 这种场景牺牲一点动画丝滑度，优先使用历史验证过的分步 settle 路径。
+    nonisolated private static let robustPhaseBAreaRatioThreshold: CGFloat = 0.70
+    nonisolated private static let robustPhaseBAxisDeltaThreshold: CGFloat = 320
+
     // MARK: - Phase-B 收尾 settle-and-recheck 时序参数
     //
     // 动画末帧（finalizePhaseB）读回尺寸时，部分重型 app（如 Pages 新建文稿）的内部 layout
@@ -191,9 +197,10 @@ final class WindowCenteringService {
     /// 每轮 settle 之间的延迟（毫秒）。300ms 足以让 Pages layout 追平一帧写入。
     private static let settleDelayMs: Int = 300
 
-    /// settle 最大轮数。300ms × 3 ≈ 0.9s，覆盖 Pages layout 追平；仍未达成则视为 app 真硬限
+    /// settle 最大轮数。300ms × 5 ≈ 1.5s，覆盖 Pages/Numbers/Safari 从小窗放大时的 layout 追平；
+    /// 仍未达成则视为 app 真硬限
     /// （终端按字符网格），走 top-left 锚定接受实际尺寸（与无 settle 的兜底语义一致）。
-    private static let settleMaxRounds: Int = 3
+    private static let settleMaxRounds: Int = 5
 
     /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
     private var activeAnimationKey: String?
@@ -223,6 +230,19 @@ final class WindowCenteringService {
         if hadActive {
             DiagnosticLog.debug("abortActiveAnimations: stopped all in-flight animations")
         }
+    }
+
+    nonisolated static func shouldUseRobustPhaseB(startSize: CGSize, endSize: CGSize) -> Bool {
+        guard endSize.width > 0, endSize.height > 0 else { return false }
+
+        let startArea = max(0, startSize.width) * max(0, startSize.height)
+        let endArea = endSize.width * endSize.height
+        if endArea > 0, startArea / endArea < robustPhaseBAreaRatioThreshold {
+            return true
+        }
+
+        return abs(endSize.width - startSize.width) >= robustPhaseBAxisDeltaThreshold ||
+            abs(endSize.height - startSize.height) >= robustPhaseBAxisDeltaThreshold
     }
 
     func centerFrontmostWindow(selectionPolicy: WindowSelectionPolicy = .focusedOrAnyNonFullscreen) throws {
@@ -365,9 +385,10 @@ final class WindowCenteringService {
 
         let animKey = animationKey(for: windowElement, pid: pid, kind: "center")
         // 重叠保护：若该窗口已有进行中的居中动画，则跳过，避免多个定时器并发写 AXPosition。
+        // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。调用方（如平铺完成回调里的
+        // markCentered + processedPIDs.insert）会把假完成当作真完成，提前锁死在错误几何上。
         if activeAnimationKey == animKey {
-            DiagnosticLog.debug("center-animator: already animating, skip")
-            completion?()
+            DiagnosticLog.debug("center-animator: already animating, skip (no completion)")
             return
         }
         activeAnimationKey = animKey
@@ -554,8 +575,11 @@ final class WindowCenteringService {
         let animKey = animationKey(for: windowElement, pid: pid, kind: "tile")
         if activeAnimationKey == animKey {
             // 已有该窗口的平铺动画在进行中：直接返回，避免重叠。
-            DiagnosticLog.debug("tile-animator: already animating pid=\(pid.map(String.init) ?? "?"), skip")
-            completion?()
+            // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。旧实现调用 completion
+            // 会触发调用方的 markCentered + processedPIDs.insert + startTileStabilizationRetries，
+            // 把「跳过的这次」当作真完成锁死，并启动新的稳定重试 → 假完成 + 真重试叠加，
+            // 是「反复平铺 / 死循环」的根因之一。调用方对跳过一律 no-op。
+            DiagnosticLog.debug("tile-animator: already animating pid=\(pid.map(String.init) ?? "?"), skip (no completion)")
             return
         }
         activeAnimationKey = animKey
@@ -634,6 +658,27 @@ final class WindowCenteringService {
 
             // Phase A 已把窗口锚到平铺左上角原点（以当前尺寸）；此处不再单次写入 origin（旧实现的
             // 那次写入恰是「窗口停在中心开始放大」bug 的根因——被 Phase A 收尾期的 relayout 拖垮）。
+            // 大跨度放大直接走稳健大步模式，避免 Pages/Numbers/Safari 这类窗口在 60Hz 连续写 size
+            // 时 layout 追不上，最后被接受为偏小尺寸。
+            if Self.shouldUseRobustPhaseB(startSize: windowSize, endSize: endSize) {
+                DiagnosticLog.debug("tile-animator: robust Phase-B selected for large resize start=\(windowSize) target=\(endSize) pid=\(pid.map(String.init) ?? "?")")
+                runPhaseBRobust(
+                    windowElement: windowElement,
+                    startSize: windowSize,
+                    endSize: endSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    visibleFrame: visibleFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    animKey: animKey,
+                    finishActive: finishActive,
+                    completion: completion
+                )
+                return
+            }
+
             // 进入丝滑放大（默认）。若检测到弹回，会自动降级到稳健大步模式。
             runPhaseBSmooth(
                 windowElement: windowElement,
@@ -1016,8 +1061,8 @@ final class WindowCenteringService {
 
     /// 最终锚定 + 清锁收尾（快速路径与 settle 路径共用，保证两条路径的锚定语义完全一致）。
     ///
-    /// 读回 actualSize：若与 endSize 差异大（app 拒绝缩放/settle 后仍未追平），按实际尺寸**保持
-    /// 左上角锚定**——以 targetFrame 的左/上边为锚点，按实际尺寸重算右/下边距（而非重新居中）。
+    /// 读回 actualSize：若与 endSize 差异大（app 拒绝缩放/settle 后仍未追平），按实际尺寸做
+    /// 受限锚定：实际高度偏小时保顶部，实际高度偏大时保底部，避免外接屏底部间距被吞掉。
     private func emitFinalAnchor(
         windowElement: AXUIElement,
         endSize: CGSize,
@@ -1039,27 +1084,218 @@ final class WindowCenteringService {
         // （实测 Numbers x: 16→25），即便尺寸已达成。Terminal 等不漂的 app 此处为 false（no-op）。
         let posOff = actualPos.map { abs($0.x - targetAXOrigin.x) > 2 || abs($0.y - targetAXOrigin.y) > 2 } ?? false
         if sizeOff || posOff {
-            // 尺寸漂了：用实际尺寸做左上角锚定（保持左/上边距 = 目标 insets），与 v2.0.42+ 一致。
+            if sizeOff,
+               let actualSize,
+               actualSize.height > endSize.height + 4,
+               let fallbackTargets = bottomPreservingShrinkTargets(
+                   actualSize: actualSize,
+                   endSize: endSize,
+                   targetFrame: targetFrame,
+                   context: context,
+                   primaryTopY: primaryTopY
+               ),
+               !fallbackTargets.isEmpty
+            {
+                runBottomPreservingShrinkFallback(
+                    windowElement: windowElement,
+                    fallbackTargets: fallbackTargets,
+                    attemptIndex: 0,
+                    originalActualSize: actualSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: via,
+                    sizeOutcome: sizeOutcome,
+                    finishActive: finishActive,
+                    completion: completion
+                )
+                return
+            }
+            // 尺寸漂了：用实际尺寸做受限锚定。实际高度过大时优先保 bottom inset，避免外接屏
+            // Numbers 把窗口高度撑到 visibleFrame 后贴住屏幕底边。
             // 尺寸对但位置漂了（iWork resize 漂 origin）：尺寸用 endSize（=目标），origin 锚回 targetFrame.origin。
-            let anchorSize = (sizeOff ? actualSize : endSize) ?? endSize
-            let anchoredBL = sizeOff
-                ? WindowGeometry.topLeftAnchoredOrigin(targetFrame: targetFrame, actualSize: anchorSize)
-                : targetFrame.origin   // 尺寸已对 → 用目标 origin（经 toAXOrigin 换算回 targetAXOrigin）
-            let anchoredAX = toAXOrigin(
-                bottomLeftOrigin: anchoredBL,
-                windowSize: anchorSize,
-                screenFrame: context.screen.frame,
-                space: context.space,
+            let alreadySatisfiesTarget = currentGlobalFrame(
+                windowElement,
+                context: context,
                 primaryTopY: primaryTopY
-            )
-            _ = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
-            DiagnosticLog.debug("tile-animator: anchored drift (sizeOff=\(sizeOff) posOff=\(posOff)) actualPos=\(actualPos.map { String(describing: $0) } ?? "nil") actualSize=\(actualSize.map { String(describing: $0) } ?? "nil") → \(anchoredAX) targetAX=\(targetAXOrigin)")
+            ).map { frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+            if !alreadySatisfiesTarget {
+                let anchorSize = (sizeOff ? actualSize : endSize) ?? endSize
+                let anchoredBL = sizeOff
+                    ? WindowGeometry.constrainedTileFallbackOrigin(targetFrame: targetFrame, actualSize: anchorSize)
+                    : targetFrame.origin   // 尺寸已对 → 用目标 origin（经 toAXOrigin 换算回 targetAXOrigin）
+                let anchoredAX = toAXOrigin(
+                    bottomLeftOrigin: anchoredBL,
+                    windowSize: anchorSize,
+                    screenFrame: context.screen.frame,
+                    space: context.space,
+                    primaryTopY: primaryTopY
+                )
+                _ = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
+                DiagnosticLog.debug("tile-animator: anchored drift (sizeOff=\(sizeOff) posOff=\(posOff)) actualPos=\(actualPos.map { String(describing: $0) } ?? "nil") actualSize=\(actualSize.map { String(describing: $0) } ?? "nil") → \(anchoredAX) targetAX=\(targetAXOrigin)")
+            }
         }
         let postSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
         DiagnosticLog.debug("tile-animator: phase B done (via=\(via)) pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
         finishActive()
         completion?()
+    }
+
+    private func bottomPreservingShrinkTargets(
+        actualSize: CGSize,
+        endSize: CGSize,
+        targetFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat
+    ) -> [(size: CGSize, axOrigin: CGPoint)]? {
+        let visibleFrame = effectiveVisibleFrame(for: context.screen)
+        let bottomInset = max(0, targetFrame.minY - visibleFrame.minY)
+        guard bottomInset > 0 else { return nil }
+
+        guard actualSize.height >= visibleFrame.height - 2 else { return nil }
+
+        // 阶梯首个目标必须是真实目标高度 `endSize.height`，而不是 `endSize.height - bottomInset`
+        //（根因 B：旧实现首个就减去 bottomInset，即便成功也把顶距做成 top+bottom 之和）。
+        // 全程保底锚定在 `targetFrame.minY`（保住用户设置的 bottom inset），让 app 拒绝缩放时
+        // 多出的高度向顶部外扩——这正是 `expectedFallbackFrame` 愿意留下的妥协形态。
+        let firstHeight = max(1, endSize.height.rounded())
+        let minHeight = max(1, (endSize.height - 48).rounded())
+        guard firstHeight >= minHeight else { return nil }
+
+        var targets: [(size: CGSize, axOrigin: CGPoint)] = []
+        var seenHeights: Set<Int> = []
+        var height = firstHeight
+        while height >= minHeight {
+            let roundedHeight = Int(height.rounded())
+            if !seenHeights.contains(roundedHeight) {
+                seenHeights.insert(roundedHeight)
+                let fallbackSize = CGSize(width: endSize.width, height: CGFloat(roundedHeight))
+                // 保底锚定：y = targetFrame.minY → bottom inset 永远等于设置值。
+                let fallbackOrigin = CGPoint(x: targetFrame.minX, y: targetFrame.minY)
+                let fallbackAXOrigin = toAXOrigin(
+                    bottomLeftOrigin: fallbackOrigin,
+                    windowSize: fallbackSize,
+                    screenFrame: context.screen.frame,
+                    space: context.space,
+                    primaryTopY: primaryTopY
+                )
+                targets.append((fallbackSize, fallbackAXOrigin))
+            }
+            height -= 8
+        }
+        return targets
+    }
+
+    private func runBottomPreservingShrinkFallback(
+        windowElement: AXUIElement,
+        fallbackTargets: [(size: CGSize, axOrigin: CGPoint)],
+        attemptIndex: Int,
+        originalActualSize: CGSize,
+        targetAXOrigin: CGPoint,
+        targetFrame: CGRect,
+        context: WindowContext,
+        primaryTopY: CGFloat,
+        pid: pid_t?,
+        via: String,
+        sizeOutcome: ResizeOutcome,
+        finishActive: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        guard fallbackTargets.indices.contains(attemptIndex) else {
+            finishActive()
+            completion?()
+            return
+        }
+        let fallback = fallbackTargets[attemptIndex]
+        DiagnosticLog.debug("tile-animator: bottom-preserving shrink attempt \(attemptIndex + 1)/\(fallbackTargets.count) actualSize=\(originalActualSize) fallbackSize=\(fallback.size)")
+
+        // 先缩尺寸再锚位置。外接屏上 Numbers 若先收到 fallback position，会按当前
+        // 1050 高度夹到屏幕底边，随后再 resize 也保不住 bottom inset。
+        _ = resizeWindowWithFallback(windowElement, newSize: fallback.size)
+        _ = setPointAttribute(kAXPositionAttribute as CFString, value: fallback.axOrigin, on: windowElement)
+
+        // 阶段 4：续体走 `activeTileTimer` 受追踪通道（而非裸 asyncAfter）+ 前台守卫。
+        // 这样切 app 时 abortActiveAnimations() 能真正停掉它，堵住「切 app 后对后台窗口写坐标」回归。
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        activeTileTimer = timer
+        timer.schedule(deadline: .now() + .milliseconds(220))
+        timer.setEventHandler { [weak self] in
+            guard let self else {
+                finishActive()
+                completion?()
+                return
+            }
+            if self.activeTileTimer === timer { self.activeTileTimer = nil }
+
+            // 前台守卫：切走即停止 shrink（不再写后台窗口），用当前 frame 收尾。
+            if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                DiagnosticLog.debug("tile-animator: bottom-preserving shrink aborted (pid=\(pid) no longer frontmost)")
+                finishActive()
+                completion?()
+                return
+            }
+
+            _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: fallback.axOrigin, on: windowElement)
+            let postPos = self.pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
+            let postSize = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+            let postFrame = postPos.flatMap { pos in
+                postSize.map { size in
+                    self.rawToGlobalRect(
+                        space: context.space,
+                        screenFrame: context.screen.frame,
+                        rawPosition: pos,
+                        windowSize: size,
+                        primaryTopY: primaryTopY
+                    )
+                }
+            }
+            let reached = postFrame.map { self.frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+            DiagnosticLog.debug("tile-animator: bottom-preserving shrink check \(attemptIndex + 1)/\(fallbackTargets.count) fallbackSize=\(fallback.size) postFrame=\(postFrame.map { String(describing: $0) } ?? "nil") reached=\(reached)")
+
+            if reached || attemptIndex == fallbackTargets.count - 1 {
+                DiagnosticLog.debug("tile-animator: phase B done (via=\(via)+bottom-shrink) pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil")")
+                finishActive()
+                completion?()
+            } else {
+                self.runBottomPreservingShrinkFallback(
+                    windowElement: windowElement,
+                    fallbackTargets: fallbackTargets,
+                    attemptIndex: attemptIndex + 1,
+                    originalActualSize: originalActualSize,
+                    targetAXOrigin: targetAXOrigin,
+                    targetFrame: targetFrame,
+                    context: context,
+                    primaryTopY: primaryTopY,
+                    pid: pid,
+                    via: via,
+                    sizeOutcome: sizeOutcome,
+                    finishActive: finishActive,
+                    completion: completion
+                )
+            }
+        }
+        timer.resume()
+    }
+
+    private func currentGlobalFrame(
+        _ windowElement: AXUIElement,
+        context: WindowContext,
+        primaryTopY: CGFloat
+    ) -> CGRect? {
+        guard
+            let rawPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
+            let rawSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        else { return nil }
+        return rawToGlobalRect(
+            space: context.space,
+            screenFrame: context.screen.frame,
+            rawPosition: rawPosition,
+            windowSize: rawSize,
+            primaryTopY: primaryTopY
+        )
     }
 
     // MARK: - 共享解算 / 动画辅助
@@ -1106,8 +1342,8 @@ final class WindowCenteringService {
     /// （不只 size）——这是与 `tiledTargetFrame` 配套的「在位校验」：`tiledTargetFrame`
     /// 只返回目标 frame，调用方需自行比较；本方法封装「解算目标 + 读窗口 + 四维比较」整段。
     ///
-    /// ⚠️ 完成判定采用「**origin 严格 / size 宽松**」（`WindowGeometry.frameMatchesTiledTarget`，
-    /// origin 3px / size 16px），不是四维统一容差：
+    /// ⚠️ 完成判定优先采用「**origin 严格 / size 宽松**」（`WindowGeometry.frameMatchesTiledTarget`，
+    /// origin 3px / size 16px），并允许窗口只向顶部/右侧少量超出但完整覆盖目标区域：
     ///   - origin 严格挡住 iWork（Numbers/Pages）在 smooth Phase B resize 后的 origin 漂移
     ///     （实测 x: 16→25，漂移 9px）。旧的四维统一 16px 容差会把这种「尺寸到位但 origin 漂移」
     ///     的窗口误判为已完成平铺 → markCentered + processedPIDs 锁在漂移位置上 → 首次平铺
@@ -1117,6 +1353,8 @@ final class WindowCenteringService {
     ///   - 漂移窗口被 origin 严格判定挡下后，调用方的稳定重试（`startTileStabilizationRetries`）
     ///     会继续触发 `tileWindowElementAnimated`，经 `emitFinalAnchor` 的 posOff 分支把 origin
     ///     锚回 `targetFrame.origin`，最终 origin 在 3px 内、size 仍在宽松容差内 → 判定成功。
+    ///   - Numbers 可能把高度强制读回 visibleFrame 高度（比目标高约 20px）。收尾锚定会保底部，
+    ///     让多出的高度向顶部外扩；这种已经覆盖目标区域、没有向内露白，应锁定而不是循环重试。
     ///
     /// `tolerance` 参数保留以维持公共接口稳定，但内部统一走严格判定（忽略传入值）。
     /// 与 `tileReachedTarget` 共用坐标空间探测（同走 CG 优先 + AX 回退），但**判定容差不同**：
@@ -1151,7 +1389,10 @@ final class WindowCenteringService {
             let visibleFrame = effectiveVisibleFrame(for: screenPick.screen)
             let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
             // origin 严格 / size 宽松（详见方法注释）：挡住 iWork origin 漂移，兼容 size snap。
-            return WindowGeometry.frameMatchesTiledTarget(cocoaRect, target: targetFrame)
+            if frameSatisfiesFinalTiledTarget(cocoaRect, target: targetFrame) {
+                return true
+            }
+            DiagnosticLog.debug("isWindowAtTiledTarget: CG mismatch, falling back to AX pid=\(pid) cgRect=\(cgRect) target=\(targetFrame)")
         }
 
         // AX 回退路径：探测坐标空间 → 取 context.currentGlobalRect → 比 frame。
@@ -1163,7 +1404,7 @@ final class WindowCenteringService {
         ) else { return false }
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
-        return WindowGeometry.frameMatchesTiledTarget(context.currentGlobalRect, target: targetFrame)
+        return frameSatisfiesFinalTiledTarget(context.currentGlobalRect, target: targetFrame)
     }
 
 
@@ -1806,10 +2047,12 @@ final class WindowCenteringService {
         {
             let cocoaRect = cocoaRectFromCGWindowBounds(cgRect, screen: screenPick.screen, primaryTopY: primaryTopY)
             let tol = tolerance ?? 12
-            return abs(cocoaRect.minX - targetFrame.minX) <= tol &&
-                abs(cocoaRect.minY - targetFrame.minY) <= tol &&
-                abs(cocoaRect.width - targetFrame.width) <= tol &&
-                abs(cocoaRect.height - targetFrame.height) <= tol
+            if frameMatchesTarget(cocoaRect, target: targetFrame, tol: tol) ||
+                WindowGeometry.frameCoversTiledTarget(cocoaRect, target: targetFrame)
+            {
+                return true
+            }
+            DiagnosticLog.debug("tileReachedTarget: CG mismatch, falling back to AX pid=\(pid) cgRect=\(cgRect) target=\(targetFrame)")
         }
 
         guard
@@ -1828,10 +2071,12 @@ final class WindowCenteringService {
         )
 
         let tol = tolerance ?? 10
-        return abs(currentFrame.minX - targetFrame.minX) <= tol &&
-            abs(currentFrame.minY - targetFrame.minY) <= tol &&
-            abs(currentFrame.width - targetFrame.width) <= tol &&
-            abs(currentFrame.height - targetFrame.height) <= tol
+        return frameMatchesTarget(currentFrame, target: targetFrame, tol: tol) ||
+            WindowGeometry.frameCoversTiledTarget(currentFrame, target: targetFrame)
+    }
+
+    private func frameSatisfiesFinalTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
+        WindowGeometry.frameSatisfiesFinalTiledTarget(frame, target: target)
     }
 
     /// 比较一个已解算的窗口 frame 是否在容差内完整匹配平铺目标（minX/minY/width/height 四维）。

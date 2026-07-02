@@ -79,8 +79,45 @@ final class WindowEventObserver {
     /// **不**经过 move/resize 旁路，故不会被误标记。Plumb 自身的居中/平铺动画产生的 moved/resized
     /// 由 service.isAnyAnimationInProgress 守卫排除，不会被误标记。
     private var manualWindowKeys: Set<String> = []
+    /// Plumb 自己刚完成布局后的短暂宽限窗口。部分 app 会在 `activeAnimationKey` 清掉后才投递
+    /// 由我们刚写入 AXPosition/AXSize 触发的迟到 move/resize 通知；这些通知不能被当作用户手动操作。
+    private var selfLayoutGraceUntil: [String: Date] = [:]
+    /// 每窗口平铺会话预算。key 复用 `key(pid:window:)`（`pid:windowNumber`）。
+    ///
+    /// 每次真正启动 `tileWindowElementAnimated`（含 stabilization 重触发）计数 +1；达到上限后
+    /// 接受当前 frame（markCentered + processedPIDs.insert），保证任何几何结局下用户最多看到
+    /// `maxTileSessionAttempts` 次动画。这是「反复平铺 / 死循环」的最终兜底：即使 app 持续拒绝
+    /// 目标尺寸、即使完成谓词因边界容差反复拒绝，预算耗尽也会强制锁定，不再无限重试。
+    ///
+    /// 清理时机与 `manualWindowKeys` 完全一致（重激活 attach、appDidTerminate、Space 切换、stop），
+    /// 均按 `pid:` 前缀过滤，预算绝不跨 app 生命周期泄漏。
+    private var tileSessionAttempts: [String: Int] = [:]
+    /// 每窗口平铺会话预算上限。3 次 = 首铺 + 最多 2 次稳定重试，覆盖大多数 app 的 layout 追平。
+    private static let maxTileSessionAttempts: Int = 3
     private var initialCenterTimer: DispatchSourceTimer?
     private var tileStabilizeTimer: DispatchSourceTimer?
+    /// 阶段 3.3：自布局宽限。默认 1.0s 太短——Numbers 等文档 app 会在 `activeAnimationKey` 清掉
+    /// 之后仍迟到地自 resize（加载完成后一次性自设 frame），把窗口误标「手动」冻住。
+    /// 改为：平铺会话进行中（动画/稳定重试期间）+ 会话结束后再延伸 `postSessionGraceInterval`
+    ///（1.8s）内的 move/resize 都不标 manual。会话锁定/预算耗尽时调用
+    /// `extendSelfLayoutGraceAfterSession` 写入延伸截止时间。
+    private static let selfLayoutGraceInterval: TimeInterval = 1.0
+    private static let postSessionGraceInterval: TimeInterval = 1.8
+    /// 阶段 3.1：document-chooser 稳定门进行中的 PID 集合。用于抑制 `startInitialCenteringRetries`
+    /// 在采样等待期间重复进入 `applyLayout`（否则每次重试都会启动一个新的采样循环）。
+    /// 清理时机同 `processedPIDs`（attach 重激活、appDidTerminate、Space 切换、stop）。
+    private var documentStableGatePIDs: Set<pid_t> = []
+    /// 阶段 3.1 稳定门 + 阶段 3.2 完成后单次校正共用的可取消定时器（受 `abortActiveAnimations`
+    /// 之外的前台守卫保护，按 PID 在生命周期点清空）。
+    private var documentStableTimer: DispatchSourceTimer?
+    private static let documentStableSampleIntervalMs: Int = 400
+    private static let documentStableMaxSamples: Int = 6     // 400ms × 6 ≈ 2.4s
+    private static let documentStableTolerancePx: CGFloat = 2
+    /// 阶段 3.2：完成后单次校正定时器。完成回调发现读回尺寸膨胀（app 迟到的自 resize）时，
+    /// 延迟 ~500ms 按「先 size 后 position」重写一次精确目标，再走判定与预算锁定，替代加载中
+    /// 的多轮拉锯。一次性、可取消、带前台守卫；每个窗口至多一次（受 `tileSessionAttempts` 预算保护）。
+    private var postCompletionCorrectionTimer: DispatchSourceTimer?
+    private static let postCompletionCorrectionDelayMs: Int = 500
 
     init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore, dmgMonitor: DmgMountMonitor? = nil) {
         self.service = service
@@ -146,6 +183,13 @@ final class WindowEventObserver {
         centeredWindowKeySet.removeAll()
         processedPIDs.removeAll()
         manualWindowKeys.removeAll()
+        selfLayoutGraceUntil.removeAll()
+        tileSessionAttempts.removeAll()
+        documentStableGatePIDs.removeAll()
+        documentStableTimer?.cancel()
+        documentStableTimer = nil
+        postCompletionCorrectionTimer?.cancel()
+        postCompletionCorrectionTimer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -203,7 +247,10 @@ final class WindowEventObserver {
             DiagnosticLog.debug("spaceDidChange: cleared \(manualCleared) manual-layout window(s) for pid=\(pid)")
             manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
         }
+        selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(prefix) }
+        tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(prefix) }
         processedPIDs.remove(pid)
+        endDocumentStableGate(pid: pid)
 
         let appElement = AXUIElementCreateApplication(pid)
         startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
@@ -307,7 +354,10 @@ final class WindowEventObserver {
         centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
         centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
         manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
+        selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(prefix) }
+        tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(prefix) }
         processedPIDs.remove(pid)
+        endDocumentStableGate(pid: pid)
     }
 
     private func attachToFrontmostApp() {
@@ -340,6 +390,14 @@ final class WindowEventObserver {
         initialCenterTimer = nil
         reattachTimer?.cancel()
         reattachTimer = nil
+        // 同步取消上一个 app 的 document-stable-gate 采样定时器（阶段 3.1），避免切走后 zombie
+        // 定时器在后台继续对非前台 app 的窗口采样/平铺。
+        documentStableTimer?.cancel()
+        documentStableTimer = nil
+        documentStableGatePIDs.removeAll()
+        // 同步取消阶段 3.2 的完成后校正定时器（同属 per-app 生命周期）。
+        postCompletionCorrectionTimer?.cancel()
+        postCompletionCorrectionTimer = nil
         observerRegistrationFailed = false
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -366,6 +424,7 @@ final class WindowEventObserver {
         //（旧实现刻意保留 manual 标记；该需求已变更。）
         // Bug #3: 同步清除 per-PID 标记，让 app 重新激活后能重新居中其主窗口。
         processedPIDs.remove(pid)
+        endDocumentStableGate(pid: pid)
         // 同步清除该 PID 的「手动排版」标记：用户手动移动/缩放过的窗口在新需求下应只在
         // 下一次切 App / 切 Space 时被重新按规则排版——故切回该 App 时把它的 manualWindowKeys
         // 一并清掉，使重新激活后的 handle() / startInitialCenteringRetries 能正常处理这些窗口。
@@ -374,6 +433,8 @@ final class WindowEventObserver {
             DiagnosticLog.debug("attach: cleared \(manualRemoved) manual-layout window(s) for reactivated pid=\(pid)")
             manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(reactivatedPrefix) }
         }
+        selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(reactivatedPrefix) }
+        tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(reactivatedPrefix) }
         var newObserver: AXObserver?
         let result = AXObserverCreate(pid, { _, element, notification, refcon in
             guard let refcon else { return }
@@ -557,17 +618,27 @@ final class WindowEventObserver {
             return handleMove(element: element, forcedPID: forcedPID)
         }
 
-        // Bug #3: 本激活周期内此 PID 的主窗口已完成居中/平铺 → 跳过任何后续窗口事件
-        //（二级窗口、对话框、标签页弹层等），满足"软件本体居中就行，二级页面不要居中"。
-        if processedPIDs.contains(pid) {
-            DiagnosticLog.debug("handle[\(notification)]: PID \(pid) already processed this cycle, skip (suppress secondary window)")
-            return false
-        }
-
         let appElement = AXUIElementCreateApplication(pid)
         guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: element) else {
             DiagnosticLog.debug("handle[\(notification)]: no centerable candidate window")
             return false
+        }
+        let bundleIdentifier = frontmostApp.bundleIdentifier
+
+        // Bug #3: 本激活周期内此 PID 的主窗口已完成居中/平铺 → 默认跳过后续窗口事件
+        //（二级窗口、对话框、标签页弹层等）。例外：Pages/Numbers/Office 这类文档 App
+        // 同一 PID 可连续创建多个真实文档窗口，新窗口应各自平铺；二级窗口仍由下方 shield 拦截。
+        if processedPIDs.contains(pid) {
+            if shouldProcessAdditionalDocumentWindow(
+                windowElement,
+                pid: pid,
+                bundleIdentifier: bundleIdentifier
+            ) {
+                DiagnosticLog.debug("handle[\(notification)]: PID \(pid) already processed, but new document window should tile")
+            } else {
+                DiagnosticLog.debug("handle[\(notification)]: PID \(pid) already processed this cycle, skip (suppress secondary window)")
+                return false
+            }
         }
 
         // 手动窗口守卫：已标记「手动」的窗口在聚焦/创建事件时一律跳过（不居中、不平铺），
@@ -588,7 +659,7 @@ final class WindowEventObserver {
         // 设置窗口是 {"type":"secondary","secondary":{"type":"settings"}}——用子串匹配稳定区分
         //（标题随网页变化不可靠，subrole/modal 两者相同无法区分）。
         // 纯早退：不 markCentered、不锁 processedPIDs，不污染共享缓存语义。
-        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier),
+        if isChatGPTAtlasBundle(bundleIdentifier),
            isAtlasSettingsWindow(windowElement)
         {
             DiagnosticLog.debug("handle[\(notification)]: ChatGPT Atlas settings window — skip (jitter fix) pid=\(pid)")
@@ -598,7 +669,7 @@ final class WindowEventObserver {
         // 手记（Journal）设置窗口特例：设置窗口与主窗口 subrole/AXIdentifier/kAXMainWindow 三项硬特征
         // 完全相同（详见 isJournalSettingsWindow 注释），常规判据全部失效，只能靠 AXTitle 区分。
         // 必须在主路径此处拦截，否则会被居中/平铺。纯早退：不 markCentered、不锁 processedPIDs。
-        if isJournalBundle(frontmostApp.bundleIdentifier),
+        if isJournalBundle(bundleIdentifier),
            isJournalSettingsWindow(windowElement)
         {
             DiagnosticLog.debug("handle[\(notification)]: Journal settings window — skip (no center, no tile) pid=\(pid)")
@@ -618,7 +689,7 @@ final class WindowEventObserver {
         // 把扩展设置页误报成主窗口（用户报告的「扩展程序设置界面被居中」根因），靠它判定会漏；
         // 访达用 AXIdentifier 字面值（"FinderWindow" 为主窗口）；其它 App 用 kAXMainWindowAttribute
         // 回退（候选 ≠ 主窗口即视为二级窗口）。
-        if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
+        if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleIdentifier)
         {
             DiagnosticLog.debug("handle[\(notification)]: secondary window — skip (no tile, no center) pid=\(pid)")
             return false
@@ -629,7 +700,7 @@ final class WindowEventObserver {
             windowElement: windowElement,
             pid: pid,
             appElement: appElement,
-            bundleIdentifier: frontmostApp.bundleIdentifier
+            bundleIdentifier: bundleIdentifier
         )
     }
 
@@ -658,6 +729,15 @@ final class WindowEventObserver {
             // 拉扯、最终回弹到小尺寸（这是"指定 App 不会自动平铺放大"的根因）。
             if hasCentered(windowElement: windowElement, pid: pid) {
                 DiagnosticLog.debug("handle[\(notification)]: already tiled pid=\(pid)")
+                return false
+            }
+
+            // 单飞：当前已有任何动画在进行中（平铺或居中）→ 直接返回，不启动新动画。
+            // 目的：消灭 .document / .undetermined 分类摆动导致的 center/tile 并发对抗——
+            // 一个动画还没完成时若再次进入本分支，旧实现会并发发起第二个动画，两个写入流
+            // 互相覆盖是「窗口被来回拉扯」的另一根因。return false 让重试/事件循环稍后再来。
+            if service.isAnyAnimationInProgress {
+                DiagnosticLog.debug("handle[\(notification)]: animation in progress — defer tiling pid=\(pid)")
                 return false
             }
 
@@ -693,6 +773,11 @@ final class WindowEventObserver {
             //
             // 设计决策：选择器居中不受 shouldCenter 白名单约束——只要该 App 在平铺白名单 +
             // 选择器感知列表内，选择器/未定型窗口一律居中（符合"选择器不平铺但整理到屏幕中央"的预期）。
+            // 阶段 3.1：document-chooser app 的 .document 窗口（新建未保存文档）在加载完成前会
+            // 反复自设 frame（Numbers 实测：内容加载完一次性把高度撑到 visibleFrame）。若在它仍在
+            // 抖动时启动平铺，会陷入「铺→app 自设 frame 破坏→重铺」的对抗。改为先采样等待 frame
+            // 连续两次一致（±2px）再启动平铺，最多等 ~2.4s 后无条件开始。
+            var documentStableGateActive = false
             if tilingSettings.isDocumentChooserApp(bundleIdentifier: bundleIdentifier),
                !windowHasDocument(windowElement)
             {
@@ -720,7 +805,9 @@ final class WindowEventObserver {
                     }
                 case .document:
                     // 无 kAXDocument 但子树含文档内容（新建未保存文档）→ 落到下方正常平铺。
-                    DiagnosticLog.debug("handle[\(notification)]: document window (no kAXDocument but has content) — fall through to tile pid=\(pid)")
+                    // 标记需要稳定门：等加载完成、frame 停止抖动后再平铺（阶段 3.1）。
+                    documentStableGateActive = true
+                    DiagnosticLog.debug("handle[\(notification)]: document window (no kAXDocument but has content) — fall through to tile (via stable gate) pid=\(pid)")
                 }
             }
             // DMG 安装窗口感知：访达打开 .dmg 后弹出的「挂载内容窗口」（拖拽安装界面）。
@@ -742,38 +829,32 @@ final class WindowEventObserver {
                     return false
                 }
             }
-            if let tiledWindow = tilePendingWindows(
+            // 阶段 3.1：document-chooser .document 窗口先等 frame 稳定再平铺（避免与 app 自设 frame 对抗）。
+            // 稳定门异步驱动采样 + 平铺；此处 return false 让 startInitialCenteringRetries 不停，
+            // 但稳定门进行中（documentStableGatePIDs 含 pid）会在下方守卫处短路，不会重复进入。
+            if documentStableGateActive {
+                if documentStableGatePIDs.contains(pid) {
+                    DiagnosticLog.debug("handle[\(notification)]: document stable gate already sampling pid=\(pid) — skip re-entry")
+                    return false
+                }
+                startDocumentStableGate(
+                    pid: pid,
+                    appElement: appElement,
+                    primaryWindow: windowElement,
+                    insets: effectiveInsets,
+                    bundleIdentifier: bundleIdentifier
+                )
+                return false
+            }
+            let tiled = performTileAndLock(
+                notification: notification,
                 pid: pid,
                 appElement: appElement,
                 primaryWindow: windowElement,
                 insets: effectiveInsets,
                 bundleIdentifier: bundleIdentifier
-            ) {
-                // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
-                // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
-                // 典型场景：SiYuan 等 Electron 应用首次启动先弹加载小窗，若在此小窗上锁了 PID，
-                // 随后到达的真正主窗口会被 Bug #3 守卫永久跳过（"第一次打开不平铺"的根因）。
-                // 与上方 document-chooser / DMG 分支的「不锁」不变量同构。
-                if didWindowActuallyTile(tiledWindow, pid: pid, insets: effectiveInsets) {
-                    markCentered(windowElement: tiledWindow, pid: pid)
-                    processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
-                    startTileStabilizationRetries(
-                        pid: pid,
-                        appElement: appElement,
-                        windowElement: tiledWindow,
-                        insets: effectiveInsets
-                    )
-                    DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
-                    return true
-                } else {
-                    // 动画异步返回，此时窗口尚未放大到目标尺寸——保持 PID 解锁，由 retry 循环在动画完成后确认。                    // 启动期小窗等：不锁、不标记，让重试继续接力处理后续到达的真正主窗口。
-                    DiagnosticLog.debug("handle[\(notification)]: tile did not actually enlarge window — keep PID unlocked for retry pid=\(pid)")
-                    return false
-                }
-            }
-            // For tiled apps, do not fall back to centering.
-            DiagnosticLog.debug("handle[\(notification)]: tiling enabled but no window tiled")
-            return false
+            )
+            return tiled
         }
 
         // 居中 allow-list：未开启或不在列表内（且列表非空）则跳过自动居中。
@@ -1010,6 +1091,190 @@ final class WindowEventObserver {
         timer.resume()
     }
 
+    /// 阶段 3.2：完成后单次校正。延迟 `postCompletionCorrectionDelayMs`（500ms）后重触发一次
+    /// `tileWindowElementAnimated`（其内部 emitFinalAnchor 会按「先 size 后 position」写精确目标 /
+    /// 妥协形态），随后走完成判定与预算锁定。延迟给文档 app 迟到的自 resize 留出 settle 时间，
+    /// 替代加载中的多轮拉锯。一次性、可取消、带前台守卫；预算耗尽则不再校正（直接锁定）。
+    private func startPostCompletionCorrection(
+        pid: pid_t,
+        appElement: AXUIElement,
+        windowElement: AXUIElement,
+        insets: TileInsets
+    ) {
+        postCompletionCorrectionTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(Self.postCompletionCorrectionDelayMs))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.postCompletionCorrectionTimer = nil
+
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                DiagnosticLog.debug("post-completion-correction: pid=\(pid) no longer frontmost, cancel")
+                return
+            }
+
+            // 已达标：直接锁定。
+            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
+                self.markCentered(windowElement: windowElement, pid: pid)
+                self.processedPIDs.insert(pid)
+                self.initialCenterTimer?.cancel()
+                self.initialCenterTimer = nil
+                self.extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+                DiagnosticLog.debug("post-completion-correction: reached target after delay, lock pid=\(pid)")
+                return
+            }
+
+            // 预算耗尽：接受当前 frame 锁定。
+            if self.isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
+                self.forceLockOnBudgetExhaustion(windowElement: windowElement, pid: pid, insets: insets, reason: "post-completion-correction budget exhausted")
+                return
+            }
+
+            // 仍有预算：重触发一次精确目标平铺（消耗预算），其完成回调再次走判定/预算/校正循环。
+            self.recordTileAttempt(windowElement: windowElement, pid: pid)
+            _ = try? self.service.tileWindowElementAnimated(
+                windowElement, pid: pid, appElement: appElement, insets: insets
+            ) { [weak self] in
+                guard let self else { return }
+                self.recordSelfLayoutGrace(windowElement: windowElement, pid: pid, reason: "post-completion-correction completion")
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                if self.didWindowActuallyTile(windowElement, pid: pid, insets: insets) {
+                    self.markCentered(windowElement: windowElement, pid: pid)
+                    self.processedPIDs.insert(pid)
+                    self.initialCenterTimer?.cancel()
+                    self.initialCenterTimer = nil
+                    self.startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: windowElement, insets: insets)
+                    self.extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+                    DiagnosticLog.debug("post-completion-correction: reached target, lock pid=\(pid)")
+                } else {
+                    // 校正后仍未达标：交给稳定重试接力（其内部也有预算兜底）。
+                    self.startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: windowElement, insets: insets)
+                    DiagnosticLog.debug("post-completion-correction: still not at target, defer to stabilization pid=\(pid)")
+                }
+            }
+        }
+        postCompletionCorrectionTimer = timer
+        timer.resume()
+    }
+
+    /// 阶段 3.1：document-chooser .document 窗口的「等稳再铺」采样门。
+    ///
+    /// 每 `documentStableSampleIntervalMs`（400ms）采样一次窗口 frame，连续两次一致（±2px）才
+    /// 启动平铺；最多采样 `documentStableMaxSamples`（6 ≈ 2.4s）次后无条件开始。定时器可取消、
+    /// 带前台守卫，与「attach 后 0.45s 再首铺」的设计哲学一致，直接实现「一次就平铺完成」。
+    /// 采样期间通过 `documentStableGatePIDs` 抑制 `startInitialCenteringRetries` 的重复进入。
+    private func startDocumentStableGate(
+        pid: pid_t,
+        appElement: AXUIElement,
+        primaryWindow: AXUIElement,
+        insets: TileInsets,
+        bundleIdentifier: String?
+    ) {
+        documentStableGatePIDs.insert(pid)
+        documentStableTimer?.cancel()
+        var lastFrame: CGRect?
+        var samples = 0
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(Self.documentStableSampleIntervalMs),
+                       repeating: .milliseconds(Self.documentStableSampleIntervalMs))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            samples += 1
+
+            // 前台守卫：切走 app 即停采样、清门标记。
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                self.endDocumentStableGate(pid: pid)
+                DiagnosticLog.debug("document-stable-gate: pid=\(pid) no longer frontmost, cancel")
+                return
+            }
+
+            let current = self.readGlobalFrame(of: primaryWindow, pid: pid)
+            let stable: Bool
+            if let current, let lastFrame {
+                stable = abs(current.minX - lastFrame.minX) <= Self.documentStableTolerancePx &&
+                    abs(current.minY - lastFrame.minY) <= Self.documentStableTolerancePx &&
+                    abs(current.width - lastFrame.width) <= Self.documentStableTolerancePx &&
+                    abs(current.height - lastFrame.height) <= Self.documentStableTolerancePx
+            } else {
+                stable = false
+            }
+            DiagnosticLog.debug("document-stable-gate: sample \(samples)/\(Self.documentStableMaxSamples) pid=\(pid) frame=\(current.map { String(describing: $0) } ?? "nil") stable=\(stable)")
+
+            if stable || samples >= Self.documentStableMaxSamples {
+                self.endDocumentStableGate(pid: pid)
+                // 预算守卫：等稳期间若预算已被耗尽（理论上不会，但防御），直接接受当前 frame 锁定。
+                if self.isTileBudgetExhausted(windowElement: primaryWindow, pid: pid) {
+                    self.forceLockOnBudgetExhaustion(windowElement: primaryWindow, pid: pid, insets: insets, reason: "document-stable-gate budget exhausted")
+                    return
+                }
+                let _ = self.performTileAndLock(
+                    notification: "document-stable-gate",
+                    pid: pid,
+                    appElement: appElement,
+                    primaryWindow: primaryWindow,
+                    insets: insets,
+                    bundleIdentifier: bundleIdentifier
+                )
+            } else {
+                lastFrame = current
+            }
+        }
+        documentStableTimer = timer
+        timer.resume()
+    }
+
+    private func endDocumentStableGate(pid: pid_t) {
+        documentStableGatePIDs.remove(pid)
+        documentStableTimer?.cancel()
+        documentStableTimer = nil
+    }
+
+    /// 共用的「平铺 + 锁定」执行体：被 `applyLayout` 同步路径与 document-stable-gate 复用。
+    /// 返回 true 表示已平铺并锁定（终止重试），false 表示未铺成/动画异步返回（继续重试）。
+    @discardableResult
+    private func performTileAndLock(
+        notification: String,
+        pid: pid_t,
+        appElement: AXUIElement,
+        primaryWindow: AXUIElement,
+        insets: TileInsets,
+        bundleIdentifier: String?
+    ) -> Bool {
+        guard let tiledWindow = tilePendingWindows(
+            pid: pid,
+            appElement: appElement,
+            primaryWindow: primaryWindow,
+            insets: insets,
+            bundleIdentifier: bundleIdentifier
+        ) else {
+            DiagnosticLog.debug("handle[\(notification)]: tiling enabled but no window tiled")
+            return false
+        }
+        // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
+        // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
+        if didWindowActuallyTile(tiledWindow, pid: pid, insets: insets) {
+            markCentered(windowElement: tiledWindow, pid: pid)
+            processedPIDs.insert(pid)
+            startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: tiledWindow, insets: insets)
+            extendSelfLayoutGraceAfterSession(windowElement: tiledWindow, pid: pid)
+            DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
+            return true
+        }
+        DiagnosticLog.debug("handle[\(notification)]: tile did not actually enlarge window — keep PID unlocked for retry pid=\(pid)")
+        return false
+    }
+
+    /// 读取窗口的原始 AX frame（position + size）。仅供稳定门抖动检测用——连续两次采样取
+    /// 同一坐标空间，相对比较（±2px）有效，无需绝对坐标空间探测（绝对精度由平铺路径保证）。
+    private func readGlobalFrame(of windowElement: AXUIElement, pid: pid_t) -> CGRect? {
+        guard
+            let pos = windowElement.axPoint(kAXPositionAttribute as CFString),
+            let size = windowElement.axSize(kAXSizeAttribute as CFString)
+        else { return nil }
+        _ = pid
+        return CGRect(origin: pos, size: size)
+    }
+
     private func startTileStabilizationRetries(
         pid: pid_t,
         appElement: AXUIElement,
@@ -1041,11 +1306,27 @@ final class WindowEventObserver {
 
             // 仅当窗口明显未达到平铺目标（尺寸偏小）时才重新触发，已基本铺满则停止重试。
             if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
+                self.markCentered(windowElement: windowElement, pid: pid)
+                self.processedPIDs.insert(pid)
+                self.initialCenterTimer?.cancel()
+                self.initialCenterTimer = nil
+                DiagnosticLog.debug("tile stabilization: reached target and locked pid=\(pid)")
                 self.tileStabilizeTimer?.cancel()
                 self.tileStabilizeTimer = nil
                 return
             }
 
+            // 每窗口平铺会话预算兜底：达到上限后接受当前 frame 并锁定，停止无限重试。
+            // （Phase 1.3：稳定重试消耗同一预算。）
+            if !self.canStartTileAttempt(windowElement: windowElement, pid: pid) {
+                self.forceLockOnBudgetExhaustion(
+                    windowElement: windowElement, pid: pid, insets: insets,
+                    reason: "stabilization retries exhausted"
+                )
+                return
+            }
+
+            self.recordTileAttempt(windowElement: windowElement, pid: pid)
             _ = try? self.service.tileWindowElementAnimated(
                 windowElement,
                 pid: pid,
@@ -1101,6 +1382,10 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[resize]: animation in progress (self-tile) — ignore, no manual mark")
             return false
         }
+        if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
+            DiagnosticLog.debug("handle[resize]: self-layout grace — ignore, no manual mark pid=\(pid)")
+            return false
+        }
 
         // 标记该窗口为「手动」：用户缩放后保持其尺寸，直到下次切 App / 切 Space 才重新排版。
         if let manualKey = key(pid: pid, window: element) {
@@ -1151,6 +1436,10 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[move]: animation in progress (self-animated) — ignore, no manual mark")
             return false
         }
+        if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
+            DiagnosticLog.debug("handle[move]: self-layout grace — ignore, no manual mark pid=\(pid)")
+            return false
+        }
 
         // 标记该窗口为「手动」：用户拖动后保持其位置，直到下次切 App / 切 Space 才重新排版。
         if let moveKey = key(pid: pid, window: element) {
@@ -1164,12 +1453,14 @@ final class WindowEventObserver {
     ///
     /// 委托给 `service.isWindowAtTiledTarget`：它在 service 内部复用与平铺路径相同的
     /// 坐标空间探测（4 种空间 + CG 信号），并采用「**origin 严格 3px / size 宽松 16px**」
-    /// 判定（`WindowGeometry.frameMatchesTiledTarget`）。替换此前「四维统一 16px」宽松判定——
+    /// 判定（`WindowGeometry.frameMatchesTiledTarget`），另有“只向外少量超出但完整覆盖目标”的
+    /// 兜底。替换此前「四维统一 16px」宽松判定——
     /// 后者会把 iWork（Numbers/Pages）smooth Phase B resize 后 origin 漂移（实测 x: 16→25，
     /// 漂移 9px < 16px）的窗口误判为已完成平铺，导致首次平铺右侧边距偏差。origin 严格后：
     /// 漂移窗口不再被判为完成 → 本方法的稳定重试继续触发 `tileWindowElementAnimated` →
     /// `emitFinalAnchor` 把 origin 锚回 `targetFrame.origin` → 最终严格在位后停止重试。
-    /// size 宽松保留对 Terminal/electerm 字符网格 snap 尺寸（偏差 10-20px）的兼容。
+    /// size 宽松保留对 Terminal/electerm 字符网格 snap 尺寸（偏差 10-20px）的兼容；覆盖兜底
+    /// 避免 Numbers 读回比目标更高但已保住底部间距时反复重试。
     /// 读取失败时保守返回 false（继续重试）。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
         service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
@@ -1184,7 +1475,8 @@ final class WindowEventObserver {
     /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
     ///
     /// 判据委托给 `service.isWindowAtTiledTarget`（与 `isWindowNearTiledTarget` 同源、
-    /// 保持一致），采用「**origin 严格 3px / size 宽松 16px**」判定（详见该方法注释）。
+    /// 保持一致），采用「**origin 严格 3px / size 宽松 16px**」+ 覆盖目标兜底判定
+    /// （详见该方法注释）。
     /// 读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时
     /// 保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
     ///
@@ -1564,14 +1856,66 @@ final class WindowEventObserver {
         }
         var firstTiledWindow: AXUIElement?
         for window in candidates {
+            // 每窗口平铺会话预算：达到上限不再启动新动画，直接接受当前 frame 锁定。
+            // （Phase 1.3：首铺也消耗同一预算。）
+            if !canStartTileAttempt(windowElement: window, pid: pid) {
+                forceLockOnBudgetExhaustion(
+                    windowElement: window, pid: pid, insets: insets,
+                    reason: "first-tile budget already exhausted"
+                )
+                if firstTiledWindow == nil { firstTiledWindow = window }
+                continue
+            }
             do {
                 // 首次应用也走两阶段动画（先居中、再从中心扩大），保证丝滑。
+                recordTileAttempt(windowElement: window, pid: pid)
                 try service.tileWindowElementAnimated(
                     window,
                     pid: pid,
                     appElement: appElement,
                     insets: insets
-                )
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.recordSelfLayoutGrace(windowElement: window, pid: pid, reason: "tile completion")
+
+                    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                        DiagnosticLog.debug("tile completion: pid=\(pid) no longer frontmost, skip final lock")
+                        return
+                    }
+
+                    if self.didWindowActuallyTile(window, pid: pid, insets: insets) {
+                        self.markCentered(windowElement: window, pid: pid)
+                        self.processedPIDs.insert(pid)
+                        self.initialCenterTimer?.cancel()
+                        self.initialCenterTimer = nil
+                        self.startTileStabilizationRetries(
+                            pid: pid,
+                            appElement: appElement,
+                            windowElement: window,
+                            insets: insets
+                        )
+                        // 会话锁定：延伸自布局宽限，覆盖文档 app 迟到的自 resize（阶段 3.3）。
+                        self.extendSelfLayoutGraceAfterSession(windowElement: window, pid: pid)
+                        DiagnosticLog.debug("tile completion: tiled and locked pid=\(pid)")
+                    } else if self.isTileBudgetExhausted(windowElement: window, pid: pid) {
+                        // 预算耗尽且仍未达标：接受当前 frame 锁定，避免无限重铺。
+                        self.forceLockOnBudgetExhaustion(
+                            windowElement: window, pid: pid, insets: insets,
+                            reason: "tile completion but not reached, budget exhausted"
+                        )
+                    } else {
+                        // 阶段 3.2：完成后仍未达标——先延迟一次再校正，给文档 app 迟到的自 resize
+                        // 留出 settle 时间，避免在膨胀过程中立即重铺（多轮拉锯）。校正内会重触发
+                        // tileWindowElementAnimated（先 size 后 position 的精确目标），再走判定与预算。
+                        self.startPostCompletionCorrection(
+                            pid: pid,
+                            appElement: appElement,
+                            windowElement: window,
+                            insets: insets
+                        )
+                        DiagnosticLog.debug("tile completion: still not at target, schedule post-completion correction pid=\(pid)")
+                    }
+                }
                 if firstTiledWindow == nil {
                     firstTiledWindow = window
                 }
@@ -1593,9 +1937,109 @@ final class WindowEventObserver {
         return "\(pid):ax:\(CFHash(window))"
     }
 
+    private func pruneSelfLayoutGrace(now: Date = Date()) {
+        selfLayoutGraceUntil = selfLayoutGraceUntil.filter { $0.value > now }
+    }
+
+    private func recordSelfLayoutGrace(windowElement: AXUIElement, pid: pid_t, reason: String) {
+        recordSelfLayoutGrace(windowElement: windowElement, pid: pid, interval: Self.selfLayoutGraceInterval, reason: reason)
+    }
+
+    /// 阶段 3.3：平铺会话结束后延伸宽限，覆盖文档 app（Numbers）迟到的自 resize。
+    private func extendSelfLayoutGraceAfterSession(windowElement: AXUIElement, pid: pid_t) {
+        recordSelfLayoutGrace(windowElement: windowElement, pid: pid, interval: Self.postSessionGraceInterval, reason: "post-session grace")
+    }
+
+    private func recordSelfLayoutGrace(windowElement: AXUIElement, pid: pid_t, interval: TimeInterval, reason: String) {
+        pruneSelfLayoutGrace()
+        guard let k = key(pid: pid, window: windowElement) else { return }
+        selfLayoutGraceUntil[k] = Date().addingTimeInterval(interval)
+        DiagnosticLog.debug("self-layout grace: record key=\(k) pid=\(pid) interval=\(interval)s reason=\(reason)")
+    }
+
+    private func isWithinSelfLayoutGrace(windowElement: AXUIElement, pid: pid_t) -> Bool {
+        let now = Date()
+        pruneSelfLayoutGrace(now: now)
+        guard
+            let k = key(pid: pid, window: windowElement),
+            let until = selfLayoutGraceUntil[k]
+        else { return false }
+        if until > now {
+            DiagnosticLog.debug("self-layout grace: ignore late AX move/resize key=\(k) pid=\(pid)")
+            return true
+        }
+        selfLayoutGraceUntil.removeValue(forKey: k)
+        return false
+    }
+
     private func hasCentered(windowElement: AXUIElement, pid: pid_t) -> Bool {
         guard let k = key(pid: pid, window: windowElement) else { return false }
         return centeredWindowKeySet.contains(k)
+    }
+
+    private func shouldProcessAdditionalDocumentWindow(
+        _ windowElement: AXUIElement,
+        pid: pid_t,
+        bundleIdentifier: String?
+    ) -> Bool {
+        let settings = tilingSettingsStore.load()
+        guard
+            settings.shouldTile(bundleIdentifier: bundleIdentifier),
+            settings.isDocumentChooserApp(bundleIdentifier: bundleIdentifier),
+            !hasCentered(windowElement: windowElement, pid: pid)
+        else { return false }
+
+        // 护栏：当前有动画进行中、或该窗口预算已耗尽时，不再放行新的平铺会话——否则它会对
+        // 「达不到目标的窗口」永久放行 PID 锁，成为无限重铺入口。
+        if service.isAnyAnimationInProgress || isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
+            DiagnosticLog.debug("shouldProcessAdditionalDocumentWindow: animation in progress or budget exhausted pid=\(pid) — suppress re-tile entry")
+            return false
+        }
+
+        if windowHasDocument(windowElement) {
+            return true
+        }
+        return classifyDocumentAppWindow(windowElement) == .document
+    }
+
+    // MARK: - 每窗口平铺会话预算（见 tileSessionAttempts 注释）
+
+    /// 该窗口本会话是否还有剩余预算可启动一次新的 `tileWindowElementAnimated`。
+    private func canStartTileAttempt(windowElement: AXUIElement, pid: pid_t) -> Bool {
+        guard let k = key(pid: pid, window: windowElement) else { return true }
+        return (tileSessionAttempts[k] ?? 0) < Self.maxTileSessionAttempts
+    }
+
+    private func isTileBudgetExhausted(windowElement: AXUIElement, pid: pid_t) -> Bool {
+        !canStartTileAttempt(windowElement: windowElement, pid: pid)
+    }
+
+    /// 记录一次真实启动（+1）。返回该窗口本次启动后的累计次数。
+    @discardableResult
+    private func recordTileAttempt(windowElement: AXUIElement, pid: pid_t) -> Int {
+        guard let k = key(pid: pid, window: windowElement) else { return Self.maxTileSessionAttempts }
+        let next = (tileSessionAttempts[k] ?? 0) + 1
+        tileSessionAttempts[k] = next
+        return next
+    }
+
+    /// 预算耗尽兜底：接受当前 frame，markCentered + processedPIDs.insert + 停所有重试定时器。
+    /// 保证任何几何结局下用户最多看到 `maxTileSessionAttempts` 次动画。
+    private func forceLockOnBudgetExhaustion(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        insets: TileInsets,
+        reason: String
+    ) {
+        DiagnosticLog.debug("tile-budget: exhausted — accept current frame and lock pid=\(pid) reason=\(reason) insets=\(insets)")
+        markCentered(windowElement: windowElement, pid: pid)
+        processedPIDs.insert(pid)
+        initialCenterTimer?.cancel()
+        initialCenterTimer = nil
+        tileStabilizeTimer?.cancel()
+        tileStabilizeTimer = nil
+        // 会话结束：延伸自布局宽限，覆盖文档 app 迟到的自 resize（阶段 3.3）。
+        extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
     }
 
     private func markCentered(windowElement: AXUIElement, pid: pid_t) {

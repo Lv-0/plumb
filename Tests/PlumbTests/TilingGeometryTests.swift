@@ -144,6 +144,31 @@ func topLeftAnchoredOriginIdentityWhenSizesMatch() async throws {
     #expect(origin == target.origin)
 }
 
+@Test
+func constrainedTileFallbackOrigin_shorterWindowKeepsTopEdge() async throws {
+    // App 高度被 snap 小时，仍保顶部，底部间距变大。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let actual = CGSize(width: 960, height: 732)
+
+    let origin = WindowGeometry.constrainedTileFallbackOrigin(targetFrame: target, actualSize: actual)
+
+    #expect(origin.x == target.minX)
+    #expect(origin.y + actual.height == target.maxY)
+}
+
+@Test
+func constrainedTileFallbackOrigin_tallerWindowKeepsBottomEdge() async throws {
+    // Numbers 外接屏：实际高度可能比目标高，必须保底部间距，不能把多出的高度压到底部。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let actual = CGSize(width: 1888, height: 1050)
+
+    let origin = WindowGeometry.constrainedTileFallbackOrigin(targetFrame: target, actualSize: actual)
+
+    #expect(origin.x == target.minX)
+    #expect(origin.y == target.minY)
+    #expect(origin.y + actual.height == target.maxY + 20)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - frameMatchesTiledTarget（平铺完成严格判定：origin 严格 / size 宽松）
 //
@@ -202,4 +227,171 @@ func frameMatchesTiledTarget_originDriftBlocksEvenWithExactSize() async throws {
     let target = CGRect(x: 16, y: 40, width: 960, height: 752)
     let drifted = CGRect(x: 25, y: 40, width: 960, height: 752)
     #expect(WindowGeometry.frameMatchesTiledTarget(drifted, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_outwardOvershootBeyond3px_rejects() async throws {
+    // ⭐ 根因 D 回归保护：旧实现允许 top 24px 外扩，会把 Numbers 多出的 20px 高度向顶部
+    // 外扩后判定「完成」，吞掉用户设置的 top inset。收紧到 3px 后，20px 顶部外扩必须拒绝。
+    // 这种形态改为由 frameMatchesFallbackProduct（妥协形态相等）接受——锚定与判定同源。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let covering = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameCoversTiledTarget(covering, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_bottomOvershoot_rejects() async throws {
+    // 完整吞掉用户设置的 10px bottom inset，外接屏上肉眼明显，必须拒绝。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let bottomOvershoot = CGRect(x: 16, y: 0, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameCoversTiledTarget(bottomOvershoot, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_smallBottomOvershoot_rejects() async throws {
+    // 5px bottom 外扩超出收紧后的 3px 容差 → 拒绝（不再靠谓词接受）。
+    // 这种「系统顶部夹取造成的不可达误差」现由阶段 1 的会话预算兜底接受，而非判定谓词。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let nearlyBottomPreserved = CGRect(x: 16, y: 5, width: 1888, height: 1045)
+    #expect(WindowGeometry.frameCoversTiledTarget(nearlyBottomPreserved, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_leftOvershoot_rejects() async throws {
+    // 左侧外扩同样会吞掉用户设置的 left inset；当前 fallback 只允许向右/向顶部外扩。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let leftOvershoot = CGRect(x: 0, y: 10, width: 1904, height: 1030)
+    #expect(WindowGeometry.frameCoversTiledTarget(leftOvershoot, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_inwardGap_rejects() async throws {
+    // 右侧少铺 19px 仍是可见空白，不能因“接近目标”而锁定。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let undersized = CGRect(x: 16, y: 10, width: 1869, height: 1030)
+    #expect(WindowGeometry.frameCoversTiledTarget(undersized, target: target) == false)
+}
+
+@Test
+func frameCoversTiledTarget_largeOvershoot_rejects() async throws {
+    // 向外超出过多更像错误坐标空间或错窗，不应吞掉。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let wrong = CGRect(x: -200, y: -200, width: 2300, height: 1400)
+    #expect(WindowGeometry.frameCoversTiledTarget(wrong, target: target) == false)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - 妥协形态 / 统一完成判定（expectedFallbackFrame + frameMatchesFallbackProduct
+//        + frameSatisfiesFinalTiledTarget）
+//
+// 阶段 2：定义唯一的「妥协形态」纯函数 expectedFallbackFrame（即 constrainedTileFallbackOrigin
+// 推出的完整 CGRect）。完成判定改为「落到目标」或「等于妥协形态」或「3px 内完整覆盖」，
+// 三者经 frameSatisfiesFinalTiledTarget 短路。锚定（emitFinalAnchor）产出的任何形态判定必然接受
+// → 反复平铺循环从构造上消除；其余形态继续重试，由阶段 1 的会话预算兜底。
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Test
+func expectedFallbackFrame_tallerWindowKeepsBottomInset() async throws {
+    // Numbers 外接屏：实际高度 1050 > 目标 1030 → 妥协形态保底部（y=target.minY=10），多出的
+    // 20px 向顶部外扩。这正是 emitFinalAnchor 会锚定的 frame，判定必须接受。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let actual = CGSize(width: 1888, height: 1050)
+
+    let product = WindowGeometry.expectedFallbackFrame(targetFrame: target, actualSize: actual)
+
+    #expect(product.minX == target.minX)
+    #expect(product.minY == target.minY)                 // 保底部 inset
+    #expect(product.height == actual.height)             // 用实际高度
+    #expect(product.maxY == target.maxY + 20)            // 多出高度向顶外扩
+}
+
+@Test
+func expectedFallbackFrame_shorterWindowKeepsTopEdge() async throws {
+    // Terminal/electerm 字符网格 snap：实际高度 732 < 目标 752 → 妥协形态保顶部，底部放宽。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let actual = CGSize(width: 960, height: 732)
+
+    let product = WindowGeometry.expectedFallbackFrame(targetFrame: target, actualSize: actual)
+
+    #expect(product.minX == target.minX)
+    #expect(product.maxY == target.maxY)                 // 保顶部
+    #expect(product.minY + actual.height == target.maxY)
+}
+
+@Test
+func frameMatchesFallbackProduct_tallerAnchoredWindow_accepts() async throws {
+    // emitFinalAnchor 锚定后的 Numbers 窗口（高 1050、y=10）正好等于妥协形态 → 判定通过。
+    // 这条测试是「锚定与判定同源、循环消除」的直接编码。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameMatchesFallbackProduct(anchored, target: target) == true)
+}
+
+@Test
+func frameMatchesFallbackProduct_driftedFromFallback_rejects() async throws {
+    // 妥协形态是 y=10；若 origin 漂到 y=20（10px > 3px 容差）→ 不等于妥协形态，拒绝。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let drifted = CGRect(x: 16, y: 20, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameMatchesFallbackProduct(drifted, target: target) == false)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_exactTarget_accepts() async throws {
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(target, target: target) == true)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_fallbackProduct_accepts() async throws {
+    // 高窗口保底锚定 → 妥协形态 → 统一判定接受（不再循环）。
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(anchored, target: target) == true)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_originDrift_rejects() async throws {
+    // iWork origin 漂移 9px：既非目标、也非妥协形态、也非 3px 覆盖 → 拒绝（继续重试）。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let drifted = CGRect(x: 25, y: 40, width: 960, height: 752)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(drifted, target: target) == false)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_terminalSnap_accepts() async throws {
+    // Terminal origin 精确、width 偏 15px → 落到 frameMatchesTiledTarget（size 宽松）→ 接受。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let snapped = CGRect(x: 16, y: 40, width: 945, height: 752)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(snapped, target: target) == true)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Phase-B resize policy
+//
+// 大跨度放大（Pages/Numbers 新文稿、极小 Safari → 平铺目标）应直接走稳健分步路径，
+// 避免 60Hz smooth 写 size 让目标 app 的 layout/AX 读回追不上，最终停在偏小尺寸。
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Test
+func robustPhaseBPolicy_smallWindowToTileTarget_usesRobust() async throws {
+    let start = CGSize(width: 520, height: 360)
+    let target = CGSize(width: 1408, height: 843)
+
+    #expect(WindowCenteringService.shouldUseRobustPhaseB(startSize: start, endSize: target) == true)
+}
+
+@Test
+func robustPhaseBPolicy_largeSingleAxisDelta_usesRobust() async throws {
+    let start = CGSize(width: 900, height: 820)
+    let target = CGSize(width: 1408, height: 843)
+
+    #expect(WindowCenteringService.shouldUseRobustPhaseB(startSize: start, endSize: target) == true)
+}
+
+@Test
+func robustPhaseBPolicy_nearTarget_keepsSmooth() async throws {
+    let start = CGSize(width: 1220, height: 790)
+    let target = CGSize(width: 1408, height: 843)
+
+    #expect(WindowCenteringService.shouldUseRobustPhaseB(startSize: start, endSize: target) == false)
 }
