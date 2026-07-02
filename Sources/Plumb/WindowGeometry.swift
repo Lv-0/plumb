@@ -103,6 +103,45 @@ enum WindowGeometry {
         )
     }
 
+    /// 平铺尺寸受 app 限制时的最终锚定 fallback。
+    ///
+    /// 宽度仍保持左边距；高度分两类：
+    /// - 实际高度比目标矮：保顶部，底部间距放宽（Terminal/electerm 字符网格 snap）。
+    /// - 实际高度比目标高：保底部，顶部少量外扩（Numbers 外接屏会把高度读回 visibleFrame 高度）。
+    static func constrainedTileFallbackOrigin(targetFrame: CGRect, actualSize: CGSize) -> CGPoint {
+        let y = actualSize.height > targetFrame.height
+            ? targetFrame.minY
+            : targetFrame.maxY - actualSize.height
+        return CGPoint(x: targetFrame.minX, y: y.rounded())
+    }
+
+    /// 「妥协形态」：app 拒绝目标尺寸时，Plumb 愿意留下的最终 frame。
+    ///
+    /// 即 `constrainedTileFallbackOrigin` 推出的完整 CGRect（宽度保左距；高度矮→保顶、高→保底）。
+    /// 这是**唯一的**妥协形态纯函数：`emitFinalAnchor` 锚定时用它推出 origin，完成判定用它推出
+    /// 应被接受的完整 frame。由此「锚定愿意留下的任何形态，判定必然接受」——循环从构造上消除
+    ///（根因 D：Numbers 把高度读回 visibleFrame 后，旧 `frameCoversTiledTarget` 的 24px 外扩容差
+    /// 既会接受、也会拒绝同一形态，造成反复重铺）。
+    static func expectedFallbackFrame(targetFrame: CGRect, actualSize: CGSize) -> CGRect {
+        CGRect(origin: constrainedTileFallbackOrigin(targetFrame: targetFrame, actualSize: actualSize), size: actualSize)
+    }
+
+    /// 判断 frame 是否正好等于「妥协形态」（origin 由 `expectedFallbackFrame` 决定，size 用实际值）。
+    /// 四维统一容差（默认 3px）：origin 与 size 都必须紧贴妥协形态。这是「app 真硬限、已保底锚定」
+    /// 的唯一可接受宽松条件——既不像 `frameMatchesTiledTarget` 那样要求 size≈target（妥协形态 size ≠ target），
+    /// 也不像旧 `frameCoversTiledTarget` 那样允许 24px 外扩（会吞掉用户设置的 inset）。
+    static func frameMatchesFallbackProduct(
+        _ frame: CGRect,
+        target: CGRect,
+        tolerance: CGFloat = 3
+    ) -> Bool {
+        let product = expectedFallbackFrame(targetFrame: target, actualSize: frame.size)
+        return abs(frame.minX - product.minX) <= tolerance &&
+            abs(frame.minY - product.minY) <= tolerance &&
+            abs(frame.width - product.width) <= tolerance &&
+            abs(frame.height - product.height) <= tolerance
+    }
+
     /// 平铺完成严格判定：frame 四维是否「origin 严格、size 宽松」地匹配平铺目标。
     ///
     /// 用途：区分「真正落到平铺目标」与「尺寸到位但 origin 漂移」——后者会被宽松判定
@@ -124,6 +163,62 @@ enum WindowGeometry {
             abs(frame.minY - target.minY) <= originTolerance &&
             abs(frame.width - target.width) <= sizeTolerance &&
             abs(frame.height - target.height) <= sizeTolerance
+    }
+
+    /// 平铺完成兜底判定：窗口没有向内露出空白，并且只少量外扩。
+    ///
+    /// Numbers 可能拒绝目标高度、读回更高窗口。最终锚定会优先保底部间距，让多出的高度
+    /// 向顶部外扩；这种不是「未铺满」，继续重试只会循环。若 app 的最小高度仍略高于
+    /// 可用高度减 bottom inset，macOS 会把顶部夹到可见区顶端，底部最多会少几像素；
+    /// 这种不可达目标接受，小于等于容差。完整吞掉 bottom inset 的贴底状态仍拒绝。
+    ///
+    /// ⚠️ 外扩容差收紧到 3px（与内露白同阈）。旧实现 top 24px / bottom 6px 的外扩容差
+    /// 大于典型 insets，是「锁死在肉眼可见错误间距」的合法化通道——用户设置的 inset 常常
+    /// 只有 10-16px，24px 外扩会直接吞掉它。3px 是「坐标空间探测噪声 / 系统顶部夹取」的
+    /// 合理上界，超过 3px 的外扩必须走 `frameMatchesFallbackProduct`（妥协形态相等）而非本方法。
+    static func frameCoversTiledTarget(
+        _ frame: CGRect,
+        target: CGRect,
+        inwardGapTolerance: CGFloat = 3,
+        outwardOvershootTolerance: CGFloat = 3,
+        bottomOvershootTolerance: CGFloat = 3
+    ) -> Bool {
+        let leftInwardGap = frame.minX - target.minX
+        let rightInwardGap = target.maxX - frame.maxX
+        let bottomInwardGap = frame.minY - target.minY
+        let topInwardGap = target.maxY - frame.maxY
+
+        let leftOvershoot = target.minX - frame.minX
+        let rightOvershoot = frame.maxX - target.maxX
+        let bottomOvershoot = target.minY - frame.minY
+        let topOvershoot = frame.maxY - target.maxY
+
+        return leftInwardGap <= inwardGapTolerance &&
+            rightInwardGap <= inwardGapTolerance &&
+            bottomInwardGap <= inwardGapTolerance &&
+            topInwardGap <= inwardGapTolerance &&
+            leftOvershoot <= inwardGapTolerance &&
+            rightOvershoot <= outwardOvershootTolerance &&
+            bottomOvershoot <= bottomOvershootTolerance &&
+            topOvershoot <= outwardOvershootTolerance
+    }
+
+    /// 统一平铺完成判定（唯一真源）：一个 frame 是否应被接受为「平铺完成」。
+    ///
+    /// 三选一，按此顺序短路：
+    ///   1. `frameMatchesTiledTarget` —— 真正落到平铺目标（origin 严格 3px / size 宽松 16px）。
+    ///   2. `frameMatchesFallbackProduct` —— 等于「妥协形态」（四维 3px）。这是 app 拒绝目标尺寸后
+    ///      `emitFinalAnchor` 愿意留下的唯一妥协 frame；判定必然接受 → 锚定与判定同源，循环消除。
+    ///   3. `frameCoversTiledTarget` —— 完整覆盖目标、四向外扩 ≤ 3px 的几何兜底（应对系统顶部夹取
+    ///      产生的 ±3px 不可达误差，不再吞 inset）。
+    ///
+    /// 抽成 nonisolated 纯函数，供 `emitFinalAnchor` / `tileReachedTarget` / `isWindowAtTiledTarget`
+    ///（经服务层薄封装）共用，并直接单元测试。
+    static func frameSatisfiesFinalTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
+        if frameMatchesTiledTarget(frame, target: target) { return true }
+        if frameMatchesFallbackProduct(frame, target: target) { return true }
+        if frameCoversTiledTarget(frame, target: target) { return true }
+        return false
     }
 
     /// 把“全屏 frame 与可用 visibleFrame”之间的逐边 inset 计算下沉为纯函数。
