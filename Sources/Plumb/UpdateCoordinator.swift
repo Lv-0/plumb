@@ -24,6 +24,13 @@ extension UpdateConfig {
     static let backgroundCheckMinInterval: TimeInterval = 6 * 3600
     /// 上次后台检查时间戳（UserDefaults）。
     static let lastCheckKey = "otaLastCheckTimestamp"
+    /// 「打开设置」自动检查的独立短节流间隔（秒）。
+    /// 与后台 6h 节流解耦：打开设置是用户主动行为，理应及时检查；但又不能每次开关/重开窗口都请求，
+    /// 故保留一个短节流（避免用户在设置窗口里反复点 tab/重开触发连发请求）。短于 6h 后台节流，
+    /// 确保用户重新打开设置（即便后台节流未过）也能拿到较新的更新状态。
+    static let settingsOpenCheckMinInterval: TimeInterval = 10 * 60
+    /// 上次「打开设置」检查时间戳（UserDefaults，独立于 lastCheckKey）。
+    static let settingsOpenCheckLastKey = "otaLastSettingsOpenCheckTimestamp"
 }
 
 enum UpdateRelaunchCommand {
@@ -36,8 +43,8 @@ enum UpdateRelaunchCommand {
 final class UpdateCoordinator {
     static let shared = UpdateCoordinator()
 
-    private let checker = UpdateChecker()
-    private let downloader = UpdateDownloader()
+    private let checker: UpdateChecker
+    private let downloader: UpdateDownloader
 
     /// 当前下载 Task（用于 Cancel 时协作式取消）。
     private var currentDownloadTask: Task<Void, Never>?
@@ -48,13 +55,30 @@ final class UpdateCoordinator {
     /// 之所以用闭包而非直接读 store：解耦 UpdateCoordinator 与设置存储，便于单测注入固定值。
     var autoCheckUpdatesProvider: () -> Bool = { true }
 
+    private init() {
+        self.checker = UpdateChecker()
+        self.downloader = UpdateDownloader()
+    }
+
+    /// 测试用初始化器：注入自定义 checker（如带计数 fetcher），便于断言「检查是否真的发起」。
+    /// 生产代码请用 `UpdateCoordinator.shared`。
+    init(checker: UpdateChecker, downloader: UpdateDownloader = UpdateDownloader()) {
+        self.checker = checker
+        self.downloader = downloader
+    }
+
+    /// 单测辅助：设置 autoCheckUpdatesProvider 的返回值（模拟用户开关）。
+    func setAutoCheckEnabled(_ enabled: Bool) {
+        autoCheckUpdatesProvider = { enabled }
+    }
+
     private var osVersion: AppVersion {
         let raw = ProcessInfo.processInfo.operatingSystemVersion
         return AppVersion(major: raw.majorVersion, minor: raw.minorVersion, patch: raw.patchVersion)
     }
 
     /// 启动后台静默检查。失败完全静默（不打扰）；节流避免每次启动都请求。
-    /// 调用方：AppDelegate 启动时、后台 6h 定时器、SettingsView 打开设置时。
+    /// 调用方：AppDelegate 启动时、后台 6h 定时器。
     /// 开关判定：autoCheckUpdatesProvider 返回 false 时直接返回（不写 lastCheckKey，
     /// 保证用户重新开启开关时可立即检查）。手动检查路径不受此开关影响。
     func checkForUpdatesInBackground() {
@@ -65,7 +89,32 @@ final class UpdateCoordinator {
             return // 节流：距离上次检查不足间隔，跳过。
         }
         defaults.set(Date().timeIntervalSince1970, forKey: UpdateConfig.lastCheckKey)
+        runSilentCheck()
+    }
 
+    /// 打开/重开设置窗口时触发的自动检查。
+    ///
+    /// 与 `checkForUpdatesInBackground` 的关键区别：**使用独立短节流**（`settingsOpenCheckMinInterval`，
+    /// 默认 10min），不共用后台 6h 节流——否则用户刚启动 app（后台已检查）后立即打开设置会被 6h
+    /// 节流吞掉，与设置页文案「打开设置时自动检查」不符。打开设置是用户主动行为，理应及时检查；
+    /// 短节流仅用于防止在设置窗口内反复切 tab/重开触发连发请求。
+    ///
+    /// 开关与后台路径一致：autoCheckUpdatesProvider 返回 false 时跳过（用户关闭自动检查 →
+    /// 打开设置也不自动查，需用户手动点「检查更新」）。失败静默（与后台一致）。
+    func checkForUpdatesWhenOpeningSettings() {
+        guard autoCheckUpdatesProvider() else { return } // 自动检查被用户关闭 → 跳过。
+        let defaults = UserDefaults.standard
+        if let last = defaults.object(forKey: UpdateConfig.settingsOpenCheckLastKey) as? Double,
+           Date().timeIntervalSince1970 - last < UpdateConfig.settingsOpenCheckMinInterval {
+            return // 独立短节流：防止设置窗口内反复重开触发连发请求。
+        }
+        defaults.set(Date().timeIntervalSince1970, forKey: UpdateConfig.settingsOpenCheckLastKey)
+        runSilentCheck()
+    }
+
+    /// 静默发起一次检查：发现更新 → notifyAvailable；upToDate/osTooOld/error 全部静默。
+    /// 后台与「打开设置」两条自动路径共用此实现，差别只在节流策略（调用方各自处理）。
+    private func runSilentCheck() {
         Task { [weak self] in
             guard let self else { return }
             let result = await self.checker.check(current: AppVersion.current, osVersion: self.osVersion)
@@ -73,7 +122,7 @@ final class UpdateCoordinator {
                 if case .available(let manifest) = result {
                     self.notifyAvailable(manifest: manifest)
                 }
-                // 后台：upToDate / osTooOld / error 全部静默。
+                // 静默：upToDate / osTooOld / error 全部不打扰。
             }
         }
     }

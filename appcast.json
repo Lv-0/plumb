@@ -1,6 +1,6 @@
 {
-  "version": "2.0.44",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.44/Plumb-2.0.44.zip",
+  "version": "2.0.45",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.45/Plumb-2.0.45.zip",
   "sha256": "6f1c79694b89704c05ffba4f8623ae4a07e07917becf27271e6b6886bdb956bc",
   "notes": {
     "en": "Fixed: Numbers blank-document first-tile right-margin drift. Tiling completion detection now uses origin-strict (3px) / size-lenient (16px) check, replacing the uniform 16px tolerance that mistook iWork's small origin drift during the smooth resize phase as completed and locked the cycle at a drifted position — so the first tile and the result after switching apps and back are now identical. The size-lenient dimension keeps character-grid-snapping apps (Terminal, electerm) working without regression. Default document-chooser list now also covers the current macOS Pages/Numbers bundle ids. 216 tests pass.",

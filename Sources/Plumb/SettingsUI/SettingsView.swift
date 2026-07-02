@@ -76,9 +76,11 @@ struct SettingsView: View {
             DiagnosticLog.debug("SettingsUI: window OPENED (first task) loaded=\(store.summary(forLog: settings))")
             refreshApps()
             observeWorkspaceAppLaunches()
-            // 打开设置时静默触发一次后台检查（受开关控制、含 6h 节流，频繁开关不会重复请求）；
-            // 用户想强制检查可用关于页「检查更新」按钮（手动路径，不节流、不受开关限）。
-            UpdateCoordinator.shared.checkForUpdatesInBackground()
+            // 打开设置时静默触发一次更新检查：用「打开设置」专用短节流（不共用后台 6h 节流），
+            // 确保用户重新打开设置（即便后台节流未过）也能拿到较新的更新状态——与文案
+            // 「打开设置时自动检查」一致。受 autoCheck 开关控制；用户想强制检查可用关于页
+            // 「检查更新」按钮（手动路径，不节流、不受开关限）。
+            UpdateCoordinator.shared.checkForUpdatesWhenOpeningSettings()
         }
         .onReceive(NotificationCenter.default.publisher(for: SettingsWindowNotifications.windowDidShow)) { _ in
             // 设置窗口每次显示时重新扫描：AppDelegate 缓存了控制器单例，
@@ -86,8 +88,8 @@ struct SettingsView: View {
             // 让"打开设置 → 安装新应用 → 关闭再打开设置"能立即看到新应用。
             DiagnosticLog.debug("SettingsUI: window SHOW (reopen)")
             refreshApps()
-            // 重开设置同样静默触发后台检查（节流内不会与首次打开重复请求）。
-            UpdateCoordinator.shared.checkForUpdatesInBackground()
+            // 重开设置同样走「打开设置」专用短节流（不共用后台 6h 节流）。
+            UpdateCoordinator.shared.checkForUpdatesWhenOpeningSettings()
         }
         .onDisappear {
             // 窗口关闭时移除观察者，避免泄漏；下次 `.task` 会重新注册。
