@@ -877,20 +877,22 @@ final class WindowCenteringService {
             _ = tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
         }
         // 终端类 app（如 electerm）按字符行网格 snap，高度可能无法精确到目标。
-        // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸在
-        // visibleFrame 内重新居中，避免窗口顶部对齐而底部溢出/贴边。
+        // 读回实际尺寸；若与目标差异较大（app 拒绝缩小），则按实际尺寸**保持左上角锚定**——
+        // 以 targetFrame 的左/上边为锚点，按实际尺寸重算右/下边距（而非重新居中）。
+        // 重新居中会破坏平铺要求的左上角锚定和四向 insets（Pages 新建文稿漂移的根因）；
+        // 左上角锚定保证左/上边距严格等于目标 insets，右/下边距随实际尺寸放宽。
         let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
-            let recenteredBL = WindowGeometry.centeredOrigin(windowSize: actualSize, visibleFrame: visibleFrame)
-            let recenteredAX = toAXOrigin(
-                bottomLeftOrigin: recenteredBL,
+            let anchoredBL = WindowGeometry.topLeftAnchoredOrigin(targetFrame: targetFrame, actualSize: actualSize)
+            let anchoredAX = toAXOrigin(
+                bottomLeftOrigin: anchoredBL,
                 windowSize: actualSize,
                 screenFrame: context.screen.frame,
                 space: context.space,
                 primaryTopY: primaryTopY
             )
-            _ = setPointAttribute(kAXPositionAttribute as CFString, value: recenteredAX, on: windowElement)
-            DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); recentered to \(recenteredAX)")
+            _ = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
+            DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); top-left anchored to \(anchoredAX) targetFrame=\(targetFrame)")
         }
         let postSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
@@ -935,6 +937,62 @@ final class WindowCenteringService {
         ) else { return nil }
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         return WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
+    }
+
+    /// 只读查询：窗口当前 frame（minX/minY/width/height）是否已完整匹配平铺目标。
+    ///
+    /// 复用与平铺路径相同的坐标空间探测（4 种空间 + CG 信号），并比较**全部四个维度**
+    /// （不只 size）——这是与 `tiledTargetFrame` 配套的「在位校验」：`tiledTargetFrame`
+    /// 只返回目标 frame，调用方需自行比较；本方法封装「解算目标 + 读窗口 + 四维比较」整段。
+    ///
+    /// 供 `WindowEventObserver.isWindowNearTiledTarget` / `didWindowActuallyTile` 取代
+    /// 此前「仅比较宽高」的启发式——后者会把「尺寸到位但 origin 未对齐」的窗口误判为
+    /// 已完成平铺（Pages 新建文稿的根因之一），导致 `markCentered` + `processedPIDs` 锁定
+    /// 在错误位置上。
+    ///
+    /// 与 `tileReachedTarget` 的判定语义完全一致（同走 CG 优先 + AX 回退），仅多一层
+    /// 「自己解算 targetFrame」的封装。读取失败或无法确定坐标空间时返回 false
+    /// （保守地由调用方视为「未达目标」，继续重试）。
+    func isWindowAtTiledTarget(
+        _ windowElement: AXUIElement,
+        pid: pid_t?,
+        insets: TileInsets,
+        tolerance: CGFloat = 12
+    ) -> Bool {
+        guard
+            let rawPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
+            let windowSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        else { return false }
+        let primaryTopY = primaryScreenTopY()
+
+        // CG 路径（需 Screen Recording 权限 + pid）：与 tileReachedTarget 的 CG 分支同构。
+        // expectedSize 用当前 windowSize（仅在 AXWindowNumber 缺失时的 fallback 评分里用到）。
+        if let pid,
+           ScreenCapturePermission.ensureAuthorized(prompt: false),
+           let cgRect = cgWindowBounds(
+               windowID: windowIDAttribute(on: windowElement),
+               pid: pid,
+               expectedSize: windowSize,
+               preferredDisplayID: nil
+           ),
+           let screenPick = pickScreenForCGRect(cgRect)
+        {
+            let cocoaRect = cocoaRectFromCGWindowBounds(cgRect, screen: screenPick.screen, primaryTopY: primaryTopY)
+            let visibleFrame = effectiveVisibleFrame(for: screenPick.screen)
+            let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
+            return frameMatchesTarget(cocoaRect, target: targetFrame, tol: tolerance)
+        }
+
+        // AX 回退路径：探测坐标空间 → 取 context.currentGlobalRect → 比 frame。
+        guard let context = detectWindowContext(
+            rawPosition: rawPosition,
+            windowSize: windowSize,
+            pid: pid,
+            primaryTopY: primaryTopY
+        ) else { return false }
+        let visibleFrame = effectiveVisibleFrame(for: context.screen)
+        let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
+        return frameMatchesTarget(context.currentGlobalRect, target: targetFrame, tol: tolerance)
     }
 
 
@@ -1561,7 +1619,8 @@ final class WindowCenteringService {
         pid: pid_t?,
         context: WindowContext,
         primaryTopY: CGFloat,
-        targetFrame: CGRect
+        targetFrame: CGRect,
+        tolerance: CGFloat? = nil
     ) -> Bool {
         if
             let pid,
@@ -1575,7 +1634,7 @@ final class WindowCenteringService {
             let screenPick = pickScreenForCGRect(cgRect)
         {
             let cocoaRect = cocoaRectFromCGWindowBounds(cgRect, screen: screenPick.screen, primaryTopY: primaryTopY)
-            let tol: CGFloat = 12
+            let tol = tolerance ?? 12
             return abs(cocoaRect.minX - targetFrame.minX) <= tol &&
                 abs(cocoaRect.minY - targetFrame.minY) <= tol &&
                 abs(cocoaRect.width - targetFrame.width) <= tol &&
@@ -1597,11 +1656,20 @@ final class WindowCenteringService {
             primaryTopY: primaryTopY
         )
 
-        let tol: CGFloat = 10
+        let tol = tolerance ?? 10
         return abs(currentFrame.minX - targetFrame.minX) <= tol &&
             abs(currentFrame.minY - targetFrame.minY) <= tol &&
             abs(currentFrame.width - targetFrame.width) <= tol &&
             abs(currentFrame.height - targetFrame.height) <= tol
+    }
+
+    /// 比较一个已解算的窗口 frame 是否在容差内完整匹配平铺目标（minX/minY/width/height 四维）。
+    /// 供 `tileReachedTarget` 与 `isWindowAtTiledTarget` 共用，保证两条判定路径语义一致。
+    private func frameMatchesTarget(_ frame: CGRect, target: CGRect, tol: CGFloat) -> Bool {
+        abs(frame.minX - target.minX) <= tol &&
+            abs(frame.minY - target.minY) <= tol &&
+            abs(frame.width - target.width) <= tol &&
+            abs(frame.height - target.height) <= tol
     }
 
     private func isTopLeft(space: RawSpace) -> Bool {

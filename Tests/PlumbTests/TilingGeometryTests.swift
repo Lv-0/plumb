@@ -116,3 +116,30 @@ func tiledFrameNegativeInsetsClampedToZero() async throws {
 
     #expect(frame == visible)
 }
+
+@Test
+func topLeftAnchoredOriginKeepsTopLeftEdges() async throws {
+    // 目标平铺 frame：左 16 / 下 40 / 右 24 / 上 8（沿用 asymmetric 测试同款 visibleFrame/insets）。
+    // maxX = 16 + 960 = 976；maxY = 40 + 752 = 792。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    // App 把高度 snap 小了 20px（如终端按字符行网格、Pages 尺寸受限）。
+    let actual = CGSize(width: 960, height: 732)
+
+    let origin = WindowGeometry.topLeftAnchoredOrigin(targetFrame: target, actualSize: actual)
+
+    // 左边距不变（贴 targetFrame.minX）。
+    #expect(origin.x == 16)
+    // 底部 origin 抬高以保持顶部对齐：40 + (752 - 732) = 60 → 底部边距从 40 放宽到 60。
+    #expect(origin.y == 60)
+    // 等价断言：maxY(origin, actual) == target.maxY（顶部仍贴 792）。
+    let top = origin.y + actual.height
+    #expect(top == target.maxY)
+}
+
+@Test
+func topLeftAnchoredOriginIdentityWhenSizesMatch() async throws {
+    // 尺寸完全等于目标时，锚定 origin 即目标 origin（无漂移）。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let origin = WindowGeometry.topLeftAnchoredOrigin(targetFrame: target, actualSize: target.size)
+    #expect(origin == target.origin)
+}

@@ -1160,21 +1160,18 @@ final class WindowEventObserver {
         return false
     }
 
-    /// 窗口当前尺寸是否已接近平铺目标（用于停止平铺稳定重试）。
+    /// 窗口当前 frame 是否已完整匹配平铺目标（用于停止平铺稳定重试）。
     ///
-    /// 通过 `service.tiledTargetFrame` 拿到该窗口在其屏幕上的真实平铺目标（visibleFrame 内缩
-    /// 四向 insets），再比较窗口当前 宽/高 与目标 宽/高 的差值是否在容差内。
-    /// 替换此前"窗口面积 >= 主屏可视区 80%"的粗略启发式——后者无法区分不同屏幕尺寸、
-    /// 也无法反映 insets 配置。失败时返回 false（保守地继续重试）。
+    /// 委托给 `service.isWindowAtTiledTarget`：它在 service 内部复用与平铺路径相同的
+    /// 坐标空间探测（4 种空间 + CG 信号），比较 **minX/minY/width/height 四个维度**
+    /// （不只 size）。替换此前「仅比较宽高」的启发式——后者会把「尺寸到位但 origin 未对齐」
+    /// 的窗口误判为已完成平铺（Pages 新建文稿漂移的根因之一）。容差 16px（沿用原值），
+    /// 失败时返回 false（保守地继续重试）。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
-        guard let size = sizeAttributeValue(windowElement),
-              let target = service.tiledTargetFrame(for: windowElement, pid: pid, insets: insets)
-        else { return false }
-        let tol: CGFloat = 16
-        return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
+        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
     }
 
-    /// 平铺后窗口是否真正放大到接近目标尺寸。
+    /// 平铺后窗口是否真正落到平铺目标（origin + size 完整到位）。
     ///
     /// 用于区分「真正成功的主窗口平铺」与「启动期小窗 / 不可调大小窗口的无效平铺」：
     /// 后者（Electron 类应用如 SiYuan 首次启动时的加载窗）虽然走完了 `tilePendingWindows`
@@ -1182,18 +1179,15 @@ final class WindowEventObserver {
     /// 随后到达的真正主窗口会被 Bug #3 守卫（`processedPIDs.contains(pid)`）永久跳过，
     /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
     ///
-    /// 判据：当前尺寸在目标尺寸的 16px 容差内（沿用 `isWindowNearTiledTarget` 的容差语义，
-    /// 两者同源、保持一致）。读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），
-    /// 与既有「主窗口缺失时保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
+    /// 判据委托给 `service.isWindowAtTiledTarget`（与 `isWindowNearTiledTarget` 同源、
+    /// 保持一致），要求 frame 四维均在 16px 容差内。读取失败时保守返回 false
+    /// （视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时保守视为主窗口」的同类取舍
+    /// 一致（宁可多试一次也不误锁）。
     ///
     /// 语义配合：返回 false 时调用方应【不】markCentered、【不】锁 processedPIDs，
     /// 与上方 document-chooser / DMG 分支的「不锁」不变量同构——让真正主窗口有机会被处理。
     private func didWindowActuallyTile(_ windowElement: AXUIElement, pid: pid_t, insets: TileInsets) -> Bool {
-        guard let size = sizeAttributeValue(windowElement),
-              let target = service.tiledTargetFrame(for: windowElement, pid: pid, insets: insets)
-        else { return false }
-        let tol: CGFloat = 16
-        return size.width >= target.width - tol && size.height >= target.height - tol
+        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
     }
 
     /// 窗口是否是"瞬态"窗口（登录窗 / 启动 splash / 二维码 / 小工具窗）——即非真正的主窗口。

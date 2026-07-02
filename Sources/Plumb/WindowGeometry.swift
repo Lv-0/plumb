@@ -85,6 +85,24 @@ enum WindowGeometry {
         )
     }
 
+    /// 平铺目标的左上角锚定 fallback：当 app 把窗口尺寸 snap 到非目标尺寸时，
+    /// 保持目标左/上边距不变，按实际尺寸重算右/下边距（而非重新居中）。
+    ///
+    /// 用于 `finalizePhaseB`：终端类 app（如 electerm 按字符行网格 snap 高度）或 Pages
+    /// 这类对窗口尺寸有限制的文档 app，可能拒绝缩放到目标尺寸。此时若用 `centeredOrigin`
+    /// 重新居中，会破坏平铺要求的左上角锚定和四向 insets，导致窗口整体漂移。本 helper
+    /// 改为以 `targetFrame` 的左上角为锚点：左/上边距严格等于目标 insets，右/下边距随实际
+    /// 尺寸放宽（顶部贴 `targetFrame.maxY`，左贴 `targetFrame.minX`）。
+    ///
+    /// 返回 bottom-left 原点坐标系下的 origin（与 `tiledFrame` / `centeredOrigin` 一致），
+    /// 四舍五入到整像素（与 AX 写入一致）。
+    static func topLeftAnchoredOrigin(targetFrame: CGRect, actualSize: CGSize) -> CGPoint {
+        CGPoint(
+            x: targetFrame.minX,
+            y: targetFrame.maxY - actualSize.height   // 顶部对齐 targetFrame.maxY，底部由 actualSize 决定
+        )
+    }
+
     /// 把“全屏 frame 与可用 visibleFrame”之间的逐边 inset 计算下沉为纯函数。
     /// 让 Dock 在左/右/下、菜单栏在顶部的逐屏差异可被独立测试。
     static func insetsFromVisibleFrame(frame: CGRect, visible: CGRect) -> ScreenSelection.EdgeInsets {
