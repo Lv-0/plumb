@@ -1,7 +1,7 @@
 {
-  "version": "2.0.41",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.41/Plumb-2.0.41.zip",
-  "sha256": "dce973af67fb171d6e52098d75d6faf5fa0dd97d846767b38c031d86034af693",
+  "version": "2.0.42",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.42/Plumb-2.0.42.zip",
+  "sha256": "015c2db5467c0074a5bbe5c1c57a985b7f01e12dccdf1eee0f58ab94a1d64962",
   "notes": {
     "en": "Refreshed UI: the toggle switches in Settings now render their knob as a three-dimensional glass-style sphere — a stronger top-to-bottom gradient plus a subtle dark outline and a specular highlight on top, so the knob reads as a glossy bead rather than a flat white circle. Pure SwiftUI synthesis (the native Liquid Glass material doesn't render inside the app's glass window). 176 tests pass.",
     "zh": "界面焕新：设置里的开关滑块改为立体玻璃球质感——较强的顶亮→底灰垂直渐变 + 细深色描边 + 顶部镜面高光，让滑块看起来像一颗有光泽的玻璃珠，而非扁平白圆。纯 SwiftUI 合成（原生 Liquid Glass 材质在 app 的玻璃窗口里不渲染）。176 项测试通过。",
