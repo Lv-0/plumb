@@ -68,22 +68,19 @@ final class WindowEventObserver {
     /// 一个 app 在其激活周期内只要主窗口已居中/平铺，后续任意窗口事件一律跳过，
     /// 直到切换走再回来（attachToFrontmostApp 会清缓存）。
     private var processedPIDs: Set<pid_t> = []
-    /// 粘性「手动排版」窗口集合：用户按住 Option (⌥) 拖动/改尺寸过的窗口进入此集合，
-    /// 切换 App/屏幕后仍保持手动（不居中、不平铺）。键格式与 centered 缓存一致："pid:windowNumber"。
-    /// 清除条件：①用户不按 Option 再拖动该窗口（→ 立即重新居中/平铺）②App 重新激活/终止时按 pid 前缀清理。
-    /// 设计取舍：仅真正的拖动(moved)/改尺寸(resized) 才标记——切聚焦/创建(focusedChanged/created) 不标记，
-    /// 避免按住 Option 切到某 App 就把它误判为手动。
+    /// 「手动排版」窗口集合：用户拖动(moved)或缩放(resized)过的窗口进入此集合，不再被自动居中/平铺，
+    /// 直到下一次切 App / 切 Space 时才重新按规则排版。键格式与 centered 缓存一致："pid:windowNumber"。
+    /// 新需求语义：任何手动移动/缩放都**不**立即吸附——被标记的窗口保持用户摆放的位置/尺寸，
+    /// 由 handle() 主路径的 manualWindowKeys 守卫拦截；只有切 App（attachToFrontmostApp）或
+    /// 切 Space（recenterObservedApp）时清掉该 PID 的标记后，窗口才会被重新处理。
+    /// 清除条件：①切到该 App / 切 Space 时按 pid 前缀清理（manualWindowKeys/filter）②App 退出时
+    /// 按 pid 前缀清理（appDidTerminate）③stop()。
+    /// 设计取舍：仅真正的拖动/缩放才标记——切聚焦/创建(focusedChanged/created) 走 handle() 主路径，
+    /// **不**经过 move/resize 旁路，故不会被误标记。Plumb 自身的居中/平铺动画产生的 moved/resized
+    /// 由 service.isAnyAnimationInProgress 守卫排除，不会被误标记。
     private var manualWindowKeys: Set<String> = []
     private var initialCenterTimer: DispatchSourceTimer?
     private var tileStabilizeTimer: DispatchSourceTimer?
-    /// resize 后「延迟重铺」的防抖定时器。
-    ///
-    /// 用于应对 Terminal 这类 app：在同一个窗口内开关标签页，会因「字符网格对齐 + 标签栏
-    /// 出现/消失」改变窗口尺寸，但既不触发 focusedWindowChanged 也不触发 windowCreated，
-    /// 且标签页共享 windowNumber → 命不中原有缓存 → 已平铺窗口不会被重新平铺。
-    /// 改为：监听 `kAXResizedNotification`，尺寸变化后防抖 ~0.4s（合并多次抖动），
-    /// 仅当窗口明显偏离平铺目标（>16px）时重新平铺。仅对平铺白名单内的 app 生效。
-    private var resizeRetileTimer: DispatchSourceTimer?
 
     init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore, dmgMonitor: DmgMountMonitor? = nil) {
         self.service = service
@@ -136,8 +133,6 @@ final class WindowEventObserver {
         initialCenterTimer = nil
         tileStabilizeTimer?.cancel()
         tileStabilizeTimer = nil
-        resizeRetileTimer?.cancel()
-        resizeRetileTimer = nil
         reattachTimer?.cancel()
         reattachTimer = nil
         observerRegistrationFailed = false
@@ -200,13 +195,13 @@ final class WindowEventObserver {
             centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
             centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
         }
-        // ⚠️ 切 Space 不清除「手动排版」标记：用户按 Option 手动摆放的窗口必须在切桌面/切屏后保持
-        // 手动（不重新居中/平铺）。只有居中缓存、processedPIDs 被清——让非手动窗口重新评估排版，
-        // 而手动窗口由 handle() 主路径的 manualWindowKeys 守卫继续拦截。
-        //（这是「切屏后手动窗口又被居中」bug 的根因——此前误把 manualWindowKeys 也清了。）
-        let manualKept = manualWindowKeys.filter { $0.hasPrefix(prefix) }.count
-        if manualKept > 0 {
-            DiagnosticLog.debug("spaceDidChange: kept \(manualKept) manual-layout window(s) for pid=\(pid) (not cleared)")
+        // 切 Space 清除该 PID 的「手动排版」标记：新需求要求用户手动移动/缩放的窗口在切 Space 时
+        // 重新按规则排版（与切 App 同语义）。只有清掉 manualWindowKeys，后续 handle() / retry 才能
+        // 重新处理这些窗口。
+        let manualCleared = manualWindowKeys.filter { $0.hasPrefix(prefix) }.count
+        if manualCleared > 0 {
+            DiagnosticLog.debug("spaceDidChange: cleared \(manualCleared) manual-layout window(s) for pid=\(pid)")
+            manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
         }
         processedPIDs.remove(pid)
 
@@ -252,11 +247,9 @@ final class WindowEventObserver {
             guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else { continue }
             // Atlas 设置窗口跳动：仅排除设置窗口，主窗口正常居中（与 handle 一致）。
             if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) { seenPIDs.insert(pid); continue }
-            // 浏览器/访达二级窗口：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
-            //（与 handle 路径一致；命中屏蔽列表且候选非主窗口 → 跳过，保持弹出位置）。
-            if shieldedFromSecondaryWindowTiling(bundleID),
-               isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID)
-            {
+            // 所有 App 通用的二级窗口屏蔽：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
+            //（与 handle 路径一致；候选非主窗口 → 跳过，保持弹出位置）。
+            if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID) {
                 seenPIDs.insert(pid); continue
             }
             do {
@@ -300,8 +293,6 @@ final class WindowEventObserver {
             initialCenterTimer = nil
             tileStabilizeTimer?.cancel()
             tileStabilizeTimer = nil
-            resizeRetileTimer?.cancel()
-            resizeRetileTimer = nil
             // 被观察的 app 退出时，其进行中的平铺/居中动画也必须停止，否则 Phase-B 定时器
             // 会在已退出的 pid 上继续尝试写 AX（必然失败，但仍占用 activeAnimationKey 锁）。
             service.abortActiveAnimations()
@@ -347,8 +338,6 @@ final class WindowEventObserver {
 
         initialCenterTimer?.cancel()
         initialCenterTimer = nil
-        resizeRetileTimer?.cancel()
-        resizeRetileTimer = nil
         reattachTimer?.cancel()
         reattachTimer = nil
         observerRegistrationFailed = false
@@ -371,15 +360,20 @@ final class WindowEventObserver {
             centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(reactivatedPrefix) }
             centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(reactivatedPrefix) }
         }
-        // ⚠️ App 重新激活（切走再切回）不清除「手动排版」标记：用户手动摆放的窗口必须跨 App 切换保持
-        // 手动。只有居中缓存、processedPIDs 被清——让非手动窗口重新评估，手动窗口由 handle() 守卫拦截。
-        //（用户需求：「切换软件后，手动排版的软件不要触发居中或者平铺」。）
-        let manualKeptOnAttach = manualWindowKeys.filter { $0.hasPrefix(reactivatedPrefix) }.count
-        if manualKeptOnAttach > 0 {
-            DiagnosticLog.debug("attach: kept \(manualKeptOnAttach) manual-layout window(s) for reactivated pid=\(pid) (not cleared)")
-        }
+        // ⚠️ 「手动排版」标记的清除已上移至 reactivatedPrefix 清理段（与居中缓存同处）：
+        // 新需求要求用户手动移动/缩放的窗口在下一次切 App / 切 Space 时被重新按规则排版，
+        // 故不再跨激活周期保留 manualWindowKeys。
+        //（旧实现刻意保留 manual 标记；该需求已变更。）
         // Bug #3: 同步清除 per-PID 标记，让 app 重新激活后能重新居中其主窗口。
         processedPIDs.remove(pid)
+        // 同步清除该 PID 的「手动排版」标记：用户手动移动/缩放过的窗口在新需求下应只在
+        // 下一次切 App / 切 Space 时被重新按规则排版——故切回该 App 时把它的 manualWindowKeys
+        // 一并清掉，使重新激活后的 handle() / startInitialCenteringRetries 能正常处理这些窗口。
+        let manualRemoved = manualWindowKeys.filter { $0.hasPrefix(reactivatedPrefix) }.count
+        if manualRemoved > 0 {
+            DiagnosticLog.debug("attach: cleared \(manualRemoved) manual-layout window(s) for reactivated pid=\(pid)")
+            manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(reactivatedPrefix) }
+        }
         var newObserver: AXObserver?
         let result = AXObserverCreate(pid, { _, element, notification, refcon in
             guard let refcon else { return }
@@ -413,9 +407,10 @@ final class WindowEventObserver {
 
         // 不在 attach 当下立即居中：app 刚被激活时 macOS 还在做激活动画，窗口位置/尺寸在抖动，
         // 此时探测坐标空间与读取 visibleFrame 都不稳定，会导致居中位置算错（"切换后居中没考虑
-        // Dock 栏"的根因之一）。改为完全交给 startInitialCenteringRetries：它在短延迟后首次触发，
+        // Dock 栏"的根因之一）。改为完全交给 startInitialCenteringRetries：它在 0.45s 后首次触发，
         // 等同于用户"动画结束后点立即居中"的效果——此时窗口已稳定，走的是与手动按钮完全相同、
-        // 已被验证正确的居中路径。
+        // 已被验证正确的居中路径。需求进一步要求：首次处理严格发生在 0.45s 之后，此前不得做任何
+        // markCentered / processedPIDs 锁定，故此处不再调用任何立即校验/居中。
         // （这里刻意不再调用 handle("initial")。立即居中会抢在动画完成前写入，反而出错。）
 
         // Some apps only create their focused window after a short delay (splash screens, permission prompts, etc.).
@@ -426,15 +421,6 @@ final class WindowEventObserver {
             appElement: appElement,
             bundleIdentifier: app.bundleIdentifier
         )
-
-        // 切到 App 时主窗口通常已存在且稳定：**立即（0 延迟）**校验是否已在目标位。
-        // - 已在位 → 标记已处理、不挪动（消除切回时被重新居中/平铺一遍的视觉跳动 + 0.45s 等待）；
-        //   此时已 processedPIDs.insert，上方 retry 触发的 handle() 会被守卫早退，无冲突。
-        // - 居中窗口偏离 → 立即归位（单次 setFrame，与激活动画无竞争）。
-        // - 平铺窗口偏离 → 静默，交 retry 走两阶段平铺动画（避免立即平铺与激活动画竞争）。
-        // - 读不到候选 / 坐标空间未定 → 静默，交 retry 兜底（首次打开 / 启动屏 app，窗口仍在抖动）。
-        // 必须放在 startInitialCenteringRetries 之后：retry 已先注册，立即校验即便读不到也不影响兜底。
-        recheckLayoutImmediately(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
     }
 
     /// 注册窗口通知到 observer，返回是否全部成功。
@@ -446,7 +432,8 @@ final class WindowEventObserver {
         let r1 = AXObserverAddNotification(observer, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
         let r2 = AXObserverAddNotification(observer, appElement, kAXWindowCreatedNotification as CFString, refcon)
         let r3 = AXObserverAddNotification(observer, appElement, kAXResizedNotification as CFString, refcon)
-        // moved 通知用于粘性 Option 手动排版：拖动产生 moved、改尺寸产生 resized，两条都要拦。
+        // moved/resized 通知用于「手动排版」标记：用户拖动产生 moved、缩放产生 resized，两条都要拦，
+        // 标记对应窗口为手动后由 handle() 主路径守卫拦截，直到下一次切 App / 切 Space 才重新排版。
         let r4 = AXObserverAddNotification(observer, appElement, kAXMovedNotification as CFString, refcon)
         let success = r1 == .success && r2 == .success && r3 == .success && r4 == .success
         DiagnosticLog.debug("attach: observer added; focusedChanged=\(r1.rawValue) windowCreated=\(r2.rawValue) resized=\(r3.rawValue) moved=\(r4.rawValue) success=\(success)")
@@ -558,14 +545,13 @@ final class WindowEventObserver {
         }
 
         // resize 事件走独立旁路：必须在下方 processedPIDs 守卫之前分流，否则一个已平铺的窗口
-        //（PID 已被锁）在尺寸因标签开关变化后，事件会被 PID 锁直接 short-circuit，永远无法重铺。
-        // handleResize 内部自带 frontmost 守卫已由上方覆盖、白名单守卫、subrole 守卫与防抖。
+        //（PID 已被锁）在用户缩放后，事件会被 PID 锁直接 short-circuit，到不了「标记手动」旁路。
+        // handleResize 内部自带 frontmost / stale / 真实窗口 / 自身动画守卫，仅标记 manualWindowKeys。
         if notification == (kAXResizedNotification as String) {
             return handleResize(element: element, forcedPID: forcedPID)
         }
 
-        // moved 事件走独立旁路（与 resize 同构）：集中处理粘性 Option 手动排版——
-        // 按住 Option 拖动 → 标记该窗口手动（粘性）；不按 Option 拖动一个手动窗口 → 清除并吸附恢复。
+        // moved 事件走独立旁路（与 resize 同构）：用户拖动 → 标记该窗口为「手动」，不再立即吸附。
         // 必须在 processedPIDs 锁之前分流，否则已平铺窗口（PID 已锁）的 moved 永远到不了旁路。
         if notification == (kAXMovedNotification as String) {
             return handleMove(element: element, forcedPID: forcedPID)
@@ -584,10 +570,12 @@ final class WindowEventObserver {
             return false
         }
 
-        // 粘性手动窗口守卫：已标记「手动」的窗口在聚焦/创建事件时一律跳过（不居中、不平铺），
+        // 手动窗口守卫：已标记「手动」的窗口在聚焦/创建事件时一律跳过（不居中、不平铺），
         // 保持用户手动摆放的位置。必须放在候选窗口选出之后（需要 windowNumber 构造 key）、
         // 排版决策之前；且位于 processedPIDs 锁之后（与锁同向，先按周期锁过滤再按手动过滤）。
-        // handleMove 会在「不按 Option 拖动」时清除此标记并吸附恢复。
+        // 标记由 handleMove/handleResize 在用户拖动/缩放时写入；清除由 attachToFrontmostApp /
+        // recenterObservedApp（切 App / 切 Space）按 pid 前缀完成——这是「手动窗口只在下次切 App/Space
+        // 时重新排版」新需求的实现位置。
         if let key = key(pid: pid, window: windowElement), manualWindowKeys.contains(key) {
             DiagnosticLog.debug("handle[\(notification)]: manual window — keep manual, skip pid=\(pid) key=\(key)")
             return false
@@ -617,23 +605,22 @@ final class WindowEventObserver {
             return false
         }
 
-        // 浏览器/访达二级窗口屏蔽：这些 App 的二级窗口（设置/下载/弹窗/Get Info/扩展页 等）常报告
-        // AXStandardWindow subrole，会绕过 subrole 过滤被误居中/误平铺。命中屏蔽列表且候选不是主窗口
-        // 时完全跳过——不平铺、不居中、不 markCentered、不锁 processedPIDs，保持其弹出位置。
-        // 主窗口不受影响，正常居中/平铺。
-        // 关键：必须放在 `if shouldTile` 分流**之前**——浏览器默认走居中分支（不在平铺白名单），
-        // 若只在 shouldTile 分支内拦截（c1a1d34 原做法），居中分支无保护，弹窗仍会被居中。
-        // 仿上方 Atlas 设置窗口特例的纯早退语义。补的是「PID 锁被清除（Space 切换/重新激活）
-        // 或二级窗口先于主窗口到达」时空档——其余情况下 processedPIDs 锁已拦截。
+        // 所有 App 通用：二级窗口屏蔽。任何 App 的二级窗口（设置/下载/弹窗/Get Info/扩展页 等）
+        // 常报告 AXStandardWindow subrole，会绕过 subrole 过滤被误居中/误平铺。候选窗口若判定为
+        // 该 App 的非主窗口即完全跳过——不平铺、不居中、不 markCentered、不锁 processedPIDs，
+        // 保持其弹出位置；主窗口不受影响，正常居中/平铺。
+        // 关键：必须放在 `if shouldTile` 分流**之前**——否则居中分支（不在平铺白名单）无保护，
+        // 弹窗仍会被居中。补的是「PID 锁被清除（Space 切换/重新激活）或二级窗口先于主窗口到达」
+        // 的时空档——其余情况下 processedPIDs 锁已拦截。
         //
         // isSecondaryWindowOfApp 内部对 Chromium 内核浏览器优先用 AXIdentifier 的 type 字段
         //（"main"/"secondary"）判定——kAXMainWindowAttribute 在二级窗口聚焦时会追踪聚焦窗，
         // 把扩展设置页误报成主窗口（用户报告的「扩展程序设置界面被居中」根因），靠它判定会漏；
-        // AXIdentifier 是 Chromium 进程内窗口管理的稳定结构化标识，能可靠区分主/二级窗口。
-        if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
-           isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
+        // 访达用 AXIdentifier 字面值（"FinderWindow" 为主窗口）；其它 App 用 kAXMainWindowAttribute
+        // 回退（候选 ≠ 主窗口即视为二级窗口）。
+        if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
         {
-            DiagnosticLog.debug("handle[\(notification)]: shielded browser/Finder secondary window — skip (no tile, no center) pid=\(pid)")
+            DiagnosticLog.debug("handle[\(notification)]: secondary window — skip (no tile, no center) pid=\(pid)")
             return false
         }
 
@@ -650,8 +637,7 @@ final class WindowEventObserver {
     ///
     /// 原 handle() 末尾的「读 tilingSettings → shouldTile 分流 → 文档选择器/DMG/tilePendingWindows/
     /// centerWindowElementAnimated + markCentered + processedPIDs.insert」整段，抽成独立方法：
-    /// - handle() 主路径（聚焦/创建事件）在通过所有守卫后调用本方法做首次排版。
-    /// - handleMove() 旁路在「不按 Option 拖动一个手动窗口」时调用本方法做吸附恢复排版。
+    /// - handle() 主路径（聚焦/创建事件、initial-retry）在通过所有守卫后调用本方法做首次排版。
     ///
     /// 语义不变：把内联代码原样挪进方法，保证「吸附恢复」与「首次排版」逻辑完全一致。
     @discardableResult
@@ -825,111 +811,6 @@ final class WindowEventObserver {
         }
     }
 
-    /// 切换到某 App 时**立即（0 延迟）**校验其主窗口是否已在目标位，按需修复。
-    ///
-    /// 解决「切回 App 后要等 0.45s、且窗口即使在位也被重新居中/平铺一遍（视觉跳动）」的体验问题。
-    /// `attachToFrontmostApp` 在 `startInitialCenteringRetries`（0.45s）之前调用本方法：
-    ///
-    /// - **已在位** → `markCentered` + `processedPIDs.insert`，不挪动。后续 0.45s retry 触发的 `handle()`
-    ///   会被 `processedPIDs` 守卫早退，不冲突。彻底消除切回时的跳动 + 等待。
-    /// - **居中窗口偏离** → 立即 `applyLayout` 归位（居中是单次 setFrame，无两阶段动画，与激活动画无竞争）。
-    /// - **平铺窗口偏离** → 静默 return，交 0.45s retry 走 `tilePendingWindows` 两阶段动画（避免立即平铺
-    ///   与 app 激活动画竞争——同 line 414 注释的担忧）。
-    /// - **读不到候选窗口 / 坐标空间未确定** → 静默 return，交 0.45s retry 兜底（首次打开 / 启动屏 app，
-    ///   此时窗口刚在抖动，立即校验反而会算错坐标空间——这正是 retry 延迟存在的理由）。
-    ///
-    /// 守卫与 `handle()` 主路径**完全一致**（同一组特例守卫），确保立即校验与 retry 路径行为同构：
-    /// Plumb 自身 PID、manual 粘性窗口、Atlas 设置窗、Journal 设置窗、浏览器/访达二级窗口屏蔽。
-    /// Option 锁定的手动窗口在此被跳过、保持用户摆放位置不变。
-    private func recheckLayoutImmediately(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
-        // 仅前台 app：与 handle() 一致，避免对后台窗口做任何写操作。
-        guard let frontmostApp = NSWorkspace.shared.frontmostApplication,
-              frontmostApp.processIdentifier == pid
-        else {
-            DiagnosticLog.debug("recheck: frontmost != pid \(pid), skip")
-            return
-        }
-
-        // 跳过 Plumb 自身（设置窗口由 showWindow 精确居中，与 handle() line 539-542 同因）。
-        if pid == ProcessInfo.processInfo.processIdentifier {
-            DiagnosticLog.debug("recheck: own PID \(pid) — skip")
-            return
-        }
-
-        guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else {
-            // 候选窗口尚未就绪（首次打开 / 启动屏）：交 0.45s retry 兜底。
-            DiagnosticLog.debug("recheck: no candidate window yet — defer to retry pid=\(pid)")
-            return
-        }
-
-        // —— 以下守卫与 handle() 主路径逐一对应（同 bundle / 同窗口语义）——
-
-        // 粘性手动窗口：保持用户手动摆放位置（与 handle() line 582 同因）。
-        if let key = key(pid: pid, window: windowElement), manualWindowKeys.contains(key) {
-            DiagnosticLog.debug("recheck: manual window — keep manual, skip key=\(key) pid=\(pid)")
-            return
-        }
-        // ChatGPT Atlas 设置窗口特例（与 handle() line 594 同因）。
-        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier),
-           isAtlasSettingsWindow(windowElement)
-        {
-            DiagnosticLog.debug("recheck: ChatGPT Atlas settings window — skip pid=\(pid)")
-            return
-        }
-        // 手记设置窗口特例（与 handle() line 604 同因）。
-        if isJournalBundle(frontmostApp.bundleIdentifier),
-           isJournalSettingsWindow(windowElement)
-        {
-            DiagnosticLog.debug("recheck: Journal settings window — skip pid=\(pid)")
-            return
-        }
-        // 浏览器/访达二级窗口屏蔽（与 handle() line 624 同因）。
-        if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
-           isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
-        {
-            DiagnosticLog.debug("recheck: shielded secondary window — skip pid=\(pid)")
-            return
-        }
-
-        let tilingSettings = tilingSettingsStore.load()
-        let shouldTile = tilingSettings.shouldTile(bundleIdentifier: bundleIdentifier)
-        let effectiveInsets = tilingSettings.effectiveInsets(for: bundleIdentifier)
-
-        if shouldTile {
-            // 平铺：比 size（与 isWindowNearTiledTarget 同构）。在位 → 标记不挪；偏离 → 交 retry 平铺。
-            if isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: effectiveInsets) {
-                markCentered(windowElement: windowElement, pid: pid)
-                processedPIDs.insert(pid)
-                DiagnosticLog.debug("recheck: tiled window already in place — mark & keep pid=\(pid)")
-            } else {
-                DiagnosticLog.debug("recheck: tiled window off-target — defer re-tile to retry pid=\(pid)")
-            }
-            return
-        }
-
-        // 居中：先过白名单（与 applyLayout line 785 同因）。
-        guard tilingSettings.shouldCenter(bundleIdentifier: bundleIdentifier) else {
-            DiagnosticLog.debug("recheck: center not allowed for pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
-            return
-        }
-        if isWindowNearCenterTarget(windowElement, pid: pid) {
-            markCentered(windowElement: windowElement, pid: pid)
-            processedPIDs.insert(pid)
-            DiagnosticLog.debug("recheck: centered window already in place — mark & keep pid=\(pid)")
-            return
-        }
-
-        // 居中窗口偏离：立即归位（单次 setFrame，安全）。applyLayout 内部会 markCentered + 锁 PID。
-        DiagnosticLog.debug("recheck: centered window off-target — re-center immediately pid=\(pid)")
-        _ = applyLayout(
-            notification: "recheck",
-            windowElement: windowElement,
-            pid: pid,
-            appElement: appElement,
-            bundleIdentifier: bundleIdentifier
-        )
-    }
-
     private func centerCandidateWindow(for appElement: AXUIElement, hintedElement: AXUIElement?) -> AXUIElement? {
         if
             let hintedElement,
@@ -1097,7 +978,8 @@ final class WindowEventObserver {
         var attempts = 0
         // 首次触发延迟 0.45s：让 app 的激活动画结束、窗口位置/尺寸稳定后再居中，
         // 等同于"动画结束后点立即居中"。太早触发会因窗口仍在抖动而算错坐标空间/visibleFrame。
-        timer.schedule(deadline: .now() + 0.45, repeating: 0.35)
+        // 失败后每 1.0s 重试一次，最多 10 次（含首次）。成功处理后立即停止重试。
+        timer.schedule(deadline: .now() + 0.45, repeating: 1.0)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             attempts += 1
@@ -1109,18 +991,17 @@ final class WindowEventObserver {
                 return
             }
 
-            let tilingEnabledForApp = self.tilingSettingsStore.load().shouldTile(bundleIdentifier: bundleIdentifier)
+            // handle 返回 true 表示该窗口已完成居中/平铺（含瞬态/启动小窗等不锁 PID 的情形下返回
+            // false 继续重试）。成功处理后停止重试。
             let didProcess = self.handle(notification: "initial-retry", element: appElement, forcedPID: pid)
-            if didProcess, !tilingEnabledForApp {
+            if didProcess {
                 self.initialCenterTimer?.cancel()
                 self.initialCenterTimer = nil
                 return
             }
 
-            // maxAttempts：平铺 app 取 40（~14s），覆盖 Electron 冷启动窗口创建延迟（常 >8s）；
-            // 非 tiling app 取 12。即使 observer 注册成功，轮询路径也作为「窗口延迟创建」的兜底。
-            let maxAttempts = tilingEnabledForApp ? 40 : 12
-            if attempts >= maxAttempts {
+            // 固定上限 10 次（首次 0.45s + 9 次重试 ≈ 9.45s）。
+            if attempts >= 10 {
                 self.initialCenterTimer?.cancel()
                 self.initialCenterTimer = nil
             }
@@ -1181,23 +1062,15 @@ final class WindowEventObserver {
         timer.resume()
     }
 
-    /// 处理 `kAXResizedNotification`：在窗口尺寸变化后延迟重新平铺。
+    /// 处理 `kAXResizedNotification`：用户缩放窗口 → 标记「手动」，不再立即重铺。
     ///
-    /// 场景：Terminal 这类 app 在同一窗口内开关标签页时，会因「字符网格对齐 + 标签栏出现/消失」
-    /// 改变窗口尺寸。原监听集合（focusedWindowChanged / windowCreated）覆盖不到该场景，且
-    /// 标签页共享 windowNumber 命不中原有缓存 → 已平铺窗口不会被重铺（用户报告的 bug）。
+    /// 新需求：任何手动移动/缩放都不立即吸附（不再安排 resizeRetileTimer、不再因 resize 立即平铺
+    /// 或居中）；被标记的窗口保持用户摆放的尺寸，直到下一次切 App / 切 Space 时由
+    /// attachToFrontmostApp / recenterObservedApp 清掉该 PID 的 manualWindowKeys 后才会被重新排版。
     ///
-    /// 本方法是一条【独立旁路】：
-    ///   - 仅对平铺白名单内的 app 生效（shouldTile == true），居中类 app 一律不响应 resize。
-    ///   - 防抖 ~0.4s：合并开关标签时的连续多次 resize 抖动，只触发一次重铺评估。
-    ///   - 重铺前用 isWindowNearTiledTarget 判定：尺寸已在平铺目标 16px 容差内 → 不做事，
-    ///     避免对已是平铺态的窗口反复触发动画。
-    ///   - 进行中的动画（isAnyAnimationInProgress）跳过本回合，防止与自身平铺动画叠加。
-    ///   - 刻意【不】触碰 processedPIDs / markCentered：resize 重铺不应破坏原「一次即可」语义，
-    ///     也避免二级窗口因 resize 被误触发。
-    ///
-    /// 关于「用户手动拖动改尺寸」：按设计取舍，白名单 app 本就应处于平铺态，手动改尺寸被拉回
-    /// 属可接受行为；故此处不区分「用户手势 vs 标签 resize」，偏移即重铺。
+    /// 关键守卫：Plumb 自身的平铺动画（Phase-B 写尺寸）也会触发 kAXResizedNotification 回到本旁路。
+    /// 必须用 `service.isAnyAnimationInProgress` 排除——否则自己的平铺会把窗口误标记为「手动」，
+    /// 导致切 App/Space 后该窗口永远不再被平铺。
     ///
     /// `element`：resize 通知的 element 通常就是被缩放的窗口本身（非 app 元素）。
     private func handleResize(element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
@@ -1216,149 +1089,41 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[resize]: stale — observedPID=\(observedPID) pid=\(pid), skip")
             return false
         }
-
-        // 粘性 Option 手动排版（resize 旁路）：
-        // 按住 Option 改尺寸 → 标记该窗口为「手动」（粘性），不安排 retile 定时器，最干净。
-        // resize 旁路绕过 processedPIDs 锁（见下方注释），故 Option 检查必须在此处独立处理，
-        // 不能只靠 handle() 主路径的守卫。
-        let manualKey = key(pid: pid, window: element)
-        if isUserHoldingOption() {
-            if let manualKey {
-                manualWindowKeys.insert(manualKey)
-            }
-            DiagnosticLog.debug("handle[resize]: Option key held → mark window manual (sticky) key=\(manualKey ?? "?") pid=\(pid)")
-            return false
-        }
-        // 不按 Option 改尺寸一个「手动」窗口 → 视为「吸附回来」：清除手动标记，落到下方原 retile 流程。
-        // （不 return —— 让 retile 防抖逻辑接管，实现「立即重铺」。）
-        if let manualKey, manualWindowKeys.contains(manualKey) {
-            manualWindowKeys.remove(manualKey)
-            DiagnosticLog.debug("handle[resize]: Option not held + manual window → clear & retile pid=\(pid)")
-        }
-
-        // 仅平铺白名单 app 响应 resize；居中类 app 尺寸变化不重铺（保持原行为）。
-        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-              tilingSettingsStore.load().shouldTile(bundleIdentifier: bundleID)
-        else {
-            DiagnosticLog.debug("handle[resize]: pid \(pid) not in tile whitelist, skip")
-            return false
-        }
-
-        // resize 通知的 element 应是窗口本身；校验 role == AXWindow，并排除 dialog/floating 等辅助窗口。
+        // resize 通知的 element 应是窗口本身；校验 role == AXWindow，排除 dialog/floating 等辅助窗口。
         // 直接复用 isMovableNonAuxiliaryWindow 的「真实窗口 + 非辅助类型」判定（不强制 AXStandardWindow，
         // 因部分 app 主窗口 subrole 缺失）。
         guard isMovableNonAuxiliaryWindow(element) else {
             DiagnosticLog.debug("handle[resize]: element not a movable non-auxiliary window, skip")
             return false
         }
-
-        let appElement = AXUIElementCreateApplication(pid)
-        let insets = tilingSettingsStore.load().effectiveInsets(for: bundleID)
-        let windowElement = element
-
-        // 手记（Journal）设置窗口特例（resize 旁路补丁）——【这是本 bug 的根因路径】。
-        // 手记设置窗口打开时的尺寸动画触发 kAXResizedNotification，走本旁路（绕过 processedPIDs 锁），
-        // 设置窗口被强行平铺成全屏（实测 640×533 → 1480×835，被移到左上角）。
-        // handle() 主路径已被 processedPIDs 锁挡住，挡不住 resize 旁路——故必须在此处也拦截。
-        // 判据用 AXTitle（subrole/AXIdentifier/kAXMainWindow 三项硬特征全失效，见 isJournalSettingsWindow）。
-        // 放在防抖定时器之前：连 retile schedule 都不安排，最干净。
-        if isJournalBundle(bundleID),
-           isJournalSettingsWindow(windowElement)
-        {
-            DiagnosticLog.debug("handle[resize]: Journal settings window — skip retile (no tile) pid=\(pid)")
+        // 排除 Plumb 自身平铺动画产生的 resize：进行中的动画不视作用户手势，不标记手动。
+        guard !service.isAnyAnimationInProgress else {
+            DiagnosticLog.debug("handle[resize]: animation in progress (self-tile) — ignore, no manual mark")
             return false
         }
 
-        DiagnosticLog.debug("handle[resize]: scheduling retile for pid=\(pid) bundle=\(bundleID)")
-
-        // 防抖：每次 resize 重置定时器，停止抖动 ~0.4s 后才评估重铺。
-        resizeRetileTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.40)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            self.resizeRetileTimer = nil
-
-            // 切走/退出后残留的定时器不应在后台写窗口（与 abortActiveAnimations 同理念）。
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
-                DiagnosticLog.debug("handle[resize]: fired but no longer frontmost pid=\(pid), skip")
-                return
-            }
-
-            // 与自身平铺动画叠加会导致「来回拉扯」：进行中则放弃本回合。
-            if self.service.isAnyAnimationInProgress {
-                DiagnosticLog.debug("handle[resize]: animation in progress, skip this round")
-                return
-            }
-
-            // 浏览器/访达二级窗口屏蔽（resize 旁路补丁）。
-            // 现象：Chrome/Edge 等 Chromium 浏览器打开扩展设置页/详情页/弹窗时，会弹出一个
-            // 独立的**非主**小窗口（实测如 390x171），它触发 kAXResizedNotification 走本旁路。
-            // 由于 handleResize 刻意不查 processedPIDs（见 828 行注释），且此前也没有二级窗口
-            // 守卫，这个小窗口被判为「偏离平铺目标」→ 被强行拉满全屏（用户报告的
-            // 「打开扩展程序设置界面会被自动居中/放大」根因）。
-            // 修复：与 handle() 主路径守卫一致——命中屏蔽列表（浏览器/访达）且候选是该 App 的
-            // 非主窗口时，完全跳过重铺，保持其弹出尺寸/位置。主窗口（候选 == 主窗口）不受影响。
-            if self.shieldedFromSecondaryWindowTiling(bundleID) {
-                if self.isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID) {
-                    DiagnosticLog.debug("handle[resize]: shielded browser/Finder secondary window — skip retile pid=\(pid)")
-                    return
-                }
-            }
-
-            // 文档类 App 选择器感知（resize 旁路补丁）：
-            // 与 handle() 的 chooser 分支同构。文档 App 必须在平铺白名单内（真文档要平铺），故其
-            // 文件列表/模板画廊窗口一旦 resize（缩略图加载、入场动画）会通过上方 shouldTile 守卫，
-            // 直接走到下面的 tileWindowElementAnimated 被强行平铺——这正是"文件列表界面又被平铺"的根因。
-            // 命中 .gallery 或 .undetermined（子树未就绪）时改为只居中、不平铺；不锁 processedPIDs、
-            // 不 markCentered（同 handle() 不变量，否则后续真文档窗口会被永久挡住无法平铺）。
-            // .undetermined 同样只居中：resize 时刻子树可能仍未就绪，平铺会锁死误判（同主路径根因）。
-            // 居中不涉及 resize、无"来回拉扯"风险。
-            if self.tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleID),
-               !self.windowHasDocument(windowElement)
-            {
-                let kind = self.classifyDocumentAppWindow(windowElement)
-                if kind == .gallery || kind == .undetermined {
-                    DiagnosticLog.debug("handle[resize]: document-chooser \(kind) window — center only, skip retile pid=\(pid)")
-                    _ = try? self.service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                    return
-                }
-                // .document（无 kAXDocument 但有文档内容）→ 落到下方正常 retile。
-            }
-
-            // 已在平铺目标 16px 容差内 → 无需重铺（避免对平铺态窗口反复触发）。
-            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
-                DiagnosticLog.debug("handle[resize]: window already near tiled target, skip retile")
-                return
-            }
-
-            DiagnosticLog.debug("handle[resize]: window off target → retile pid=\(pid)")
-            _ = try? self.service.tileWindowElementAnimated(
-                windowElement,
-                pid: pid,
-                appElement: appElement,
-                insets: insets
-            )
+        // 标记该窗口为「手动」：用户缩放后保持其尺寸，直到下次切 App / 切 Space 才重新排版。
+        if let manualKey = key(pid: pid, window: element) {
+            manualWindowKeys.insert(manualKey)
+            DiagnosticLog.debug("handle[resize]: mark window manual key=\(manualKey) pid=\(pid)")
         }
-        resizeRetileTimer = timer
-        timer.resume()
-        return true
+        return false
     }
 
-    /// moved 通知旁路：粘性 Option 手动排版的拖动路径。
+    /// moved 通知旁路：用户拖动窗口 → 标记「手动」，不再立即吸附。
     ///
     /// 与 `handleResize` 同构的独立旁路（绕过 processedPIDs 锁——moved 持续触发，不能锁）。
-    /// 两件事：
-    ///   1. **按住 Option 拖动** → 标记该窗口为「手动」（粘性，写入 manualWindowKeys）。
-    ///      此后切 App/屏幕不再对它自动居中/平铺（由 handle() 主路径的手动窗口守卫拦截）。
-    ///   2. **不按 Option 拖动一个已是「手动」的窗口** → 清除手动标记并立即吸附回排版位
-    ///      （调用 applyLayout，复用与首次排版完全一致的逻辑）。
+    /// 新需求：任何手动移动都不立即吸附——删除「不按 Option 拖动则立即 applyLayout 归位」的逻辑，
+    /// 改为只要是通过前台 / stale / 真实窗口校验的 moved，就标记该窗口为「手动」（写入 manualWindowKeys），
+    /// 由 handle() 主路径的手动窗口守卫拦截，直到下一次切 App / 切 Space 时清掉该 PID 的标记后才重新排版。
+    /// Option 修饰键不再影响语义。
     ///
-    /// 仅真正的拖动才标记——按 Option 切聚焦(focusedChanged) 走 handle() 主路径，**不**经过本旁路，
+    /// 仅真正的拖动才标记——切聚焦(focusedChanged) 走 handle() 主路径，**不**经过本旁路，
     /// 故不会误标记（符合「仅真正拖动/改尺寸才标记」的设计决策）。
     ///
-    /// 与 resize 旁路一样：白名单 / subrole 守卫不适用（拖动检测必须对所有窗口生效，否则
-    /// 「Option 拖动居中类 app」无法标记手动）。前台守卫与 stale 守卫复用 handleResize 的模式。
+    /// 关键守卫：Plumb 自身的平铺/居中动画（Phase-A 写 AXPosition）也会触发 kAXMovedNotification
+    /// 回到本旁路。必须用 `service.isAnyAnimationInProgress` 排除——否则自己的动画会把窗口误标记
+    /// 为「手动」，导致切 App/Space 后该窗口永远不再被居中/平铺。
     @discardableResult
     private func handleMove(element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
         // pid 已由 handle() 入口解析过；这里仅做必要的合法性确认。
@@ -1376,39 +1141,21 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[move]: stale — observedPID=\(observedPID) pid=\(pid), skip")
             return false
         }
-
         // moved 通知的 element 应是窗口本身；校验 role == AXWindow，排除非窗口元素。
         guard isMovableNonAuxiliaryWindow(element) else {
             DiagnosticLog.debug("handle[move]: element not a movable non-auxiliary window, skip")
             return false
         }
-
-        let moveKey = key(pid: pid, window: element)
-
-        // 不按 Option 拖动一个「手动」窗口 → 清除手动标记并立即吸附回排版位。
-        // 必须先清掉该窗口在居中缓存中的旧条目 + 该 PID 的 processedPIDs 锁，否则 applyLayout
-        // 的 `hasCentered` / 后续路径会把它当「已排版」而直接早退，吸附失效。
-        //（同 recenterObservedApp 切 Space 的清理语义，但收窄到单个窗口的 key 而非整个 pid 前缀。）
-        if !isUserHoldingOption(), let moveKey, manualWindowKeys.contains(moveKey) {
-            manualWindowKeys.remove(moveKey)
-            centeredWindowKeySet.remove(moveKey)
-            centeredWindowKeys.removeAll { $0 == moveKey }
-            processedPIDs.remove(pid)
-            DiagnosticLog.debug("handle[move]: Option not held + manual window → clear & re-center/tile pid=\(pid)")
-            let appElement = AXUIElementCreateApplication(pid)
-            return applyLayout(
-                notification: "move",
-                windowElement: element,
-                pid: pid,
-                appElement: appElement,
-                bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            )
+        // 排除 Plumb 自身居中/平铺动画产生的 moved：进行中的动画不视作用户手势，不标记手动。
+        guard !service.isAnyAnimationInProgress else {
+            DiagnosticLog.debug("handle[move]: animation in progress (self-animated) — ignore, no manual mark")
+            return false
         }
 
-        // 按住 Option 拖动 → 标记该窗口为「手动」（粘性）。切 App/屏幕后仍保持手动。
-        if isUserHoldingOption(), let moveKey {
+        // 标记该窗口为「手动」：用户拖动后保持其位置，直到下次切 App / 切 Space 才重新排版。
+        if let moveKey = key(pid: pid, window: element) {
             manualWindowKeys.insert(moveKey)
-            DiagnosticLog.debug("handle[move]: Option held → mark window manual (sticky) key=\(moveKey) pid=\(pid)")
+            DiagnosticLog.debug("handle[move]: mark window manual key=\(moveKey) pid=\(pid)")
         }
         return false
     }
@@ -1425,21 +1172,6 @@ final class WindowEventObserver {
         else { return false }
         let tol: CGFloat = 16
         return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
-    }
-
-    /// 居中窗口是否已处在目标原点（用于切 App 时的「立即校验」）。
-    ///
-    /// 通过 `service.centeredTargetAXOrigin` 拿到该窗口在其报告坐标空间内的居中目标 AX 原点
-    ///（复用居中路径的坐标空间探测），再比较当前 AXPosition 与目标的差值是否在容差内。
-    /// 与 `isWindowNearTiledTarget` 同构——后者比 size（平铺只关心尺寸），本方法比 origin
-    ///（居中只关心位置）。容差取 10px：居中目标是单点原点、无尺寸抖动，比平铺 16px 容差更紧，
-    /// 避免把「轻微偏移的窗口」误判为已居中而漏修。读取失败时保守返回 false（视为不在位 → 触发归位）。
-    private func isWindowNearCenterTarget(_ windowElement: AXUIElement, pid: pid_t) -> Bool {
-        guard let current = pointAttributeValue(windowElement),
-              let target = service.centeredTargetAXOrigin(for: windowElement, pid: pid)
-        else { return false }
-        let tol: CGFloat = 10
-        return abs(current.x - target.x) <= tol && abs(current.y - target.y) <= tol
     }
 
     /// 平铺后窗口是否真正放大到接近目标尺寸。
@@ -1669,39 +1401,6 @@ final class WindowEventObserver {
         AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "") == "com.apple.journal"
     }
 
-    /// 需要屏蔽「二级窗口平铺」的浏览器 bundle id（归一化小写比较）。
-    /// 这些 App 的二级窗口（设置/下载/弹窗/PWA/扩展窗）常报告 AXStandardWindow subrole，
-    /// 会绕过 subrole 过滤被误平铺。硬编码默认覆盖主流浏览器；访达单独由 isFinderBundle 处理。
-    /// ChatGPT Atlas (com.openai.atlas) 本质是 Chromium 内核浏览器，二级窗口同样会泄漏——
-    /// 它原有的 isAtlasSettingsWindow 特例只覆盖「设置窗口」，弹窗/PWA/工具窗仍被居中/平铺，
-    /// 故纳入此表走通用的二级窗口屏蔽（候选 ≠ kAXMainWindow 即跳过）。
-    private static let secondaryWindowShieldedBundleIDs: Set<String> = [
-        "com.apple.safari",
-        "com.google.chrome",
-        "com.google.chrome.canary",
-        "com.google.chromefortesting",
-        "org.chromium.chromium",
-        "com.microsoft.edgemac",
-        "com.microsoft.edgemac.beta",
-        "com.microsoft.edgemac.dev",
-        "com.microsoft.edgemac.canary",
-        "org.mozilla.firefox",
-        "com.brave.browser",
-        "com.brave.browser.beta",
-        "com.brave.browser.nightly",
-        "company.thebrowser.browser",   // Arc
-        "com.vivaldi.vivaldi",
-        "com.operasoftware.opera",
-        "com.openai.atlas"              // ChatGPT Atlas（Chromium 内核，二级窗口同样泄漏）
-    ]
-
-    /// bundle id 是否属于「需屏蔽二级窗口平铺」的浏览器或访达（归一化比较）。
-    /// 作用域收窄：仅命中此集合的 App 才进入二级窗口跳过逻辑，不影响文档类 App 或其他白名单 App。
-    private func shieldedFromSecondaryWindowTiling(_ bundleIdentifier: String?) -> Bool {
-        let id = AppTilingSettings.normalizeBundleID(bundleIdentifier ?? "")
-        return Self.secondaryWindowShieldedBundleIDs.contains(id) || id == "com.apple.finder"
-    }
-
     /// 判定候选窗口是否为该 App 的【非主】窗口（即二级窗口）。
     ///
     /// 判据分三档（按可靠性顺序）：
@@ -1814,18 +1513,6 @@ final class WindowEventObserver {
         return Self.journalSettingsTitles.contains(title)
     }
 
-    /// 判定用户当前是否按住 Option (⌥) 键——作为「手动排版」的显式信号。
-    ///
-    /// 用途：当用户按住 Option 拖动/分屏窗口时，Plumb 完全跳过居中与平铺，
-    /// 把布局权交给用户。Option 是瞬时修饰键，松开即失效，故按事件处理时刻的
-    /// 瞬时状态判定，不追踪历史。
-    ///
-    /// 读取时机：AXObserver 回调与防抖定时器均在主线程执行（main run loop / .main queue），
-    /// NSEvent.modifierFlags 在主线程读取是可靠的。
-    private func isUserHoldingOption() -> Bool {
-        NSEvent.modifierFlags.contains(.option)
-    }
-
     private func sizeAttributeValue(_ windowElement: AXUIElement) -> CGSize? {
         windowElement.axSize(kAXSizeAttribute as CFString)
     }
@@ -1854,13 +1541,12 @@ final class WindowEventObserver {
         insets: TileInsets,
         bundleIdentifier: String?
     ) -> AXUIElement? {
-        // 浏览器/访达二级窗口屏蔽：本方法会枚举该 App 的所有 AXWindow 并逐个平铺，
-        // 若不同步屏蔽，则聚焦主窗口时同时打开的二级窗口（设置/扩展/弹窗）会被一并平铺——
+        // 所有 App 通用：滤除二级窗口。本方法会枚举该 App 的所有 AXWindow 并逐个平铺，
+        // 若不同步屏蔽，则聚焦主窗口时同时打开的二级窗口（设置/扩展/弹窗/Get Info 等）会被一并平铺——
         // 这正是用户报告的「ChatGPT Atlas 二级页面被自动平铺」根因（handle() 主路径的候选
-        // 是主窗口，主路径守卫放行；但 tilePendingWindows 的内部循环对二级窗口无任何保护）。
-        // 与 handle()/handleResize() 守卫一致：命中屏蔽列表（浏览器/访达）且候选是该 App 的
-        // 非主窗口时跳过，保持其弹出尺寸/位置。主窗口不受影响。
-        let shielded = shieldedFromSecondaryWindowTiling(bundleIdentifier)
+        // 是主窗口，主路径守卫放行；但 tilePendingWindows 的内部循环对二级窗口此前无任何保护）。
+        // 对所有候选统一调用 isSecondaryWindowOfApp 判定，命中即跳过，保持其弹出尺寸/位置。
+        // 主窗口不受影响。
 
         var candidates: [AXUIElement] = []
 
@@ -1874,11 +1560,9 @@ final class WindowEventObserver {
             }
             candidates.append(window)
         }
-        // 滤除被屏蔽 App 的二级窗口：仅在命中屏蔽列表时判定，避免给文档类 App 等增加开销。
-        if shielded {
-            candidates = candidates.filter {
-                !isSecondaryWindowOfApp($0, appElement: appElement, bundleIdentifier: bundleIdentifier)
-            }
+        // 对所有 App 统一滤除二级窗口（候选 == 主窗口不会被误杀）。
+        candidates = candidates.filter {
+            !isSecondaryWindowOfApp($0, appElement: appElement, bundleIdentifier: bundleIdentifier)
         }
         var firstTiledWindow: AXUIElement?
         for window in candidates {
