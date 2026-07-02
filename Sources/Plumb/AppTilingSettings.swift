@@ -155,9 +155,16 @@ struct AppTilingSettings: Equatable, Codable {
     ///   - 选择器窗口的 kAXDocumentAttribute 为空，文档窗口为 file:// URL；
     /// 故用 kAXDocument 是否非空区分两者，对选择器只居中、不平铺、不锁 PID，
     /// 等文档窗口出现后再平铺。
+    ///
+    /// ⚠️ Pages/Numbers 的 bundle id 在不同 macOS 版本上大小写不同：旧版为
+    /// `com.apple.iwork.pages/numbers`，当前 macOS 上实际为 `com.apple.Pages/Numbers`
+    ///（归一化后 `com.apple.pages/numbers`）。两类都需保留，否则新版 Pages/Numbers
+    /// 不会命中选择器感知，导致模板/文件列表被当作普通窗口平铺。
     static let defaultDocumentChooserBundleIDs: Set<String> = [
-        "com.apple.iwork.pages",      // Pages
-        "com.apple.iwork.numbers",    // Numbers
+        "com.apple.iwork.pages",      // Pages（旧 bundle id）
+        "com.apple.iwork.numbers",    // Numbers（旧 bundle id）
+        "com.apple.pages",            // Pages（当前 macOS 实际 bundle id，归一化后小写）
+        "com.apple.numbers",          // Numbers（当前 macOS 实际 bundle id）
         "com.microsoft.word",         // Microsoft Word
         "com.microsoft.excel"         // Microsoft Excel
     ]

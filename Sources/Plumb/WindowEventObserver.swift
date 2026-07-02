@@ -1163,10 +1163,14 @@ final class WindowEventObserver {
     /// 窗口当前 frame 是否已完整匹配平铺目标（用于停止平铺稳定重试）。
     ///
     /// 委托给 `service.isWindowAtTiledTarget`：它在 service 内部复用与平铺路径相同的
-    /// 坐标空间探测（4 种空间 + CG 信号），比较 **minX/minY/width/height 四个维度**
-    /// （不只 size）。替换此前「仅比较宽高」的启发式——后者会把「尺寸到位但 origin 未对齐」
-    /// 的窗口误判为已完成平铺（Pages 新建文稿漂移的根因之一）。容差 16px（沿用原值），
-    /// 失败时返回 false（保守地继续重试）。
+    /// 坐标空间探测（4 种空间 + CG 信号），并采用「**origin 严格 3px / size 宽松 16px**」
+    /// 判定（`WindowGeometry.frameMatchesTiledTarget`）。替换此前「四维统一 16px」宽松判定——
+    /// 后者会把 iWork（Numbers/Pages）smooth Phase B resize 后 origin 漂移（实测 x: 16→25，
+    /// 漂移 9px < 16px）的窗口误判为已完成平铺，导致首次平铺右侧边距偏差。origin 严格后：
+    /// 漂移窗口不再被判为完成 → 本方法的稳定重试继续触发 `tileWindowElementAnimated` →
+    /// `emitFinalAnchor` 把 origin 锚回 `targetFrame.origin` → 最终严格在位后停止重试。
+    /// size 宽松保留对 Terminal/electerm 字符网格 snap 尺寸（偏差 10-20px）的兼容。
+    /// 读取失败时保守返回 false（继续重试）。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
         service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
     }
@@ -1180,9 +1184,9 @@ final class WindowEventObserver {
     /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
     ///
     /// 判据委托给 `service.isWindowAtTiledTarget`（与 `isWindowNearTiledTarget` 同源、
-    /// 保持一致），要求 frame 四维均在 16px 容差内。读取失败时保守返回 false
-    /// （视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时保守视为主窗口」的同类取舍
-    /// 一致（宁可多试一次也不误锁）。
+    /// 保持一致），采用「**origin 严格 3px / size 宽松 16px**」判定（详见该方法注释）。
+    /// 读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时
+    /// 保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
     ///
     /// 语义配合：返回 false 时调用方应【不】markCentered、【不】锁 processedPIDs，
     /// 与上方 document-chooser / DMG 分支的「不锁」不变量同构——让真正主窗口有机会被处理。

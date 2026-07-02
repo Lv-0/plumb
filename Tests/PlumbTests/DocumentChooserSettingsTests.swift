@@ -13,14 +13,33 @@ import Testing
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Test
-func documentChooserDefaultsContainFourDocApps() async throws {
+func documentChooserDefaultsContainPagesNumbersWordExcel() async throws {
+    // 默认预置同时覆盖旧 iWork bundle id（com.apple.iwork.pages/numbers）与当前 macOS 实际
+    // bundle id（com.apple.Pages/Numbers，归一化后小写），再加 Office（Word/Excel）。
     let defaults = AppTilingSettings.default.documentChooserBundleIDs
     #expect(defaults == [
         "com.apple.iwork.pages",
         "com.apple.iwork.numbers",
+        "com.apple.pages",
+        "com.apple.numbers",
         "com.microsoft.word",
         "com.microsoft.excel"
     ])
+}
+
+@Test
+func documentChooserDefaultsMatchCurrentPagesNumbersBundleIDs() async throws {
+    // 锁定：当前 macOS 上 Pages/Numbers 实际 bundle id 是 com.apple.Pages / com.apple.Numbers
+    //（大小写混合），归一化后命中默认列表 → isDocumentChooserApp 必须为 true。
+    let withDefaults = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16), tiledBundleIDs: [],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: AppTilingSettings.defaultDocumentChooserBundleIDs
+    )
+    #expect(withDefaults.isDocumentChooserApp(bundleIdentifier: "com.apple.Pages") == true)
+    #expect(withDefaults.isDocumentChooserApp(bundleIdentifier: "com.apple.Numbers") == true)
 }
 
 @Test
@@ -55,7 +74,7 @@ func documentChooserRoundTripAndNormalization() async throws {
 
 @Test
 func documentChooserBackwardCompatWhenKeyAbsent() async throws {
-    // 旧版本无 documentChooserBundleIDs 键时应回退到默认预置（4 个 App）。
+    // 旧版本无 documentChooserBundleIDs 键时应回退到默认预置（6 个 App）。
     let suiteName = "Plumb.tests.\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suiteName) else {
         Issue.record("Failed to create isolated UserDefaults suite")

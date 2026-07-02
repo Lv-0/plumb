@@ -103,6 +103,29 @@ enum WindowGeometry {
         )
     }
 
+    /// 平铺完成严格判定：frame 四维是否「origin 严格、size 宽松」地匹配平铺目标。
+    ///
+    /// 用途：区分「真正落到平铺目标」与「尺寸到位但 origin 漂移」——后者会被宽松判定
+    ///（四维统一容差）误判为已完成，导致 markCentered + processedPIDs 锁在漂移位置上，
+    /// 表现为 iWork/Numbers 首次平铺后右侧边距偏差（实测 origin x 漂移 9px）。
+    ///
+    /// 容差策略：**origin 严格（originTolerance，默认 3px）、size 宽松（sizeTolerance，默认 16px）**。
+    ///   - origin 严格挡住 iWork smooth Phase B resize 后的 origin 漂移（< 16px 但肉眼可见、改变边距）；
+    ///   - size 宽松保留对 Terminal/electerm 按字符网格 snap 尺寸的 app 的兼容——它们的尺寸
+    ///     确实无法精确到位（width/height 偏差可达 10-20px），但 origin 正确，应判定为完成并锁 PID，
+    ///     避免首次启动反复重试到上限 + 每次切 App 回来都重新平铺的回归。
+    static func frameMatchesTiledTarget(
+        _ frame: CGRect,
+        target: CGRect,
+        originTolerance: CGFloat = 3,
+        sizeTolerance: CGFloat = 16
+    ) -> Bool {
+        abs(frame.minX - target.minX) <= originTolerance &&
+            abs(frame.minY - target.minY) <= originTolerance &&
+            abs(frame.width - target.width) <= sizeTolerance &&
+            abs(frame.height - target.height) <= sizeTolerance
+    }
+
     /// 把“全屏 frame 与可用 visibleFrame”之间的逐边 inset 计算下沉为纯函数。
     /// 让 Dock 在左/右/下、菜单栏在顶部的逐屏差异可被独立测试。
     static func insetsFromVisibleFrame(frame: CGRect, visible: CGRect) -> ScreenSelection.EdgeInsets {

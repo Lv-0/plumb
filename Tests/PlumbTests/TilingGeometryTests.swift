@@ -143,3 +143,63 @@ func topLeftAnchoredOriginIdentityWhenSizesMatch() async throws {
     let origin = WindowGeometry.topLeftAnchoredOrigin(targetFrame: target, actualSize: target.size)
     #expect(origin == target.origin)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - frameMatchesTiledTarget（平铺完成严格判定：origin 严格 / size 宽松）
+//
+// 背景：首次平铺的完成确认（didWindowActuallyTile / isWindowNearTiledTarget）此前用
+// 四维统一 16px 容差。iWork（Numbers/Pages）在 smooth Phase B resize 后会让 origin 漂移
+//（实测 x: 16→25，漂移 9px < 16px），被宽松判定误判为「已完成平铺」→ markCentered +
+// processedPIDs 锁死本激活周期 → 首次平铺右侧边距偏差；切 App 会清锁重平铺故正常。
+// 修复：完成判定改用「origin 严格 3px、size 宽松 16px」——origin 严格挡下 iWork 漂移，
+// size 宽松保留对 Terminal/electerm 按字符网格 snap 尺寸（偏差可达 10-20px）的 app 的兼容。
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Test
+func frameMatchesTiledTarget_originDrift9px_rejects() async throws {
+    // ⭐ Numbers 根因回归保护：target origin x=16，实际 origin x=25（漂移 9px），size 精确。
+    // 旧的四维统一 16px 容差会判定通过（误锁在漂移位置）；严格 origin 容差 3px 必须挡下。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let drifted = CGRect(x: 25, y: 40, width: 960, height: 752)
+    #expect(WindowGeometry.frameMatchesTiledTarget(drifted, target: target) == false)
+}
+
+@Test
+func frameMatchesTiledTarget_exactMatch_accepts() async throws {
+    // 四维零偏差 → 通过。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    #expect(WindowGeometry.frameMatchesTiledTarget(target, target: target) == true)
+}
+
+@Test
+func frameMatchesTiledTarget_within2px_accepts() async throws {
+    // origin 各偏 2px（在 3px 严格容差边界内）、size 各偏 2px（远在 16px 宽松容差内）→ 通过。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let near = CGRect(x: 18, y: 42, width: 962, height: 754)
+    #expect(WindowGeometry.frameMatchesTiledTarget(near, target: target) == true)
+}
+
+@Test
+func frameMatchesTiledTarget_sizeSnapOnly_accepts() async throws {
+    // Terminal/electerm 字符网格 snap：origin 精确、width 偏 15px（在 16px size 宽松容差内）→ 通过。
+    // 这类 app 尺寸确实无法精确到位，但 origin 正确，应判定为完成并锁 PID（避免每次切 App 重平铺回归）。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let snapped = CGRect(x: 16, y: 40, width: 945, height: 752)
+    #expect(WindowGeometry.frameMatchesTiledTarget(snapped, target: target) == true)
+}
+
+@Test
+func frameMatchesTiledTarget_sizeSnapBeyondLenient_rejects() async throws {
+    // width 偏 20px 超出 16px size 宽松容差 → 拒绝（过大 snap 仍需重试）。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let tooFar = CGRect(x: 16, y: 40, width: 940, height: 752)
+    #expect(WindowGeometry.frameMatchesTiledTarget(tooFar, target: target) == false)
+}
+
+@Test
+func frameMatchesTiledTarget_originDriftBlocksEvenWithExactSize() async throws {
+    // 锁定 iWork 场景：即使 size 完美，origin x 漂 9px 仍必须拒绝（不能被 size 精确掩盖）。
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let drifted = CGRect(x: 25, y: 40, width: 960, height: 752)
+    #expect(WindowGeometry.frameMatchesTiledTarget(drifted, target: target) == false)
+}

@@ -1032,17 +1032,28 @@ final class WindowCenteringService {
         completion: (() -> Void)?
     ) {
         let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
-        if let actualSize, (abs(actualSize.width - endSize.width) > 4 || abs(actualSize.height - endSize.height) > 4) {
-            let anchoredBL = WindowGeometry.topLeftAnchoredOrigin(targetFrame: targetFrame, actualSize: actualSize)
+        let actualPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
+        // 尺寸偏差（app 拒绝缩放，如终端按字符网格 / Pages layout 滞后）。
+        let sizeOff = actualSize.map { abs($0.width - endSize.width) > 4 || abs($0.height - endSize.height) > 4 } ?? false
+        // 位置漂移：iWork（Numbers/Pages）在 60Hz 小步 kAXSize 写入（smooth Phase B）期间会让 origin 漂移
+        // （实测 Numbers x: 16→25），即便尺寸已达成。Terminal 等不漂的 app 此处为 false（no-op）。
+        let posOff = actualPos.map { abs($0.x - targetAXOrigin.x) > 2 || abs($0.y - targetAXOrigin.y) > 2 } ?? false
+        if sizeOff || posOff {
+            // 尺寸漂了：用实际尺寸做左上角锚定（保持左/上边距 = 目标 insets），与 v2.0.42+ 一致。
+            // 尺寸对但位置漂了（iWork resize 漂 origin）：尺寸用 endSize（=目标），origin 锚回 targetFrame.origin。
+            let anchorSize = (sizeOff ? actualSize : endSize) ?? endSize
+            let anchoredBL = sizeOff
+                ? WindowGeometry.topLeftAnchoredOrigin(targetFrame: targetFrame, actualSize: anchorSize)
+                : targetFrame.origin   // 尺寸已对 → 用目标 origin（经 toAXOrigin 换算回 targetAXOrigin）
             let anchoredAX = toAXOrigin(
                 bottomLeftOrigin: anchoredBL,
-                windowSize: actualSize,
+                windowSize: anchorSize,
                 screenFrame: context.screen.frame,
                 space: context.space,
                 primaryTopY: primaryTopY
             )
             _ = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
-            DiagnosticLog.debug("tile-animator: app snapped size to \(actualSize) (target \(endSize)); top-left anchored to \(anchoredAX) targetFrame=\(targetFrame)")
+            DiagnosticLog.debug("tile-animator: anchored drift (sizeOff=\(sizeOff) posOff=\(posOff)) actualPos=\(actualPos.map { String(describing: $0) } ?? "nil") actualSize=\(actualSize.map { String(describing: $0) } ?? "nil") → \(anchoredAX) targetAX=\(targetAXOrigin)")
         }
         let postSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
@@ -1095,14 +1106,23 @@ final class WindowCenteringService {
     /// （不只 size）——这是与 `tiledTargetFrame` 配套的「在位校验」：`tiledTargetFrame`
     /// 只返回目标 frame，调用方需自行比较；本方法封装「解算目标 + 读窗口 + 四维比较」整段。
     ///
-    /// 供 `WindowEventObserver.isWindowNearTiledTarget` / `didWindowActuallyTile` 取代
-    /// 此前「仅比较宽高」的启发式——后者会把「尺寸到位但 origin 未对齐」的窗口误判为
-    /// 已完成平铺（Pages 新建文稿的根因之一），导致 `markCentered` + `processedPIDs` 锁定
-    /// 在错误位置上。
+    /// ⚠️ 完成判定采用「**origin 严格 / size 宽松**」（`WindowGeometry.frameMatchesTiledTarget`，
+    /// origin 3px / size 16px），不是四维统一容差：
+    ///   - origin 严格挡住 iWork（Numbers/Pages）在 smooth Phase B resize 后的 origin 漂移
+    ///     （实测 x: 16→25，漂移 9px）。旧的四维统一 16px 容差会把这种「尺寸到位但 origin 漂移」
+    ///     的窗口误判为已完成平铺 → markCentered + processedPIDs 锁在漂移位置上 → 首次平铺
+    ///     右侧边距偏差（切 App 会清锁重平铺故正常，表现为「首次 vs 切回来不一致」）。
+    ///   - size 宽松保留对 Terminal/electerm 按字符网格 snap 尺寸（偏差可达 10-20px）的 app
+    ///     的兼容：它们的尺寸确实无法精确到位，但 origin 正确，应判定为完成并锁 PID。
+    ///   - 漂移窗口被 origin 严格判定挡下后，调用方的稳定重试（`startTileStabilizationRetries`）
+    ///     会继续触发 `tileWindowElementAnimated`，经 `emitFinalAnchor` 的 posOff 分支把 origin
+    ///     锚回 `targetFrame.origin`，最终 origin 在 3px 内、size 仍在宽松容差内 → 判定成功。
     ///
-    /// 与 `tileReachedTarget` 的判定语义完全一致（同走 CG 优先 + AX 回退），仅多一层
-    /// 「自己解算 targetFrame」的封装。读取失败或无法确定坐标空间时返回 false
-    /// （保守地由调用方视为「未达目标」，继续重试）。
+    /// `tolerance` 参数保留以维持公共接口稳定，但内部统一走严格判定（忽略传入值）。
+    /// 与 `tileReachedTarget` 共用坐标空间探测（同走 CG 优先 + AX 回退），但**判定容差不同**：
+    /// 后者是动画内部逐坐标空间试探的「写后立即确认」（四维统一容差，容忍空间切换亚像素抖动）；
+    /// 本方法是 observer 端的「最终完成确认」（origin 严格 / size 宽松）。读取失败或无法确定
+    /// 坐标空间时返回 false（保守地由调用方视为「未达目标」，继续重试）。
     func isWindowAtTiledTarget(
         _ windowElement: AXUIElement,
         pid: pid_t?,
@@ -1130,7 +1150,8 @@ final class WindowCenteringService {
             let cocoaRect = cocoaRectFromCGWindowBounds(cgRect, screen: screenPick.screen, primaryTopY: primaryTopY)
             let visibleFrame = effectiveVisibleFrame(for: screenPick.screen)
             let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
-            return frameMatchesTarget(cocoaRect, target: targetFrame, tol: tolerance)
+            // origin 严格 / size 宽松（详见方法注释）：挡住 iWork origin 漂移，兼容 size snap。
+            return WindowGeometry.frameMatchesTiledTarget(cocoaRect, target: targetFrame)
         }
 
         // AX 回退路径：探测坐标空间 → 取 context.currentGlobalRect → 比 frame。
@@ -1142,7 +1163,7 @@ final class WindowCenteringService {
         ) else { return false }
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
-        return frameMatchesTarget(context.currentGlobalRect, target: targetFrame, tol: tolerance)
+        return WindowGeometry.frameMatchesTiledTarget(context.currentGlobalRect, target: targetFrame)
     }
 
 

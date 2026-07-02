@@ -25,7 +25,7 @@ private func makeIsolated() -> (defaults: UserDefaults, tmpDir: URL, fileURL: UR
 @Test
 func e2e_setAppInsets_persistsAcrossProcessAndEffectiveAfterRestart() async throws {
     // 模拟用户在抽屉里把 com.slack 设为四向 30px、com.terminal 设为四向 4px。
-    let (_, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
     defer {
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: tmpDir)
@@ -44,9 +44,12 @@ func e2e_setAppInsets_persistsAcrossProcessAndEffectiveAfterRestart() async thro
     settings.perAppInsets["com.tinyspell.terminal"] = TileInsets(all: 4)
     store.save(settings)
 
-    // 模拟重启：新进程、新 UserDefaults、同文件路径读取。
-    let freshDefaults = UserDefaults(suiteName: "Plumb.tests.fresh.\(UUID().uuidString)")!
-    let freshStore = AppTilingSettingsStore(defaults: freshDefaults, settingsFileURL: fileURL)
+    // 模拟重启：新进程、同文件路径读取。
+    // 复用同一 UserDefaults suite：store.save 已双写文件 + UserDefaults 镜像，OTA 场景下
+    // 两者并存；用全新空 suite 会让 loadFromUserDefaults 回退 .default，其 documentChooser
+    // 条目数（6）多于本测试（本测试显式置 chooser=[]，列表总数 5），误触发 load() 的一致性
+    // 守卫而错误回写——故复用同 suite。
+    let freshStore = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
     let loaded = freshStore.load()
 
     // WindowEventObserver 路径：effectiveInsets(for:) 解析——这是实际平铺时用的值。
