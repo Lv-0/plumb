@@ -426,6 +426,15 @@ final class WindowEventObserver {
             appElement: appElement,
             bundleIdentifier: app.bundleIdentifier
         )
+
+        // 切到 App 时主窗口通常已存在且稳定：**立即（0 延迟）**校验是否已在目标位。
+        // - 已在位 → 标记已处理、不挪动（消除切回时被重新居中/平铺一遍的视觉跳动 + 0.45s 等待）；
+        //   此时已 processedPIDs.insert，上方 retry 触发的 handle() 会被守卫早退，无冲突。
+        // - 居中窗口偏离 → 立即归位（单次 setFrame，与激活动画无竞争）。
+        // - 平铺窗口偏离 → 静默，交 retry 走两阶段平铺动画（避免立即平铺与激活动画竞争）。
+        // - 读不到候选 / 坐标空间未定 → 静默，交 retry 兜底（首次打开 / 启动屏 app，窗口仍在抖动）。
+        // 必须放在 startInitialCenteringRetries 之后：retry 已先注册，立即校验即便读不到也不影响兜底。
+        recheckLayoutImmediately(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
     }
 
     /// 注册窗口通知到 observer，返回是否全部成功。
@@ -814,6 +823,111 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[\(notification)]: center failed pid=\(pid) error=\(error)")
             return false
         }
+    }
+
+    /// 切换到某 App 时**立即（0 延迟）**校验其主窗口是否已在目标位，按需修复。
+    ///
+    /// 解决「切回 App 后要等 0.45s、且窗口即使在位也被重新居中/平铺一遍（视觉跳动）」的体验问题。
+    /// `attachToFrontmostApp` 在 `startInitialCenteringRetries`（0.45s）之前调用本方法：
+    ///
+    /// - **已在位** → `markCentered` + `processedPIDs.insert`，不挪动。后续 0.45s retry 触发的 `handle()`
+    ///   会被 `processedPIDs` 守卫早退，不冲突。彻底消除切回时的跳动 + 等待。
+    /// - **居中窗口偏离** → 立即 `applyLayout` 归位（居中是单次 setFrame，无两阶段动画，与激活动画无竞争）。
+    /// - **平铺窗口偏离** → 静默 return，交 0.45s retry 走 `tilePendingWindows` 两阶段动画（避免立即平铺
+    ///   与 app 激活动画竞争——同 line 414 注释的担忧）。
+    /// - **读不到候选窗口 / 坐标空间未确定** → 静默 return，交 0.45s retry 兜底（首次打开 / 启动屏 app，
+    ///   此时窗口刚在抖动，立即校验反而会算错坐标空间——这正是 retry 延迟存在的理由）。
+    ///
+    /// 守卫与 `handle()` 主路径**完全一致**（同一组特例守卫），确保立即校验与 retry 路径行为同构：
+    /// Plumb 自身 PID、manual 粘性窗口、Atlas 设置窗、Journal 设置窗、浏览器/访达二级窗口屏蔽。
+    /// Option 锁定的手动窗口在此被跳过、保持用户摆放位置不变。
+    private func recheckLayoutImmediately(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
+        // 仅前台 app：与 handle() 一致，避免对后台窗口做任何写操作。
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication,
+              frontmostApp.processIdentifier == pid
+        else {
+            DiagnosticLog.debug("recheck: frontmost != pid \(pid), skip")
+            return
+        }
+
+        // 跳过 Plumb 自身（设置窗口由 showWindow 精确居中，与 handle() line 539-542 同因）。
+        if pid == ProcessInfo.processInfo.processIdentifier {
+            DiagnosticLog.debug("recheck: own PID \(pid) — skip")
+            return
+        }
+
+        guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else {
+            // 候选窗口尚未就绪（首次打开 / 启动屏）：交 0.45s retry 兜底。
+            DiagnosticLog.debug("recheck: no candidate window yet — defer to retry pid=\(pid)")
+            return
+        }
+
+        // —— 以下守卫与 handle() 主路径逐一对应（同 bundle / 同窗口语义）——
+
+        // 粘性手动窗口：保持用户手动摆放位置（与 handle() line 582 同因）。
+        if let key = key(pid: pid, window: windowElement), manualWindowKeys.contains(key) {
+            DiagnosticLog.debug("recheck: manual window — keep manual, skip key=\(key) pid=\(pid)")
+            return
+        }
+        // ChatGPT Atlas 设置窗口特例（与 handle() line 594 同因）。
+        if isChatGPTAtlasBundle(frontmostApp.bundleIdentifier),
+           isAtlasSettingsWindow(windowElement)
+        {
+            DiagnosticLog.debug("recheck: ChatGPT Atlas settings window — skip pid=\(pid)")
+            return
+        }
+        // 手记设置窗口特例（与 handle() line 604 同因）。
+        if isJournalBundle(frontmostApp.bundleIdentifier),
+           isJournalSettingsWindow(windowElement)
+        {
+            DiagnosticLog.debug("recheck: Journal settings window — skip pid=\(pid)")
+            return
+        }
+        // 浏览器/访达二级窗口屏蔽（与 handle() line 624 同因）。
+        if shieldedFromSecondaryWindowTiling(frontmostApp.bundleIdentifier),
+           isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: frontmostApp.bundleIdentifier)
+        {
+            DiagnosticLog.debug("recheck: shielded secondary window — skip pid=\(pid)")
+            return
+        }
+
+        let tilingSettings = tilingSettingsStore.load()
+        let shouldTile = tilingSettings.shouldTile(bundleIdentifier: bundleIdentifier)
+        let effectiveInsets = tilingSettings.effectiveInsets(for: bundleIdentifier)
+
+        if shouldTile {
+            // 平铺：比 size（与 isWindowNearTiledTarget 同构）。在位 → 标记不挪；偏离 → 交 retry 平铺。
+            if isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: effectiveInsets) {
+                markCentered(windowElement: windowElement, pid: pid)
+                processedPIDs.insert(pid)
+                DiagnosticLog.debug("recheck: tiled window already in place — mark & keep pid=\(pid)")
+            } else {
+                DiagnosticLog.debug("recheck: tiled window off-target — defer re-tile to retry pid=\(pid)")
+            }
+            return
+        }
+
+        // 居中：先过白名单（与 applyLayout line 785 同因）。
+        guard tilingSettings.shouldCenter(bundleIdentifier: bundleIdentifier) else {
+            DiagnosticLog.debug("recheck: center not allowed for pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
+            return
+        }
+        if isWindowNearCenterTarget(windowElement, pid: pid) {
+            markCentered(windowElement: windowElement, pid: pid)
+            processedPIDs.insert(pid)
+            DiagnosticLog.debug("recheck: centered window already in place — mark & keep pid=\(pid)")
+            return
+        }
+
+        // 居中窗口偏离：立即归位（单次 setFrame，安全）。applyLayout 内部会 markCentered + 锁 PID。
+        DiagnosticLog.debug("recheck: centered window off-target — re-center immediately pid=\(pid)")
+        _ = applyLayout(
+            notification: "recheck",
+            windowElement: windowElement,
+            pid: pid,
+            appElement: appElement,
+            bundleIdentifier: bundleIdentifier
+        )
     }
 
     private func centerCandidateWindow(for appElement: AXUIElement, hintedElement: AXUIElement?) -> AXUIElement? {
@@ -1311,6 +1425,21 @@ final class WindowEventObserver {
         else { return false }
         let tol: CGFloat = 16
         return abs(size.width - target.width) <= tol && abs(size.height - target.height) <= tol
+    }
+
+    /// 居中窗口是否已处在目标原点（用于切 App 时的「立即校验」）。
+    ///
+    /// 通过 `service.centeredTargetAXOrigin` 拿到该窗口在其报告坐标空间内的居中目标 AX 原点
+    ///（复用居中路径的坐标空间探测），再比较当前 AXPosition 与目标的差值是否在容差内。
+    /// 与 `isWindowNearTiledTarget` 同构——后者比 size（平铺只关心尺寸），本方法比 origin
+    ///（居中只关心位置）。容差取 10px：居中目标是单点原点、无尺寸抖动，比平铺 16px 容差更紧，
+    /// 避免把「轻微偏移的窗口」误判为已居中而漏修。读取失败时保守返回 false（视为不在位 → 触发归位）。
+    private func isWindowNearCenterTarget(_ windowElement: AXUIElement, pid: pid_t) -> Bool {
+        guard let current = pointAttributeValue(windowElement),
+              let target = service.centeredTargetAXOrigin(for: windowElement, pid: pid)
+        else { return false }
+        let tol: CGFloat = 10
+        return abs(current.x - target.x) <= tol && abs(current.y - target.y) <= tol
     }
 
     /// 平铺后窗口是否真正放大到接近目标尺寸。

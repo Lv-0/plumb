@@ -974,6 +974,16 @@ final class WindowCenteringService {
         )
     }
 
+    /// 居中目标 AX origin（在窗口当前报告的坐标空间内），供 observer 做「是否已在位」校验。
+    ///
+    /// 复用 `resolveCenterTarget` 的坐标空间探测（4 种空间 + CG 信号），不写任何 AX 属性、
+    /// 不启动动画。与 `tiledTargetFrame` 同构——后者供平铺在位校验（`isWindowNearTiledTarget`），
+    /// 本方法供居中在位校验（observer 端 `isWindowNearCenterTarget`）。
+    /// 读取失败或无法确定坐标空间时返回 nil（保守地视为「不在位」）。
+    func centeredTargetAXOrigin(for windowElement: AXUIElement, pid: pid_t?) -> CGPoint? {
+        resolveCenterTarget(windowElement: windowElement, pid: pid)?.targetAXOrigin
+    }
+
     /// 是否可调整窗口大小。
     /// 探测顺序：先试 kAXSizeAttribute（标准窗口都走这条）；若失败再试 AXFrame
     /// （同时写 origin+size）。许多 Electron / Chromium 应用（如 Apifox）拒绝单独写
