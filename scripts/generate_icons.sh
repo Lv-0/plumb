@@ -107,8 +107,8 @@ func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
 
     guard let data = ctx.data else { fatalError("状态栏图标像素读取失败") }
     let pixels = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
-    // 阈值略高以吃进抗锯齿边缘，后续膨胀加粗。
-    let lineThreshold: CGFloat = 0.68
+    // 阈值偏高，只保留线芯像素，线条更细。
+    let lineThreshold: CGFloat = 0.76
     var mask = [Bool](repeating: false, count: w * h)
 
     // CGContext 像素缓冲首行在底部；转为视觉坐标（row 0 = 图像顶部，与 PNG 一致）。
@@ -124,25 +124,7 @@ func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
         }
     }
 
-    // 膨胀 1px，加粗线条。
-    var dilated = mask
-    for y in 0..<h {
-        for x in 0..<w {
-            guard !mask[y * w + x] else { continue }
-            outer: for dy in -1...1 {
-                for dx in -1...1 {
-                    let nx = x + dx, ny = y + dy
-                    if nx >= 0, nx < w, ny >= 0, ny < h, mask[ny * w + nx] {
-                        dilated[y * w + x] = true
-                        break outer
-                    }
-                }
-            }
-        }
-    }
-    mask = dilated
-
-    // 裁掉空白边距，放大主体以占满画布（菜单栏 16–20pt 下更清晰）。
+    // 裁掉空白边距，放大主体至贴边（仅留 1px 安全边）。
     var minX = w, minY = h, maxX = 0, maxY = 0
     for y in 0..<h {
         for x in 0..<w where mask[y * w + x] {
@@ -153,7 +135,7 @@ func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
     guard minX <= maxX, minY <= maxY else { fatalError("状态栏图标未检测到线条") }
 
     let out = outputSize
-    let margin = CGFloat(out) * 0.06
+    let margin: CGFloat = 1
     let avail = CGFloat(out) - margin * 2
     let srcW = CGFloat(maxX - minX + 1)
     let srcH = CGFloat(maxY - minY + 1)
@@ -170,24 +152,17 @@ func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
 
     let offsetX = margin + (avail - srcW * scale) / 2
     let offsetY = margin + (avail - srcH * scale) / 2
-    let sz = Int(max(scale, 1))
     for y in minY...maxY {
         for x in minX...maxX where mask[y * w + x] {
-            let destX0 = Int(offsetX + CGFloat(x - minX) * scale)
-            let destY0 = Int(offsetY + CGFloat(y - minY) * scale)
-            for dy in 0..<sz {
-                for dx in 0..<sz {
-                    let ox = destX0 + dx
-                    let oy = destY0 + dy
-                    guard ox >= 0, ox < out, oy >= 0, oy < out else { continue }
-                    let memOy = out - 1 - oy
-                    let i = (memOy * out + ox) * 4
-                    outPixels[i] = 0
-                    outPixels[i + 1] = 0
-                    outPixels[i + 2] = 0
-                    outPixels[i + 3] = 255
-                }
-            }
+            let ox = Int((offsetX + CGFloat(x - minX) * scale).rounded())
+            let oy = Int((offsetY + CGFloat(y - minY) * scale).rounded())
+            guard ox >= 0, ox < out, oy >= 0, oy < out else { continue }
+            let memOy = out - 1 - oy
+            let i = (memOy * out + ox) * 4
+            outPixels[i] = 0
+            outPixels[i + 1] = 0
+            outPixels[i + 2] = 0
+            outPixels[i + 3] = 255
         }
     }
 
