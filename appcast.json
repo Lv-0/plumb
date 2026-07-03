@@ -1,7 +1,7 @@
 {
-  "version": "2.0.45",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.45/Plumb-2.0.45.zip",
-  "sha256": "723a6c21e4bb13b2f7985c7a64235dde4da5b465b948dce41571a340872c6156",
+  "version": "2.0.47",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.47/Plumb-2.0.47.zip",
+  "sha256": "a7cf65e51859778c414ad652cf3fdc6067495da26b2b480281659f3b8e347706",
   "notes": {
     "en": "Fixed: tiling could not complete in a single pass and required switching apps multiple times before finishing. The tiling-completion check now reverts to the stable origin-strict (3px) / size-lenient (16px) rule. New: opening the Settings window now triggers an update check with its own short throttle (independent of the background 6h throttle), so the update status shown when you reopen Settings stays fresh. 219 tests pass.",
     "zh": "修复：平铺无法一次性完成，需要反复切换 App 多次才能平铺完成。平铺完成判定回退为稳定的「origin 严格 3px / size 宽松 16px」规则。新增：打开设置窗口时用独立短节流触发一次更新检查（不与后台 6h 节流共用），确保重新打开设置时拿到的更新状态较新，与界面文案一致。219 项测试通过。",
