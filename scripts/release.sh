@@ -131,25 +131,40 @@ load_github_token() {
 
 # ───────────────────────── 计划展示 ─────────────────────────
 print_plan() {
+  local sign_desc notes_desc
+  if [[ "$SIGN_MODE" == "developer-id" ]]; then
+    sign_desc="${SIGN_MODE} (needs DEVELOPER_ID_APP + NOTARY_PROFILE)"
+  else
+    sign_desc="${SIGN_MODE} (Plumb Local Signer)"
+  fi
+  if [[ -n "$NOTES_FILE" ]]; then
+    notes_desc="${NOTES_FILE} (prewritten)"
+  else
+    notes_desc="interactive (\$EDITOR)"
+  fi
+
   cat <<EOF
-$(c_bold "Plumb 发版计划: ${TAG}")
+$(c_bold "Plumb release plan: ${TAG}")
 
-  版本:        ${VERSION}
-  签名模式:    ${SIGN_MODE}$([[ "$SIGN_MODE" == "developer-id" ]] && echo "（需 DEVELOPER_ID_APP + NOTARY_PROFILE）" || echo "（Plumb Local Signer）")
+  version:     ${VERSION}
+  sign mode:   ${sign_desc}
   skip-bump:   ${SKIP_BUMP}
-  notes 来源:  $([[ -n "$NOTES_FILE" ]] && echo "$NOTES_FILE（预写）" || echo "交互编辑（\$EDITOR）")
+  notes:       ${notes_desc}
 
-将执行:
-  1. 预检: 工作树 / 上游同步 / swift test / swift build -c release / 密钥扫描
-  2. $([[ "$SKIP_BUMP" == "yes" ]] && echo "跳过 README bump" || echo "bump 5 个 README badge → commit 'release: ${TAG}'")
-  3. 构建签名 .app + DMG + OTA zip
-  4. 校验签名（DR 必须是证书 leaf hash，非 cdhash）
-  5. 打 tag ${TAG} + push commits & tag 到 origin
-  6. 创建 GitHub Release + 上传 dmg/zip（token 来自 ${SECRETS_FILE}）
-  7. 更新 appcast.json（version/url/sha + 5 语言 notes）→ 2 个 chore commit + push
+steps:
+  1. preflight: clean tree / on main / version strictly > latest tag /
+     swift test / swift build -c release / secret scan / signing identity
+  2. $([[ "$SKIP_BUMP" == "yes" ]] && echo "skip README bump" || echo "bump 5 README badges -> commit 'release: ${TAG}'")
+  3. build signed .app + DMG + OTA zip
+  4. verify codesign (DR must be cert leaf hash, NOT cdhash)
+  5. tag ${TAG} + push commits & tag to origin
+  6. create GitHub Release + upload dmg/zip (token from ${SECRETS_FILE})
+  7. update appcast.json (version/url/sha + 5-lang notes) -> 2 chore commits + push
 
-$([[ "$SIGN_MODE" == "developer-id" ]] && warn "Developer ID 模式: 需要环境变量 DEVELOPER_ID_APP 和 NOTARY_PROFILE，且公证耗时数分钟")
 EOF
+  if [[ "$SIGN_MODE" == "developer-id" ]]; then
+    warn "Developer ID mode: needs DEVELOPER_ID_APP + NOTARY_PROFILE; notarization takes minutes"
+  fi
 }
 
 # ───────────────────────── 预检 ─────────────────────────
@@ -293,7 +308,7 @@ build_artifacts() {
 verify_signature() {
   step "4/7" "校验签名"
 
-  codesign --verify --deep --strict --quiet "${APP_DIR}" || die "codesign --verify 失败"
+  codesign --verify --deep --strict --verbose=1 "${APP_DIR}" 2>&1 | sed 's/^/      /' || die "codesign --verify 失败"
   ok "codesign --verify 通过"
 
   # DR 必须是证书 leaf hash（H"..."), 不能是 cdhash —— 否则 TCC 权限每次更新都重置。
