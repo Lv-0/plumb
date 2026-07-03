@@ -1,7 +1,7 @@
 {
-  "version": "2.0.48",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.48/Plumb-2.0.48.zip",
-  "sha256": "2460ec92b75bdcc072075a73d155b3dc522a9f61750d19f6c32871429a081906",
+  "version": "2.0.49",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.49/Plumb-2.0.49.zip",
+  "sha256": "0cec5389c2155fabd182661a0549e85ead2f3c8678e7e5de772d7fba99491bf9",
   "notes": {
     "en": "Fixed: tiled windows could settle with the right side visibly short (a narrow frame was mis-accepted as \"done\" because the fallback tolerance only checked height, not width — now width is checked too, so a too-narrow window keeps retrying instead of locking with whitespace on the right). Also: windows now center after tiling when both \"tile\" and \"center\" are enabled for an app. New: the menu-bar status icon now registers more reliably on macOS 26 (a stable identity, deferred launch of permission/observer work so ControlCenter can take the slot first, and a short multi-check health poll instead of one delayed check). 246 tests pass.",
     "zh": "修复：平铺窗口可能右侧明显短一截就被锁定（旧回退容差只检查高度、不检查宽度，窄窗口被误判为完成 → 右侧露白；现在也检查宽度，太窄会继续重试而不是锁定）。新增：当一个 app 同时开启「平铺」和「居中」时，平铺完成后会再居中。新版本：macOS 26 上菜单栏图标注册更可靠（稳定身份、延迟启动权限/观察者工作让 ControlCenter 先接管槽位、短周期多次健康检查替代单次延迟检查）。246 项测试通过。",
