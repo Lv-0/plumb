@@ -20,6 +20,11 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    /// Fresh status-item identity for the macOS 26 ControlCenter-hosted menu-bar item.
+    /// Older/local builds could leave corrupted trackedApplications ownership under the
+    /// original identity; using a stable v2 name gives the menu item a clean slot.
+    private static let statusItemAutosaveName = "com.comet.plumb.statusItem.v2"
+
     // NSMenuDelegate：状态栏菜单打开前（menuNeedsChange）刷新两个总开关的勾选标记，
     // 让用户从菜单栏即可看到当前开/关状态。menu.autoenablesItems=false 时 AppKit 不再调用
     // validateMenuItem，故改用 menuNeedsChange 这条与开关无关的刷新路径。
@@ -32,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dmgMonitor: dmgMonitor
     )
     private var statusItem: NSStatusItem?
+    private var statusIconHealthTimer: DispatchSourceTimer?
     private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
@@ -62,13 +68,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 按设置决定是否显示菜单栏图标：默认显示；开启「隐藏菜单栏图标」则不创建。
         if !tilingSettingsStore.load().hideStatusBarIcon {
             showStatusBarIcon()
-            // 启动后延迟做一次图标健康检查：macOS 26 状态栏项由 ControlCenter 托管布局，
-            // 偶发不分配槽位（图标创建成功但被「停」在屏幕右角、不显示）。5s 后布局已稳定，
-            // 命中指纹则重建一次。reopen 路径亦有同样的自愈（见 healStatusBarIconIfNeeded）。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                self?.healStatusBarIconIfNeeded()
-            }
+            scheduleStatusIconHealthChecks()
         }
+        // macOS 26 的菜单栏项由 Control Center 托管。先把 NSStatusItem 交给系统一个
+        // runloop 周期完成注册，再启动权限探测、AX observer、更新检查等可能触发窗口/进程
+        // 切换的工作；否则状态栏项可能只停留在本进程的占位窗口，未进入实际菜单栏窗口栈。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.finishLaunchingAfterStatusIconRegistration()
+        }
+    }
+
+    private func finishLaunchingAfterStatusIconRegistration() {
         setupMainMenu()
         observeStatusBarVisibilityChanges()
         _ = ScreenCapturePermission.ensureAuthorized(prompt: true)
@@ -144,17 +154,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let item = statusItem else {
             DiagnosticLog.debug("statusIcon: health-check — item missing, creating")
             showStatusBarIcon()
+            if statusIconHealthTimer == nil {
+                scheduleStatusIconHealthChecks()
+            }
             return
         }
         let win = item.button?.window
         let frameDesc = win.map { "\($0.frame)" } ?? "nil"
         let occluded = win.map { !$0.occlusionState.contains(.visible) } ?? true
-        DiagnosticLog.debug("statusIcon: health-check windowFrame=\(frameDesc) visible=\(win?.isVisible ?? false) occluded=\(occluded)")
-        if win == nil || win?.isVisible != true {
+        DiagnosticLog.debug("statusIcon: health-check autosave=\(item.autosaveName ?? "nil") itemVisible=\(item.isVisible) length=\(item.length) windowFrame=\(frameDesc) visible=\(win?.isVisible ?? false) occluded=\(occluded)")
+        if !item.isVisible || win == nil || win?.isVisible != true {
             DiagnosticLog.debug("statusIcon: unhealthy — recreating")
             hideStatusBarIcon()
             showStatusBarIcon()
+            if statusIconHealthTimer == nil {
+                scheduleStatusIconHealthChecks()
+            }
         }
+    }
+
+    /// 启动/重新显示图标后做一小段健康检查。ControlCenter 托管的状态栏项有时延迟分配槽位；
+    /// 多次检查只针对「item/window 不存在或不可见」这类确定坏态重建，不使用 parked frame/occlusion
+    /// 作为重建条件，避免把健康图标误删重建。
+    private func scheduleStatusIconHealthChecks() {
+        statusIconHealthTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        var attempts = 0
+        timer.schedule(deadline: .now() + 1.0, repeating: 2.0)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            attempts += 1
+            self.healStatusBarIconIfNeeded()
+            if attempts >= 5 {
+                self.statusIconHealthTimer?.cancel()
+                self.statusIconHealthTimer = nil
+            }
+        }
+        statusIconHealthTimer = timer
+        timer.resume()
     }
 
     /// 监听设置 UI 的「隐藏菜单栏图标」开关变化：拨动后即时增/删状态栏图标。
@@ -175,9 +212,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyStatusBarVisibility() {
         let shouldHide = tilingSettingsStore.load().hideStatusBarIcon
         if shouldHide {
+            statusIconHealthTimer?.cancel()
+            statusIconHealthTimer = nil
             hideStatusBarIcon()
         } else {
             showStatusBarIcon()
+            scheduleStatusIconHealthChecks()
         }
     }
 
@@ -288,24 +328,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showStatusBarIcon() {
         // 幂等：图标已存在则不重复创建（避免开关来回拨动时叠加多个图标）。
-        if statusItem != nil { return }
+        if let item = statusItem {
+            item.length = NSStatusItem.variableLength
+            item.autosaveName = Self.statusItemAutosaveName
+            item.isVisible = true
+            return
+        }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.autosaveName = Self.statusItemAutosaveName
         // 防御：若系统曾持久化过「不可见」状态（isVisible=false），显式拉回可见。
         item.isVisible = true
-        if
+        if let statusImage = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Plumb") {
+            statusImage.isTemplate = true
+            statusImage.size = NSSize(width: 16, height: 16)
+            item.button?.image = statusImage
+            item.button?.imagePosition = .imageOnly
+            item.button?.imageScaling = .scaleProportionallyDown
+            item.button?.title = ""
+        } else if
             let iconURL = Bundle.main.url(forResource: "StatusIconTemplate", withExtension: "png"),
             let statusImage = NSImage(contentsOf: iconURL)
         {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 18, height: 18)
+            statusImage.size = NSSize(width: 16, height: 16)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
+            item.button?.imageScaling = .scaleProportionallyDown
             item.button?.title = ""
         } else {
             // 图标资源缺失时退回文字，保证菜单入口仍可用。
             item.button?.title = "Plumb"
             DiagnosticLog.debug("statusIcon: StatusIconTemplate.png load FAILED — using title fallback")
         }
+        item.button?.toolTip = "Plumb"
 
         let menu = NSMenu()
         menu.autoenablesItems = false
