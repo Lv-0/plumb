@@ -338,19 +338,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.autosaveName = Self.statusItemAutosaveName
         // 防御：若系统曾持久化过「不可见」状态（isVisible=false），显式拉回可见。
         item.isVisible = true
-        if let statusImage = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Plumb") {
-            statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 16, height: 16)
-            item.button?.image = statusImage
-            item.button?.imagePosition = .imageOnly
-            item.button?.imageScaling = .scaleProportionallyDown
-            item.button?.title = ""
-        } else if
+        if
             let iconURL = Bundle.main.url(forResource: "StatusIconTemplate", withExtension: "png"),
             let statusImage = NSImage(contentsOf: iconURL)
         {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 16, height: 16)
+            statusImage.size = NSSize(width: 20, height: 20)
+            item.button?.image = statusImage
+            item.button?.imagePosition = .imageOnly
+            item.button?.imageScaling = .scaleProportionallyDown
+            item.button?.title = ""
+        } else if let statusImage = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Plumb") {
+            statusImage.isTemplate = true
+            statusImage.size = NSSize(width: 20, height: 20)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
             item.button?.imageScaling = .scaleProportionallyDown

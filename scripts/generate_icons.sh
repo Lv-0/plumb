@@ -8,8 +8,8 @@ set -euo pipefail
 #           通过 sips 缩放出 iconset 全尺寸，再用 iconutil 打包成 .icns。
 #           不再用代码绘制 App 图标——设计稿由设计师/AI 出图后放入 assets/。
 #
-# 状态栏图标（menu bar template）：仍由代码绘制（单色 template，16px 下需清晰），
-#           因为从彩色设计稿裁剪出 16px 单色图标效果差。
+# 状态栏图标（menu bar template）：由 assets/logo.png 裁切缩放并转为单色 template。
+#           源图为线稿风格；浅色背景去透明、深色线条保留为纯黑，供 NSImage.isTemplate 着色。
 # ─────────────────────────────────────────────────────────────────────────
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,7 +17,9 @@ TMP_DIR="${ROOT_DIR}/.build/icons"
 ICONSET_DIR="${TMP_DIR}/AppIcon.iconset"
 APP_BASE_SOURCE="${ROOT_DIR}/assets/AppIcon-base.png"   # 设计稿源图（1024×1024 PNG）
 APP_BASE="${TMP_DIR}/AppIconBase.png"                    # 复制到 build 目录的工作副本
+STATUS_ICON_SOURCE="${ROOT_DIR}/assets/logo.png"
 STATUS_ICON="${TMP_DIR}/StatusIconTemplate.png"
+STATUS_ICON_WORK="${TMP_DIR}/StatusIconWork.png"
 APP_ICNS="${TMP_DIR}/AppIcon.icns"
 
 mkdir -p "${TMP_DIR}"
@@ -56,14 +58,25 @@ if [[ "${SRC_W}" != "1024" ]]; then
   sips -z 1024 1024 "${APP_BASE}" >/dev/null
 fi
 
-# ── 生成状态栏 template 图标（从设计稿提取水滴剪影，单色）──
-# 直接从彩色设计稿 AppIcon-base.png 提取水滴 silhouette：
-#   1. 以亮度阈值找出所有"亮"像素（包含水滴主体与四角白色填充伪影）。
-#   2. 从画面中心做 flood-fill，只保留与中心连通的亮块——即水滴本身，
-#      自动丢弃四角的白色填充（它们与中心不连通）。
-#   3. 输出纯黑 + 透明 alpha 的单色 template，交给 macOS 上色。
-# 这样状态栏剪影与 App 图标完全同构，而非代码近似的几何。
-cat > "${TMP_DIR}/extract_status.swift" <<'SWIFT'
+# ── 生成状态栏 template 图标（由 assets/logo.png 裁切 → 256px 处理 → 128px 输出）──
+if [[ ! -f "${STATUS_ICON_SOURCE}" ]]; then
+  echo "错误：找不到状态栏图标源图 ${STATUS_ICON_SOURCE}"
+  exit 1
+fi
+
+cp "${STATUS_ICON_SOURCE}" "${STATUS_ICON_WORK}"
+LOGO_W="$(sips -g pixelWidth "${STATUS_ICON_WORK}" | awk '/pixelWidth/ {print $2}')"
+LOGO_H="$(sips -g pixelHeight "${STATUS_ICON_WORK}" | awk '/pixelHeight/ {print $2}')"
+if [[ "${LOGO_W}" != "${LOGO_H}" ]]; then
+  CROP=$(( LOGO_W < LOGO_H ? LOGO_W : LOGO_H ))
+  echo "状态栏源图 ${LOGO_W}×${LOGO_H} 非正方形，居中裁剪为 ${CROP}×${CROP}..."
+  sips -c "${CROP}" "${CROP}" "${STATUS_ICON_WORK}" >/dev/null
+fi
+# 先在 256px 做 template 转换（保留线稿细节 + 加粗），输出 128px 供菜单栏（含 Retina）。
+STATUS_ICON_256="${TMP_DIR}/StatusIcon256.png"
+sips -z 256 256 "${STATUS_ICON_WORK}" --out "${STATUS_ICON_256}" >/dev/null
+
+cat > "${TMP_DIR}/make_status_template.swift" <<'SWIFT'
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -80,87 +93,120 @@ func writePNG(_ image: CGImage, to path: String) throws {
     }
 }
 
-let argv = CommandLine.arguments
-let srcPath = argv[1]        // 已标准化的 1024×1024 AppIcon-base.png 工作副本
-let outPath = argv[2]        // StatusIconTemplate.png
+/// 线稿 PNG → 菜单栏 template：浅色背景透明，深色线条纯黑不透明（避免半透明导致菜单栏发灰）。
+func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
+    let w = source.width
+    let h = source.height
+    let ctx = CGContext(
+        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )!
+    ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.draw(source, in: CGRect(x: 0, y: 0, width: w, height: h))
 
-// Load source into an RGBA buffer.
-guard
-    let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: srcPath) as CFURL, nil),
-    let img = CGImageSourceCreateImageAtIndex(src, 0, nil)
-else {
-    throw NSError(domain: "IconGen", code: 3, userInfo: [NSLocalizedDescriptionKey: "无法读取设计稿"])
-}
-let W = img.width, H = img.height
-let cs = CGColorSpace(name: CGColorSpace.genericRGBLinear)!
-let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
-                    bytesPerRow: 0, space: cs,
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-ctx.clear(CGRect(x: 0, y: 0, width: W, height: H))
-ctx.draw(img, in: CGRect(x: 0, y: 0, width: W, height: H))
-let buf = ctx.data!.assumingMemoryBound(to: UInt8.self)
+    guard let data = ctx.data else { fatalError("状态栏图标像素读取失败") }
+    let pixels = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+    // 阈值略高以吃进抗锯齿边缘，后续膨胀加粗。
+    let lineThreshold: CGFloat = 0.68
+    var mask = [Bool](repeating: false, count: w * h)
 
-// Bright-pixel test. 阈值 90 兼顾半透明边缘与高光，同时仍能排除深色背景。
-func isBright(_ x: Int, _ y: Int) -> Bool {
-    let o = (y * W + x) * 4
-    let l = 0.299 * Double(buf[o]) + 0.587 * Double(buf[o + 1]) + 0.114 * Double(buf[o + 2])
-    return Int(l) >= 90
-}
-
-// 从画面中心做 flood-fill，保留与中心连通的亮块。
-var keep = [UInt8](repeating: 0, count: W * H)
-let seed = (W / 2, H / 2)
-var queue = [(Int, Int)]()
-if isBright(seed.0, seed.1) {
-    queue.append(seed)
-    keep[seed.1 * W + seed.0] = 1
-}
-var head = 0
-while head < queue.count {
-    let (x, y) = queue[head]; head += 1
-    let nbrs = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
-    for (nx, ny) in nbrs {
-        guard nx >= 0, nx < W, ny >= 0, ny < H else { continue }
-        let idx = ny * W + nx
-        guard keep[idx] == 0, isBright(nx, ny) else { continue }
-        keep[idx] = 1
-        queue.append((nx, ny))
-    }
-}
-
-// 把连通的水滴块写入一个单色（黑）+ 透明 alpha 的输出上下文。
-let out = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8,
-                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-out.clear(CGRect(x: 0, y: 0, width: W, height: H))
-let obuf = out.data!.assumingMemoryBound(to: UInt8.self)
-for y in 0..<H {
-    for x in 0..<W {
-        if keep[y * W + x] == 1 {
-            let o = (y * W + x) * 4
-            obuf[o] = 0; obuf[o + 1] = 0; obuf[o + 2] = 0; obuf[o + 3] = 255
+    // CGContext 像素缓冲首行在底部；转为视觉坐标（row 0 = 图像顶部，与 PNG 一致）。
+    for memY in 0..<h {
+        let visualY = h - 1 - memY
+        for x in 0..<w {
+            let i = (memY * w + x) * 4
+            let r = CGFloat(pixels[i]) / 255
+            let g = CGFloat(pixels[i + 1]) / 255
+            let b = CGFloat(pixels[i + 2]) / 255
+            let lum = 0.299 * r + 0.587 * g + 0.114 * b
+            mask[visualY * w + x] = lum < lineThreshold
         }
     }
-}
-guard let fullRes = out.makeImage() else {
-    throw NSError(domain: "IconGen", code: 4, userInfo: [NSLocalizedDescriptionKey: "状态栏剪影合成失败"])
+
+    // 膨胀 1px，加粗线条。
+    var dilated = mask
+    for y in 0..<h {
+        for x in 0..<w {
+            guard !mask[y * w + x] else { continue }
+            outer: for dy in -1...1 {
+                for dx in -1...1 {
+                    let nx = x + dx, ny = y + dy
+                    if nx >= 0, nx < w, ny >= 0, ny < h, mask[ny * w + nx] {
+                        dilated[y * w + x] = true
+                        break outer
+                    }
+                }
+            }
+        }
+    }
+    mask = dilated
+
+    // 裁掉空白边距，放大主体以占满画布（菜单栏 16–20pt 下更清晰）。
+    var minX = w, minY = h, maxX = 0, maxY = 0
+    for y in 0..<h {
+        for x in 0..<w where mask[y * w + x] {
+            minX = min(minX, x); minY = min(minY, y)
+            maxX = max(maxX, x); maxY = max(maxY, y)
+        }
+    }
+    guard minX <= maxX, minY <= maxY else { fatalError("状态栏图标未检测到线条") }
+
+    let out = outputSize
+    let margin = CGFloat(out) * 0.06
+    let avail = CGFloat(out) - margin * 2
+    let srcW = CGFloat(maxX - minX + 1)
+    let srcH = CGFloat(maxY - minY + 1)
+    let scale = min(avail / srcW, avail / srcH)
+
+    let outCtx = CGContext(
+        data: nil, width: out, height: out, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    )!
+    outCtx.clear(CGRect(x: 0, y: 0, width: out, height: out))
+    guard let outData = outCtx.data else { fatalError("状态栏图标像素写入失败") }
+    let outPixels = outData.bindMemory(to: UInt8.self, capacity: out * out * 4)
+
+    let offsetX = margin + (avail - srcW * scale) / 2
+    let offsetY = margin + (avail - srcH * scale) / 2
+    let sz = Int(max(scale, 1))
+    for y in minY...maxY {
+        for x in minX...maxX where mask[y * w + x] {
+            let destX0 = Int(offsetX + CGFloat(x - minX) * scale)
+            let destY0 = Int(offsetY + CGFloat(y - minY) * scale)
+            for dy in 0..<sz {
+                for dx in 0..<sz {
+                    let ox = destX0 + dx
+                    let oy = destY0 + dy
+                    guard ox >= 0, ox < out, oy >= 0, oy < out else { continue }
+                    let memOy = out - 1 - oy
+                    let i = (memOy * out + ox) * 4
+                    outPixels[i] = 0
+                    outPixels[i + 1] = 0
+                    outPixels[i + 2] = 0
+                    outPixels[i + 3] = 255
+                }
+            }
+        }
+    }
+
+    guard let image = outCtx.makeImage() else { fatalError("状态栏 template 转换失败") }
+    return image
 }
 
-// 缩放到 64×64（菜单栏实际渲染尺寸，@1x）。高质量重采样保证 16px 渲染清晰。
-let px = 64
-let scaled = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8,
-                       bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-scaled.interpolationQuality = .high
-scaled.clear(CGRect(x: 0, y: 0, width: px, height: px))
-scaled.draw(fullRes, in: CGRect(x: 0, y: 0, width: px, height: px))
-guard let final = scaled.makeImage() else {
-    throw NSError(domain: "IconGen", code: 5, userInfo: [NSLocalizedDescriptionKey: "状态栏图标缩放失败"])
+let inPath = CommandLine.arguments[1]
+let outPath = CommandLine.arguments[2]
+let outSize = Int(CommandLine.arguments[3]) ?? 128
+let srcURL = URL(fileURLWithPath: inPath) as CFURL
+guard let src = CGImageSourceCreateWithURL(srcURL, nil),
+      let cgImage = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+    fatalError("无法读取状态栏源图: \(inPath)")
 }
-try writePNG(final, to: outPath)
+try writePNG(makeStatusTemplate(from: cgImage, outputSize: outSize), to: outPath)
 SWIFT
 
-swift "${TMP_DIR}/extract_status.swift" "${APP_BASE}" "${STATUS_ICON}"
+swift "${TMP_DIR}/make_status_template.swift" "${STATUS_ICON_256}" "${STATUS_ICON}" 128
 
 
 # ── 由设计稿缩放出 iconset 全尺寸 ──
@@ -186,3 +232,4 @@ make_icon 1024 icon_512x512@2x.png
 iconutil -c icns "${ICONSET_DIR}" -o "${APP_ICNS}"
 echo "图标已生成: ${APP_ICNS}, ${STATUS_ICON}"
 echo "  App 图标源: ${APP_BASE_SOURCE}"
+echo "  状态栏图标源: ${STATUS_ICON_SOURCE}"
