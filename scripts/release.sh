@@ -355,7 +355,9 @@ publish_github_release() {
   # release notes（GitHub Release body）: 用预写文件，否则从最近 commit log 生成一个简版
   local notes_body_file
   notes_body_file=$(mktemp)
-  trap 'rm -f "$notes_body_file"' RETURN
+  # RETURN trap fires after the function exits, at which point the local is
+  # already out of scope — guard with :- so set -u doesn't fatal on cleanup.
+  trap 'rm -f "${notes_body_file:-}"' RETURN
   local md="dist/release-notes-${TAG}.md"
   if [[ -f "$md" ]]; then
     cp "$md" "$notes_body_file"
