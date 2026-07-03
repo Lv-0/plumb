@@ -186,39 +186,39 @@ swift build -c release
 
 ## Package & Release
 
-### Package as .app and .dmg
+### One-command release (recommended)
+
+`scripts/release.sh` runs the entire flow end to end — bump version, build, sign, package, tag, push, publish the GitHub Release, and update the OTA appcast:
 
 ```bash
-scripts/build_app.sh      # produces dist/Plumb.app
+# Write the 5-language OTA notes first (en/zh/es/fr/ja, one line each)
+scripts/release.sh --print-notes-template > /tmp/notes.txt
+$EDITOR /tmp/notes.txt
+
+# Then release (local-signed by default)
+bash scripts/release.sh 2.0.50 --notes-file /tmp/notes.txt
+```
+
+What it does, in order: preflight checks (clean tree, tests, release build, secret scan) → bump 5 README badges → build signed `.app` + DMG + OTA zip → verify codesign (and assert the designated requirement is a certificate leaf hash, so TCC grants survive updates) → tag + push → create the GitHub Release with assets → update `appcast.json` (version/url/sha + 5-language notes). Full details and safety notes in [RELEASING.md](./RELEASING.md).
+
+### Build artifacts individually
+
+```bash
+scripts/build_app.sh      # produces dist/Plumb.app (signed with Plumb Local Signer)
 scripts/create_dmg.sh     # produces dist/Plumb.dmg
+scripts/create_zip.sh     # produces dist/Plumb-<version>.zip (for OTA)
 ```
 
-The DMG includes:
+The DMG includes `Plumb.app` and an `Applications` shortcut — install by dragging.
 
-- `Plumb.app`
-- `Applications` (shortcut to the system Applications folder)
+### Signing modes
 
-> Install by dragging `Plumb.app` into `Applications`.
+| Mode | When | How |
+| --- | --- | --- |
+| **Local-signed** (default) | Everyday builds, testing | `scripts/build_app.sh` uses `Plumb Local Signer` automatically (run `scripts/make_signing_cert.sh` once first) |
+| **Developer ID + notarized** | Public distribution without Gatekeeper warnings | `scripts/release.sh --sign developer-id` (needs `DEVELOPER_ID_APP` + `NOTARY_PROFILE` env vars), or the standalone `scripts/sign_and_notarize.sh` |
 
-### Sign and notarize (Developer ID)
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/sign_and_notarize.sh
-```
-
-### One-shot release flow (for GitHub Releases)
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/release_build.sh              # build + package + sign/notarize + verify
-
-GITHUB_TOKEN=... scripts/publish_release.sh v1.0.0   # publish to GitHub Releases
-```
-
-> ⚠️ Unsigned/unnotarized DMG files can be blocked by Gatekeeper on a new Mac and may appear as "damaged".
+> ⚠️ Local-signed/unnnotarized DMG files can be blocked by Gatekeeper on a new Mac and may appear as "damaged" — run `xattr -dr com.apple.quarantine /Applications/Plumb.app` (see [FAQ](#faq)).
 
 ## FAQ
 

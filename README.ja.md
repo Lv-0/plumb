@@ -165,39 +165,39 @@ swift build -c release
 
 ## パッケージとリリース
 
-### .app と .dmg にパッケージ
+### ワンコマンドリリース（推奨）
+
+`scripts/release.sh` がフロー全体をエンドツーエンドで実行します — バージョン上げ、ビルド、署名、パッケージ、タグ付け、プッシュ、GitHub Release の公開、OTA appcast の更新まで：
 
 ```bash
-scripts/build_app.sh      # dist/Plumb.app を生成
+# まず 5 言語の OTA notes を書く（en/zh/es/fr/ja、各 1 行）
+scripts/release.sh --print-notes-template > /tmp/notes.txt
+$EDITOR /tmp/notes.txt
+
+# そしてリリース（デフォルトはローカル署名）
+bash scripts/release.sh 2.0.50 --notes-file /tmp/notes.txt
+```
+
+実行順序：事前チェック（クリーンなツリー、テスト、リリースビルド、シークレットスキャン）→ 5 つの README バッジを更新 → 署名済み `.app` + DMG + OTA zip をビルド → codesign を検証（指定要件が証明書リーフハッシュであることを確認し、TCC 権限がアップデート後も保持されるようにする）→ タグ付け + プッシュ → assets 付きで GitHub Release を作成 → `appcast.json` を更新（version/url/sha + 5 言語の notes）。詳細と安全上の注意は [RELEASING.md](./RELEASING.md) を参照。
+
+### 個別にアーティファクトをビルド
+
+```bash
+scripts/build_app.sh      # dist/Plumb.app を生成（Plumb Local Signer で署名）
 scripts/create_dmg.sh     # dist/Plumb.dmg を生成
+scripts/create_zip.sh     # dist/Plumb-<version>.zip を生成（OTA 用）
 ```
 
-DMG には以下が含まれます：
+DMG には `Plumb.app` と `Applications` ショートカットが含まれます — ドラッグしてインストール。
 
-- `Plumb.app`
-- `Applications`（システムの Applications フォルダへのショートカット）
+### 署名モード
 
-> `Plumb.app` を `Applications` にドラッグしてインストール。
+| モード | 目的 | 方法 |
+| --- | --- | --- |
+| **ローカル署名**（デフォルト） | 日常ビルド、テスト | `scripts/build_app.sh` が自動的に `Plumb Local Signer` を使用（事前に `scripts/make_signing_cert.sh` を 1 回実行） |
+| **Developer ID + 公証済み** | Gatekeeper 警告なしの公開配布 | `scripts/release.sh --sign developer-id`（環境変数 `DEVELOPER_ID_APP` + `NOTARY_PROFILE` が必要）、または単体の `scripts/sign_and_notarize.sh` |
 
-### 署名と公証（Developer ID）
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/sign_and_notarize.sh
-```
-
-### ワンステップのリリースフロー（GitHub Releases 向け）
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/release_build.sh              # ビルド + パッケージ + 署名/公証 + 検証
-
-GITHUB_TOKEN=... scripts/publish_release.sh v1.0.0   # GitHub Releases に公開
-```
-
-> ⚠️ 未署名/未公証の DMG は新しい Mac で Gatekeeper にブロックされ、「破損している」と表示されることがあります。
+> ⚠️ ローカル署名/未公証の DMG は新しい Mac で Gatekeeper にブロックされ、「破損している」と表示されることがあります — `xattr -dr com.apple.quarantine /Applications/Plumb.app` を実行してください（[よくある質問](#よくある質問)を参照）。
 
 ## よくある質問
 

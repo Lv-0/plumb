@@ -177,39 +177,39 @@ swift build -c release
 
 ## 打包与发布
 
-### 打包为 .app 与 .dmg
+### 一键发布（推荐）
+
+`scripts/release.sh` 端到端完成整个流程 —— bump 版本、构建、签名、打包、打 tag、推送、发布 GitHub Release、更新 OTA appcast：
 
 ```bash
-scripts/build_app.sh      # 生成 dist/Plumb.app
+# 先写 5 语言 OTA notes（en/zh/es/fr/ja，每种一行）
+scripts/release.sh --print-notes-template > /tmp/notes.txt
+$EDITOR /tmp/notes.txt
+
+# 然后发布（默认本地签名）
+bash scripts/release.sh 2.0.50 --notes-file /tmp/notes.txt
+```
+
+执行顺序：预检（工作树、测试、release 构建、密钥扫描）→ bump 5 个 README badge → 构建签名 `.app` + DMG + OTA zip → 校验 codesign（并断言指定要求是证书 leaf hash，让 TCC 权限跨更新保留）→ 打 tag + 推送 → 创建 GitHub Release 并上传 assets → 更新 `appcast.json`（version/url/sha + 5 语言 notes）。完整细节与安全说明见 [RELEASING.md](./RELEASING.md)。
+
+### 单独构建产物
+
+```bash
+scripts/build_app.sh      # 生成 dist/Plumb.app（用 Plumb Local Signer 签名）
 scripts/create_dmg.sh     # 生成 dist/Plumb.dmg
+scripts/create_zip.sh     # 生成 dist/Plumb-<version>.zip（用于 OTA）
 ```
 
-DMG 打开后包含两个项目：
+DMG 包含 `Plumb.app` 和 `Applications` 快捷方式 —— 拖拽安装。
 
-- `Plumb.app`
-- `Applications`（系统应用目录快捷方式）
+### 签名模式
 
-> 安装方式：将 `Plumb.app` 拖到 `Applications`。
+| 模式 | 适用 | 方式 |
+| --- | --- | --- |
+| **本地签名**（默认） | 日常构建、测试 | `scripts/build_app.sh` 自动用 `Plumb Local Signer`（先跑一次 `scripts/make_signing_cert.sh`） |
+| **Developer ID + 公证** | 公开发发分、无 Gatekeeper 拦截 | `scripts/release.sh --sign developer-id`（需 `DEVELOPER_ID_APP` + `NOTARY_PROFILE` 环境变量），或单独跑 `scripts/sign_and_notarize.sh` |
 
-### 签名与公证（Developer ID）
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/sign_and_notarize.sh
-```
-
-### 一键发布流程（用于 GitHub Releases）
-
-```bash
-export DEVELOPER_ID_APP="Developer ID Application: YOUR_NAME (TEAMID)"
-export NOTARY_PROFILE="AC_NOTARY"
-scripts/release_build.sh              # 构建 + 打包 + 签名公证 + 校验
-
-GITHUB_TOKEN=... scripts/publish_release.sh v1.0.0   # 发布到 GitHub Releases
-```
-
-> ⚠️ 未签名/未公证的 DMG 在新 Mac 上可能被 Gatekeeper 拦截，可能显示「已损坏」。
+> ⚠️ 本地签名/未公证的 DMG 在新 Mac 上可能被 Gatekeeper 拦截，可能显示「已损坏」—— 运行 `xattr -dr com.apple.quarantine /Applications/Plumb.app`（见[常见问题](#常见问题)）。
 
 ## 常见问题
 

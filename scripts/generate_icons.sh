@@ -8,8 +8,8 @@ set -euo pipefail
 #           通过 sips 缩放出 iconset 全尺寸，再用 iconutil 打包成 .icns。
 #           不再用代码绘制 App 图标——设计稿由设计师/AI 出图后放入 assets/。
 #
-# 状态栏图标（menu bar template）：由 assets/logo.png 裁切缩放并转为单色 template。
-#           源图为线稿风格；浅色背景去透明、深色线条保留为纯黑，供 NSImage.isTemplate 着色。
+# 状态栏图标（menu bar template）：代码绘制简化版——倒三角 + 荷鲁斯之眼，
+#           无内部繁复纹样，22pt 菜单栏下清晰可辨。
 # ─────────────────────────────────────────────────────────────────────────
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,9 +17,7 @@ TMP_DIR="${ROOT_DIR}/.build/icons"
 ICONSET_DIR="${TMP_DIR}/AppIcon.iconset"
 APP_BASE_SOURCE="${ROOT_DIR}/assets/AppIcon-base.png"   # 设计稿源图（1024×1024 PNG）
 APP_BASE="${TMP_DIR}/AppIconBase.png"                    # 复制到 build 目录的工作副本
-STATUS_ICON_SOURCE="${ROOT_DIR}/assets/logo.png"
 STATUS_ICON="${TMP_DIR}/StatusIconTemplate.png"
-STATUS_ICON_WORK="${TMP_DIR}/StatusIconWork.png"
 APP_ICNS="${TMP_DIR}/AppIcon.icns"
 
 mkdir -p "${TMP_DIR}"
@@ -58,25 +56,8 @@ if [[ "${SRC_W}" != "1024" ]]; then
   sips -z 1024 1024 "${APP_BASE}" >/dev/null
 fi
 
-# ── 生成状态栏 template 图标（由 assets/logo.png 裁切 → 256px 处理 → 128px 输出）──
-if [[ ! -f "${STATUS_ICON_SOURCE}" ]]; then
-  echo "错误：找不到状态栏图标源图 ${STATUS_ICON_SOURCE}"
-  exit 1
-fi
-
-cp "${STATUS_ICON_SOURCE}" "${STATUS_ICON_WORK}"
-LOGO_W="$(sips -g pixelWidth "${STATUS_ICON_WORK}" | awk '/pixelWidth/ {print $2}')"
-LOGO_H="$(sips -g pixelHeight "${STATUS_ICON_WORK}" | awk '/pixelHeight/ {print $2}')"
-if [[ "${LOGO_W}" != "${LOGO_H}" ]]; then
-  CROP=$(( LOGO_W < LOGO_H ? LOGO_W : LOGO_H ))
-  echo "状态栏源图 ${LOGO_W}×${LOGO_H} 非正方形，居中裁剪为 ${CROP}×${CROP}..."
-  sips -c "${CROP}" "${CROP}" "${STATUS_ICON_WORK}" >/dev/null
-fi
-# 先在 256px 做 template 转换（保留线稿细节 + 加粗），输出 128px 供菜单栏（含 Retina）。
-STATUS_ICON_256="${TMP_DIR}/StatusIcon256.png"
-sips -z 256 256 "${STATUS_ICON_WORK}" --out "${STATUS_ICON_256}" >/dev/null
-
-cat > "${TMP_DIR}/make_status_template.swift" <<'SWIFT'
+# ── 生成状态栏 template 图标（代码绘制：倒三角 + 简化荷鲁斯之眼）──
+cat > "${TMP_DIR}/draw_status_icon.swift" <<'SWIFT'
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -93,95 +74,86 @@ func writePNG(_ image: CGImage, to path: String) throws {
     }
 }
 
-/// 线稿 PNG → 菜单栏 template：浅色背景透明，深色线条纯黑不透明（避免半透明导致菜单栏发灰）。
-func makeStatusTemplate(from source: CGImage, outputSize: Int) -> CGImage {
-    let w = source.width
-    let h = source.height
+/// 简化菜单栏图标：倒三角描边 + 杏仁眼 / 眉弓 / 竖线 / 右卷（荷鲁斯之眼要素），无内部纹样。
+func drawSimplifiedStatusIcon(size: Int) -> CGImage {
+    let s = CGFloat(size)
     let ctx = CGContext(
-        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
         space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     )!
-    ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
-    ctx.draw(source, in: CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.clear(CGRect(x: 0, y: 0, width: s, height: s))
+    ctx.translateBy(x: 0, y: s)
+    ctx.scaleBy(x: 1, y: -1)
 
-    guard let data = ctx.data else { fatalError("状态栏图标像素读取失败") }
-    let pixels = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
-    // 阈值偏高，只保留线芯像素，线条更细。
-    let lineThreshold: CGFloat = 0.76
-    var mask = [Bool](repeating: false, count: w * h)
+    let black = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+    ctx.setStrokeColor(black)
+    ctx.setFillColor(black)
+    let lw = CGFloat(max(2, size / 52))
+    ctx.setLineWidth(lw)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
 
-    // CGContext 像素缓冲首行在底部；转为视觉坐标（row 0 = 图像顶部，与 PNG 一致）。
-    for memY in 0..<h {
-        let visualY = h - 1 - memY
-        for x in 0..<w {
-            let i = (memY * w + x) * 4
-            let r = CGFloat(pixels[i]) / 255
-            let g = CGFloat(pixels[i + 1]) / 255
-            let b = CGFloat(pixels[i + 2]) / 255
-            let lum = 0.299 * r + 0.587 * g + 0.114 * b
-            mask[visualY * w + x] = lum < lineThreshold
-        }
-    }
+    let cx = s * 0.5
+    let margin = s * 0.07
+    let topY = margin
+    let apexY = s - margin
+    let halfW = (s - margin * 2) * 0.5
 
-    // 裁掉空白边距，放大主体至贴边（仅留 1px 安全边）。
-    var minX = w, minY = h, maxX = 0, maxY = 0
-    for y in 0..<h {
-        for x in 0..<w where mask[y * w + x] {
-            minX = min(minX, x); minY = min(minY, y)
-            maxX = max(maxX, x); maxY = max(maxY, y)
-        }
-    }
-    guard minX <= maxX, minY <= maxY else { fatalError("状态栏图标未检测到线条") }
+    // 倒三角（顶点朝下）
+    let topLeft = CGPoint(x: cx - halfW, y: topY)
+    let topRight = CGPoint(x: cx + halfW, y: topY)
+    let apex = CGPoint(x: cx, y: apexY)
+    ctx.move(to: topLeft)
+    ctx.addLine(to: topRight)
+    ctx.addLine(to: apex)
+    ctx.closePath()
+    ctx.strokePath()
 
-    let out = outputSize
-    let margin: CGFloat = 1
-    let avail = CGFloat(out) - margin * 2
-    let srcW = CGFloat(maxX - minX + 1)
-    let srcH = CGFloat(maxY - minY + 1)
-    let scale = min(avail / srcW, avail / srcH)
+    // 荷鲁斯之眼：杏仁形描边
+    let eyeCY = s * 0.455
+    let eyeW = s * 0.28
+    let eyeH = s * 0.115
+    ctx.strokeEllipse(in: CGRect(x: cx - eyeW / 2, y: eyeCY - eyeH / 2, width: eyeW, height: eyeH))
 
-    let outCtx = CGContext(
-        data: nil, width: out, height: out, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    )!
-    outCtx.clear(CGRect(x: 0, y: 0, width: out, height: out))
-    guard let outData = outCtx.data else { fatalError("状态栏图标像素写入失败") }
-    let outPixels = outData.bindMemory(to: UInt8.self, capacity: out * out * 4)
+    // 瞳孔
+    let pupilR = s * 0.03
+    ctx.fillEllipse(in: CGRect(x: cx - pupilR, y: eyeCY - pupilR, width: pupilR * 2, height: pupilR * 2))
 
-    let offsetX = margin + (avail - srcW * scale) / 2
-    let offsetY = margin + (avail - srcH * scale) / 2
-    for y in minY...maxY {
-        for x in minX...maxX where mask[y * w + x] {
-            let ox = Int((offsetX + CGFloat(x - minX) * scale).rounded())
-            let oy = Int((offsetY + CGFloat(y - minY) * scale).rounded())
-            guard ox >= 0, ox < out, oy >= 0, oy < out else { continue }
-            let memOy = out - 1 - oy
-            let i = (memOy * out + ox) * 4
-            outPixels[i] = 0
-            outPixels[i + 1] = 0
-            outPixels[i + 2] = 0
-            outPixels[i + 3] = 255
-        }
-    }
+    // 眉弓
+    let browY = eyeCY - eyeH * 0.82
+    ctx.move(to: CGPoint(x: cx - eyeW * 0.36, y: browY))
+    ctx.addQuadCurve(
+        to: CGPoint(x: cx + eyeW * 0.36, y: browY),
+        control: CGPoint(x: cx, y: browY - s * 0.028)
+    )
+    ctx.strokePath()
 
-    guard let image = outCtx.makeImage() else { fatalError("状态栏 template 转换失败") }
+    // 眼下竖线
+    let markTop = eyeCY + eyeH * 0.5
+    let markBot = eyeCY + eyeH * 1.45
+    ctx.move(to: CGPoint(x: cx, y: markTop))
+    ctx.addLine(to: CGPoint(x: cx, y: markBot))
+    ctx.strokePath()
+
+    // 右侧卷尾（荷鲁斯之眼标志卷曲）
+    ctx.move(to: CGPoint(x: cx + s * 0.015, y: markBot - s * 0.008))
+    ctx.addQuadCurve(
+        to: CGPoint(x: cx + eyeW * 0.34, y: markBot + s * 0.015),
+        control: CGPoint(x: cx + eyeW * 0.2, y: markBot - s * 0.035)
+    )
+    ctx.strokePath()
+
+    guard let image = ctx.makeImage() else { fatalError("状态栏图标绘制失败") }
     return image
 }
 
-let inPath = CommandLine.arguments[1]
-let outPath = CommandLine.arguments[2]
-let outSize = Int(CommandLine.arguments[3]) ?? 128
-let srcURL = URL(fileURLWithPath: inPath) as CFURL
-guard let src = CGImageSourceCreateWithURL(srcURL, nil),
-      let cgImage = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-    fatalError("无法读取状态栏源图: \(inPath)")
-}
-try writePNG(makeStatusTemplate(from: cgImage, outputSize: outSize), to: outPath)
+let outPath = CommandLine.arguments[1]
+let outSize = Int(CommandLine.arguments[2]) ?? 128
+try writePNG(drawSimplifiedStatusIcon(size: outSize), to: outPath)
 SWIFT
 
-swift "${TMP_DIR}/make_status_template.swift" "${STATUS_ICON_256}" "${STATUS_ICON}" 128
+swift "${TMP_DIR}/draw_status_icon.swift" "${STATUS_ICON}" 128
 
 
 # ── 由设计稿缩放出 iconset 全尺寸 ──
@@ -207,4 +179,4 @@ make_icon 1024 icon_512x512@2x.png
 iconutil -c icns "${ICONSET_DIR}" -o "${APP_ICNS}"
 echo "图标已生成: ${APP_ICNS}, ${STATUS_ICON}"
 echo "  App 图标源: ${APP_BASE_SOURCE}"
-echo "  状态栏图标源: ${STATUS_ICON_SOURCE}"
+echo "  状态栏图标: 代码绘制（倒三角 + 荷鲁斯之眼）"
