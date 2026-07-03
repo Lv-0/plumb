@@ -336,6 +336,15 @@ func frameMatchesFallbackProduct_driftedFromFallback_rejects() async throws {
 }
 
 @Test
+func frameMatchesFallbackProduct_narrowWidth_rejects() async throws {
+    // Numbers 右侧露白类形态：如果把实际宽度带入 fallback product，短宽窗口会被误判为完成。
+    // fallback 只允许高度妥协；宽度必须仍贴近平铺目标，否则右边界会明显短一截。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let narrowTopAnchored = CGRect(x: 16, y: 40, width: 1760, height: 994)
+    #expect(WindowGeometry.frameMatchesFallbackProduct(narrowTopAnchored, target: target) == false)
+}
+
+@Test
 func frameSatisfiesFinalTiledTarget_exactTarget_accepts() async throws {
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(target, target: target) == true)
@@ -347,6 +356,14 @@ func frameSatisfiesFinalTiledTarget_fallbackProduct_accepts() async throws {
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
     let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(anchored, target: target) == true)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_narrowFallbackProduct_rejects() async throws {
+    // 即便高度是保顶妥协，只要宽度明显短于目标，就不能通过统一完成判定。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let narrowTopAnchored = CGRect(x: 16, y: 40, width: 1760, height: 994)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(narrowTopAnchored, target: target) == false)
 }
 
 @Test

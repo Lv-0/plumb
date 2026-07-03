@@ -135,6 +135,7 @@ enum WindowGeometry {
         target: CGRect,
         tolerance: CGFloat = 3
     ) -> Bool {
+        guard abs(frame.width - target.width) <= tolerance else { return false }
         let product = expectedFallbackFrame(targetFrame: target, actualSize: frame.size)
         return abs(frame.minX - product.minX) <= tolerance &&
             abs(frame.minY - product.minY) <= tolerance &&

@@ -725,6 +725,8 @@ final class WindowEventObserver {
     ) -> Bool {
         let tilingSettings = tilingSettingsStore.load()
         let shouldTile = tilingSettings.shouldTile(bundleIdentifier: bundleIdentifier)
+        let shouldCenter = tilingSettings.shouldCenter(bundleIdentifier: bundleIdentifier)
+        let centerAfterTile = shouldTile && shouldCenter
         // per-app 间距：该 app 单独设置过 → 用其四向 insets；否则回退全局 edgeInsets。
         let effectiveInsets = tilingSettings.effectiveInsets(for: bundleIdentifier)
         if shouldTile {
@@ -846,7 +848,8 @@ final class WindowEventObserver {
                     appElement: appElement,
                     primaryWindow: windowElement,
                     insets: effectiveInsets,
-                    bundleIdentifier: bundleIdentifier
+                    bundleIdentifier: bundleIdentifier,
+                    centerAfterTile: centerAfterTile
                 )
                 return false
             }
@@ -856,13 +859,14 @@ final class WindowEventObserver {
                 appElement: appElement,
                 primaryWindow: windowElement,
                 insets: effectiveInsets,
-                bundleIdentifier: bundleIdentifier
+                bundleIdentifier: bundleIdentifier,
+                centerAfterTile: centerAfterTile
             )
             return tiled
         }
 
         // 居中 allow-list：未开启或不在列表内（且列表非空）则跳过自动居中。
-        if !tilingSettings.shouldCenter(bundleIdentifier: bundleIdentifier) {
+        if !shouldCenter {
             DiagnosticLog.debug("handle[\(notification)]: center not allowed for pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
             return false
         }
@@ -1103,7 +1107,8 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         windowElement: AXUIElement,
-        insets: TileInsets
+        insets: TileInsets,
+        centerAfterTile: Bool
     ) {
         postCompletionCorrectionTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -1119,18 +1124,27 @@ final class WindowEventObserver {
 
             // 已达标：直接锁定。
             if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
-                self.markCentered(windowElement: windowElement, pid: pid)
-                self.processedPIDs.insert(pid)
-                self.initialCenterTimer?.cancel()
-                self.initialCenterTimer = nil
-                self.extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+                self.finishTileSession(
+                    windowElement: windowElement,
+                    pid: pid,
+                    appElement: appElement,
+                    centerAfterTile: centerAfterTile,
+                    reason: "post-completion-correction reached target after delay"
+                )
                 DiagnosticLog.debug("post-completion-correction: reached target after delay, lock pid=\(pid)")
                 return
             }
 
             // 预算耗尽：接受当前 frame 锁定。
             if self.isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
-                self.forceLockOnBudgetExhaustion(windowElement: windowElement, pid: pid, insets: insets, reason: "post-completion-correction budget exhausted")
+                self.forceLockOnBudgetExhaustion(
+                    windowElement: windowElement,
+                    pid: pid,
+                    appElement: appElement,
+                    insets: insets,
+                    centerAfterTile: centerAfterTile,
+                    reason: "post-completion-correction budget exhausted"
+                )
                 return
             }
 
@@ -1143,16 +1157,23 @@ final class WindowEventObserver {
                 self.recordSelfLayoutGrace(windowElement: windowElement, pid: pid, reason: "post-completion-correction completion")
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
                 if self.didWindowActuallyTile(windowElement, pid: pid, insets: insets) {
-                    self.markCentered(windowElement: windowElement, pid: pid)
-                    self.processedPIDs.insert(pid)
-                    self.initialCenterTimer?.cancel()
-                    self.initialCenterTimer = nil
-                    self.startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: windowElement, insets: insets)
-                    self.extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+                    self.startTileStabilizationRetries(
+                        pid: pid,
+                        appElement: appElement,
+                        windowElement: windowElement,
+                        insets: insets,
+                        centerAfterTile: centerAfterTile
+                    )
                     DiagnosticLog.debug("post-completion-correction: reached target, lock pid=\(pid)")
                 } else {
                     // 校正后仍未达标：交给稳定重试接力（其内部也有预算兜底）。
-                    self.startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: windowElement, insets: insets)
+                    self.startTileStabilizationRetries(
+                        pid: pid,
+                        appElement: appElement,
+                        windowElement: windowElement,
+                        insets: insets,
+                        centerAfterTile: centerAfterTile
+                    )
                     DiagnosticLog.debug("post-completion-correction: still not at target, defer to stabilization pid=\(pid)")
                 }
             }
@@ -1172,7 +1193,8 @@ final class WindowEventObserver {
         appElement: AXUIElement,
         primaryWindow: AXUIElement,
         insets: TileInsets,
-        bundleIdentifier: String?
+        bundleIdentifier: String?,
+        centerAfterTile: Bool
     ) {
         documentStableGatePIDs.insert(pid)
         documentStableTimer?.cancel()
@@ -1208,7 +1230,14 @@ final class WindowEventObserver {
                 self.endDocumentStableGate(pid: pid)
                 // 预算守卫：等稳期间若预算已被耗尽（理论上不会，但防御），直接接受当前 frame 锁定。
                 if self.isTileBudgetExhausted(windowElement: primaryWindow, pid: pid) {
-                    self.forceLockOnBudgetExhaustion(windowElement: primaryWindow, pid: pid, insets: insets, reason: "document-stable-gate budget exhausted")
+                    self.forceLockOnBudgetExhaustion(
+                        windowElement: primaryWindow,
+                        pid: pid,
+                        appElement: appElement,
+                        insets: insets,
+                        centerAfterTile: centerAfterTile,
+                        reason: "document-stable-gate budget exhausted"
+                    )
                     return
                 }
                 let _ = self.performTileAndLock(
@@ -1217,7 +1246,8 @@ final class WindowEventObserver {
                     appElement: appElement,
                     primaryWindow: primaryWindow,
                     insets: insets,
-                    bundleIdentifier: bundleIdentifier
+                    bundleIdentifier: bundleIdentifier,
+                    centerAfterTile: centerAfterTile
                 )
             } else {
                 lastFrame = current
@@ -1242,14 +1272,16 @@ final class WindowEventObserver {
         appElement: AXUIElement,
         primaryWindow: AXUIElement,
         insets: TileInsets,
-        bundleIdentifier: String?
+        bundleIdentifier: String?,
+        centerAfterTile: Bool
     ) -> Bool {
         guard let tiledWindow = tilePendingWindows(
             pid: pid,
             appElement: appElement,
             primaryWindow: primaryWindow,
             insets: insets,
-            bundleIdentifier: bundleIdentifier
+            bundleIdentifier: bundleIdentifier,
+            centerAfterTile: centerAfterTile
         ) else {
             DiagnosticLog.debug("handle[\(notification)]: tiling enabled but no window tiled")
             return false
@@ -1257,10 +1289,13 @@ final class WindowEventObserver {
         // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
         // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
         if didWindowActuallyTile(tiledWindow, pid: pid, insets: insets) {
-            markCentered(windowElement: tiledWindow, pid: pid)
-            processedPIDs.insert(pid)
-            startTileStabilizationRetries(pid: pid, appElement: appElement, windowElement: tiledWindow, insets: insets)
-            extendSelfLayoutGraceAfterSession(windowElement: tiledWindow, pid: pid)
+            startTileStabilizationRetries(
+                pid: pid,
+                appElement: appElement,
+                windowElement: tiledWindow,
+                insets: insets,
+                centerAfterTile: centerAfterTile
+            )
             DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
             return true
         }
@@ -1283,7 +1318,8 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         windowElement: AXUIElement,
-        insets: TileInsets
+        insets: TileInsets,
+        centerAfterTile: Bool
     ) {
         tileStabilizeTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -1310,10 +1346,13 @@ final class WindowEventObserver {
 
             // 仅当窗口明显未达到平铺目标（尺寸偏小）时才重新触发，已基本铺满则停止重试。
             if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
-                self.markCentered(windowElement: windowElement, pid: pid)
-                self.processedPIDs.insert(pid)
-                self.initialCenterTimer?.cancel()
-                self.initialCenterTimer = nil
+                self.finishTileSession(
+                    windowElement: windowElement,
+                    pid: pid,
+                    appElement: appElement,
+                    centerAfterTile: centerAfterTile,
+                    reason: "tile stabilization reached target"
+                )
                 DiagnosticLog.debug("tile stabilization: reached target and locked pid=\(pid)")
                 self.tileStabilizeTimer?.cancel()
                 self.tileStabilizeTimer = nil
@@ -1324,7 +1363,8 @@ final class WindowEventObserver {
             // （Phase 1.3：稳定重试消耗同一预算。）
             if !self.canStartTileAttempt(windowElement: windowElement, pid: pid) {
                 self.forceLockOnBudgetExhaustion(
-                    windowElement: windowElement, pid: pid, insets: insets,
+                    windowElement: windowElement, pid: pid, appElement: appElement, insets: insets,
+                    centerAfterTile: centerAfterTile,
                     reason: "stabilization retries exhausted"
                 )
                 return
@@ -1345,6 +1385,48 @@ final class WindowEventObserver {
         }
         tileStabilizeTimer = timer
         timer.resume()
+    }
+
+    private func finishTileSession(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        appElement: AXUIElement,
+        centerAfterTile: Bool,
+        reason: String
+    ) {
+        let lock: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.markCentered(windowElement: windowElement, pid: pid)
+            self.processedPIDs.insert(pid)
+            self.initialCenterTimer?.cancel()
+            self.initialCenterTimer = nil
+            self.extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+            DiagnosticLog.debug("tile-session: locked pid=\(pid) reason=\(reason) centerAfterTile=\(centerAfterTile)")
+        }
+
+        guard centerAfterTile else {
+            lock()
+            return
+        }
+
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            DiagnosticLog.debug("tile-session: skip center-after-tile, pid=\(pid) no longer frontmost")
+            return
+        }
+
+        recordSelfLayoutGrace(windowElement: windowElement, pid: pid, reason: "center-after-tile handoff")
+        do {
+            try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement) { [weak self] in
+                guard let self else { return }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                self.recordSelfLayoutGrace(windowElement: windowElement, pid: pid, reason: "center-after-tile completion")
+                lock()
+            }
+            DiagnosticLog.debug("tile-session: center-after-tile scheduled pid=\(pid) reason=\(reason)")
+        } catch {
+            DiagnosticLog.debug("tile-session: center-after-tile failed pid=\(pid) error=\(error) — locking tiled frame")
+            lock()
+        }
     }
 
     /// 处理 `kAXResizedNotification`：用户缩放窗口 → 标记「手动」，不再立即重铺。
@@ -1826,7 +1908,8 @@ final class WindowEventObserver {
         appElement: AXUIElement,
         primaryWindow: AXUIElement,
         insets: TileInsets,
-        bundleIdentifier: String?
+        bundleIdentifier: String?,
+        centerAfterTile: Bool
     ) -> AXUIElement? {
         // 所有 App 通用：滤除二级窗口。本方法会枚举该 App 的所有 AXWindow 并逐个平铺，
         // 若不同步屏蔽，则聚焦主窗口时同时打开的二级窗口（设置/扩展/弹窗/Get Info 等）会被一并平铺——
@@ -1857,7 +1940,8 @@ final class WindowEventObserver {
             // （Phase 1.3：首铺也消耗同一预算。）
             if !canStartTileAttempt(windowElement: window, pid: pid) {
                 forceLockOnBudgetExhaustion(
-                    windowElement: window, pid: pid, insets: insets,
+                    windowElement: window, pid: pid, appElement: appElement, insets: insets,
+                    centerAfterTile: centerAfterTile,
                     reason: "first-tile budget already exhausted"
                 )
                 if firstTiledWindow == nil { firstTiledWindow = window }
@@ -1881,23 +1965,19 @@ final class WindowEventObserver {
                     }
 
                     if self.didWindowActuallyTile(window, pid: pid, insets: insets) {
-                        self.markCentered(windowElement: window, pid: pid)
-                        self.processedPIDs.insert(pid)
-                        self.initialCenterTimer?.cancel()
-                        self.initialCenterTimer = nil
                         self.startTileStabilizationRetries(
                             pid: pid,
                             appElement: appElement,
                             windowElement: window,
-                            insets: insets
+                            insets: insets,
+                            centerAfterTile: centerAfterTile
                         )
-                        // 会话锁定：延伸自布局宽限，覆盖文档 app 迟到的自 resize（阶段 3.3）。
-                        self.extendSelfLayoutGraceAfterSession(windowElement: window, pid: pid)
                         DiagnosticLog.debug("tile completion: tiled and locked pid=\(pid)")
                     } else if self.isTileBudgetExhausted(windowElement: window, pid: pid) {
                         // 预算耗尽且仍未达标：接受当前 frame 锁定，避免无限重铺。
                         self.forceLockOnBudgetExhaustion(
-                            windowElement: window, pid: pid, insets: insets,
+                            windowElement: window, pid: pid, appElement: appElement, insets: insets,
+                            centerAfterTile: centerAfterTile,
                             reason: "tile completion but not reached, budget exhausted"
                         )
                     } else {
@@ -1908,7 +1988,8 @@ final class WindowEventObserver {
                             pid: pid,
                             appElement: appElement,
                             windowElement: window,
-                            insets: insets
+                            insets: insets,
+                            centerAfterTile: centerAfterTile
                         )
                         DiagnosticLog.debug("tile completion: still not at target, schedule post-completion correction pid=\(pid)")
                     }
@@ -2032,7 +2113,9 @@ final class WindowEventObserver {
     private func forceLockOnBudgetExhaustion(
         windowElement: AXUIElement,
         pid: pid_t,
+        appElement: AXUIElement,
         insets: TileInsets,
+        centerAfterTile: Bool,
         reason: String
     ) {
         DiagnosticLog.debug("tile-budget: exhausted — accept current frame and lock pid=\(pid) reason=\(reason) insets=\(insets)")
@@ -2040,14 +2123,15 @@ final class WindowEventObserver {
         // 位置写入 app 从不抗拒（Numbers 抢的是尺寸），保证锁定结局顶距或底距之一等于设置值，
         // 不再出现「贴底短高、缺口全堆到顶部」被锁定的形态（顶距翻倍 bug 的最后一道防线）。
         service.anchorWindowToFallbackOrigin(windowElement, pid: pid, insets: insets)
-        markCentered(windowElement: windowElement, pid: pid)
-        processedPIDs.insert(pid)
-        initialCenterTimer?.cancel()
-        initialCenterTimer = nil
         tileStabilizeTimer?.cancel()
         tileStabilizeTimer = nil
-        // 会话结束：延伸自布局宽限，覆盖文档 app 迟到的自 resize（阶段 3.3）。
-        extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
+        finishTileSession(
+            windowElement: windowElement,
+            pid: pid,
+            appElement: appElement,
+            centerAfterTile: centerAfterTile,
+            reason: "budget exhausted: \(reason)"
+        )
     }
 
     private func markCentered(windowElement: AXUIElement, pid: pid_t) {
