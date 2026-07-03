@@ -343,14 +343,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let statusImage = NSImage(contentsOf: iconURL)
         {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 22, height: 22)
+            statusImage.size = NSSize(width: 20, height: 20)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
             item.button?.imageScaling = .scaleProportionallyDown
             item.button?.title = ""
         } else if let statusImage = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Plumb") {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 22, height: 22)
+            statusImage.size = NSSize(width: 20, height: 20)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
             item.button?.imageScaling = .scaleProportionallyDown
