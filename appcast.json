@@ -1,7 +1,7 @@
 {
-  "version": "2.0.50",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.50/Plumb-2.0.50.zip",
-  "sha256": "6a2a0b1f8505236795c831690267a8b278e872972c2fd5da5cd0d9540e84e587",
+  "version": "2.0.51",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.51/Plumb-2.0.51.zip",
+  "sha256": "9097b3128b7ae8d541de1524e5bf2454ede19d2a4e4cae51e86d7b6545a742b5",
   "notes": {
     "en": "New menu-bar icon — a code-drawn inverted triangle with a simplified Eye of Horus, replacing the logo-based icon from v2.0.49. It's self-contained (no external image asset), crisper at 22pt menu-bar size, and matches the app's plumb-line identity. Also: the release documentation now describes the one-command release flow, and the minimum-system-version metadata is corrected to macOS 26 (the actual deployment target). 246 tests pass.",
     "zh": "全新菜单栏图标——代码绘制的倒三角 + 简化荷鲁斯之眼，替代 v2.0.49 的 logo 图标。自包含（无需外部图片素材）、22pt 菜单栏尺寸下更清晰、与 app 的铅垂线身份契合。另外：发布文档改为介绍一键发布流程；最低系统版本元数据修正为 macOS 26（实际部署目标）。246 项测试通过。",
