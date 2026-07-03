@@ -395,3 +395,71 @@ func robustPhaseBPolicy_nearTarget_keepsSmooth() async throws {
 
     #expect(WindowCenteringService.shouldUseRobustPhaseB(startSize: start, endSize: target) == false)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Numbers 顶距翻倍 bug 回归保护（逐边语义 + 统一判定）
+//
+// 真实事故数据：外接屏 1920×1080，visibleFrame=(0,0,1920,1050)，Numbers per-app insets
+// top=15.62 / bottom=16.31 / left=16 / right=16。平铺目标 frame = (16, 16, 1888, 1018)。
+// 事故链：Numbers 载入忙碌期拒缩放 → 旧贴底收缩阶梯在忙碌期结束时接受了矮 16px 的高度（1002），
+// 贴底锚定 → maxY 缺 16px → 旧「minY 严格 + height ≤16」判定放行 → 锁定，顶距 = 15.62 + 16.38 ≈ 32（翻倍）。
+// 修复：(1) frameMatchesTiledTarget 改逐边语义，顶边 ±6px 挡住「贴底短高」；
+//       (2) 删除收缩阶梯，改精确目标重写链；(3) forceLock 前的位置修正兜底。
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Test
+func frameMatchesTiledTarget_bottomAnchoredShort16_rejects() async throws {
+    // ⭐ 顶距翻倍 bug 核心回归：日志中被错误验收的形态。贴底（minY=16=target.minY）但高度矮 16px
+    //（1002 vs 1018）→ maxY 缺 16px。旧「minY 严格 + height ≤16 宽松」放行；逐边语义顶边 ±6px 必须挡下。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let bottomAnchoredShort = CGRect(x: 16, y: 16, width: 1888, height: 1002)
+    #expect(WindowGeometry.frameMatchesTiledTarget(bottomAnchoredShort, target: target) == false)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_bottomAnchoredShort16_rejects() async throws {
+    // ⭐ 统一判定也必须拒绝：fallbackProduct 的矮窗产物是保顶 (16, 32, 1888, 1002)，不匹配贴底；
+    // covers 要求完整覆盖、四向 ≤3px，贴底短高既露顶白也不匹配。三条短路全不通过。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let bottomAnchoredShort = CGRect(x: 16, y: 16, width: 1888, height: 1002)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(bottomAnchoredShort, target: target) == false)
+}
+
+@Test
+func frameMatchesTiledTarget_topAnchoredShort16_accepts() async throws {
+    // 保顶妥协（Terminal/electerm 字符网格 snap / 新版 emitFinalAnchor 锚定产物）：
+    // 顶部贴 target.maxY（maxY=1034 无缺口），底部放宽 16px（minY=32，底距变宽但顶距正确）。
+    // 逐边语义：底边向内收 +16 ∈ [−3,+16] 边界通过，顶边 0 通过 → 接受。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let topAnchoredShort = CGRect(x: 16, y: 32, width: 1888, height: 1002)
+    #expect(WindowGeometry.frameMatchesTiledTarget(topAnchoredShort, target: target) == true)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_topAnchoredShort24_acceptsViaFallbackProduct() async throws {
+    // 缺口 24px 超出逐边宽松（底边向内收 +24 > 16），但等于保顶妥协产物
+    //（actualSize.height=994 < 1018 → keep top → y = target.maxY − 994 = 40）→ fallbackProduct 接受。
+    // 这正是 anchorWindowToFallbackOrigin / 精确重写链会锚定的形态，判定必然接受。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let topAnchoredShort24 = CGRect(x: 16, y: 40, width: 1888, height: 994)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(topAnchoredShort24, target: target) == true)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_bottomAnchoredShort24_rejects() async throws {
+    // 贴底 + 矮 24px：顶边缺口 24px、底边 0；既非逐边通过（顶 −24 < −6），也非保顶妥协（保顶应 maxY=1034，
+    // 此处 maxY=1010），covers 也露顶白。三条短路全拒——防止更大的贴底短高形态被锁定。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let bottomAnchoredShort24 = CGRect(x: 16, y: 16, width: 1888, height: 994)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(bottomAnchoredShort24, target: target) == false)
+}
+
+@Test
+func frameSatisfiesFinalTiledTarget_offscreenBottom_rejects() async throws {
+    // 日志中旧阶梯被拒格子的出屏中间态：贴底但用「假设高度」换算把实际 1050 高窗口的底边
+    // 推到屏幕外（minY=−16）。底边 −16−16=−32 远超 [−3,+16]，必须拒绝——这正是位置写入必须用
+    // 实际尺寸换算（而非假设高度）的回归保护。
+    let target = CGRect(x: 16, y: 16, width: 1888, height: 1018)
+    let offscreenBottom = CGRect(x: 16, y: -16, width: 1888, height: 1050)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(offscreenBottom, target: target) == false)
+}

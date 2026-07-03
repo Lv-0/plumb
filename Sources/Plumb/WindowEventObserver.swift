@@ -103,6 +103,10 @@ final class WindowEventObserver {
     /// `extendSelfLayoutGraceAfterSession` 写入延伸截止时间。
     private static let selfLayoutGraceInterval: TimeInterval = 1.0
     private static let postSessionGraceInterval: TimeInterval = 1.8
+    /// document-chooser app（Numbers/Pages 等）会话后的延长宽限：默认 1.8s 短于这些 app
+    /// 慢载入的迟到自 resize（加载完成后一次性自设 frame），可能把坏形态误标 manual 永久冻结。
+    /// 对 document-chooser app 延长到 4.0s 覆盖其迟到自 resize。非 document-chooser app 仍用 1.8s。
+    private static let documentChooserPostSessionGraceInterval: TimeInterval = 4.0
     /// 阶段 3.1：document-chooser 稳定门进行中的 PID 集合。用于抑制 `startInitialCenteringRetries`
     /// 在采样等待期间重复进入 `applyLayout`（否则每次重试都会启动一个新的采样循环）。
     /// 清理时机同 `processedPIDs`（attach 重激活、appDidTerminate、Space 切换、stop）。
@@ -1452,18 +1456,12 @@ final class WindowEventObserver {
     /// 窗口当前 frame 是否已完整匹配平铺目标（用于停止平铺稳定重试）。
     ///
     /// 委托给 `service.isWindowAtTiledTarget`：它在 service 内部复用与平铺路径相同的
-    /// 坐标空间探测（4 种空间 + CG 信号），并采用「**origin 严格 3px / size 宽松 16px**」
-    /// 判定（`WindowGeometry.frameMatchesTiledTarget`），另有“只向外少量超出但完整覆盖目标”的
-    /// 兜底。替换此前「四维统一 16px」宽松判定——
-    /// 后者会把 iWork（Numbers/Pages）smooth Phase B resize 后 origin 漂移（实测 x: 16→25，
-    /// 漂移 9px < 16px）的窗口误判为已完成平铺，导致首次平铺右侧边距偏差。origin 严格后：
-    /// 漂移窗口不再被判为完成 → 本方法的稳定重试继续触发 `tileWindowElementAnimated` →
-    /// `emitFinalAnchor` 把 origin 锚回 `targetFrame.origin` → 最终严格在位后停止重试。
-    /// size 宽松保留对 Terminal/electerm 字符网格 snap 尺寸（偏差 10-20px）的兼容；覆盖兜底
-    /// 避免 Numbers 读回比目标更高但已保住底部间距时反复重试。
-    /// 读取失败时保守返回 false（继续重试）。
+    /// 坐标空间探测（4 种空间 + CG 信号），并采用统一完成判定 `frameSatisfiesFinalTiledTarget`
+    ///（逐边语义：左严格 3px / 底向内宽松 16px / **顶 ±6px** / 右 −16/+6px，外加妥协形态相等
+    /// 与 3px 内完整覆盖两条兜底）。逐边语义挡住「贴底短高吃顶距」的错误形态（Numbers 顶距
+    /// 翻倍 bug），左边严格挡住 iWork origin 漂移（实测 x: 16→25）。读取失败时保守返回 false。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
-        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
+        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets)
     }
 
     /// 平铺后窗口是否真正落到平铺目标（origin + size 完整到位）。
@@ -1475,15 +1473,14 @@ final class WindowEventObserver {
     /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
     ///
     /// 判据委托给 `service.isWindowAtTiledTarget`（与 `isWindowNearTiledTarget` 同源、
-    /// 保持一致），采用「**origin 严格 3px / size 宽松 16px**」+ 覆盖目标兜底判定
-    /// （详见该方法注释）。
+    /// 保持一致），统一走 `frameSatisfiesFinalTiledTarget`（逐边语义判定，详见该方法注释）。
     /// 读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时
     /// 保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
     ///
     /// 语义配合：返回 false 时调用方应【不】markCentered、【不】锁 processedPIDs，
     /// 与上方 document-chooser / DMG 分支的「不锁」不变量同构——让真正主窗口有机会被处理。
     private func didWindowActuallyTile(_ windowElement: AXUIElement, pid: pid_t, insets: TileInsets) -> Bool {
-        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets, tolerance: 16)
+        service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets)
     }
 
     /// 窗口是否是"瞬态"窗口（登录窗 / 启动 splash / 二维码 / 小工具窗）——即非真正的主窗口。
@@ -1946,8 +1943,15 @@ final class WindowEventObserver {
     }
 
     /// 阶段 3.3：平铺会话结束后延伸宽限，覆盖文档 app（Numbers）迟到的自 resize。
+    /// document-chooser app 慢载入的迟到自 resize 到得更晚，用更长的 4.0s 宽限覆盖；
+    /// 其它 app 用默认 1.8s。避免坏形态被 handleResize 误标 manual 永久冻结。
     private func extendSelfLayoutGraceAfterSession(windowElement: AXUIElement, pid: pid_t) {
-        recordSelfLayoutGrace(windowElement: windowElement, pid: pid, interval: Self.postSessionGraceInterval, reason: "post-session grace")
+        let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let isDocumentChooser = tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleID)
+        let interval = isDocumentChooser
+            ? Self.documentChooserPostSessionGraceInterval
+            : Self.postSessionGraceInterval
+        recordSelfLayoutGrace(windowElement: windowElement, pid: pid, interval: interval, reason: "post-session grace\(isDocumentChooser ? " (document-chooser)" : "")")
     }
 
     private func recordSelfLayoutGrace(windowElement: AXUIElement, pid: pid_t, interval: TimeInterval, reason: String) {
@@ -2032,6 +2036,10 @@ final class WindowEventObserver {
         reason: String
     ) {
         DiagnosticLog.debug("tile-budget: exhausted — accept current frame and lock pid=\(pid) reason=\(reason) insets=\(insets)")
+        // 锁定前的终末位置修正：读实际 frame，若未满足统一判定，按妥协形态只写一次 position。
+        // 位置写入 app 从不抗拒（Numbers 抢的是尺寸），保证锁定结局顶距或底距之一等于设置值，
+        // 不再出现「贴底短高、缺口全堆到顶部」被锁定的形态（顶距翻倍 bug 的最后一道防线）。
+        service.anchorWindowToFallbackOrigin(windowElement, pid: pid, insets: insets)
         markCentered(windowElement: windowElement, pid: pid)
         processedPIDs.insert(pid)
         initialCenterTimer?.cancel()

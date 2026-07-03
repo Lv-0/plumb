@@ -142,27 +142,47 @@ enum WindowGeometry {
             abs(frame.height - product.height) <= tolerance
     }
 
-    /// 平铺完成严格判定：frame 四维是否「origin 严格、size 宽松」地匹配平铺目标。
+    /// 平铺完成严格判定：**逐边语义**——四向边距是否都落在可接受区间内。
     ///
-    /// 用途：区分「真正落到平铺目标」与「尺寸到位但 origin 漂移」——后者会被宽松判定
-    ///（四维统一容差）误判为已完成，导致 markCentered + processedPIDs 锁在漂移位置上，
-    /// 表现为 iWork/Numbers 首次平铺后右侧边距偏差（实测 origin x 漂移 9px）。
+    /// 用途：区分「真正落到平铺目标」与「贴底但顶部缺口」等错误形态——后者若被放行，
+    /// 会 markCentered + processedPIDs 锁在错误几何上（如 Numbers 新建文档顶距翻倍 bug：
+    /// 贴底、高度矮 16px，旧「minY 严格 + height ≤16」判定放行，但顶距被吃掉 16px）。
     ///
-    /// 容差策略：**origin 严格（originTolerance，默认 3px）、size 宽松（sizeTolerance，默认 16px）**。
-    ///   - origin 严格挡住 iWork smooth Phase B resize 后的 origin 漂移（< 16px 但肉眼可见、改变边距）；
-    ///   - size 宽松保留对 Terminal/electerm 按字符网格 snap 尺寸的 app 的兼容——它们的尺寸
-    ///     确实无法精确到位（width/height 偏差可达 10-20px），但 origin 正确，应判定为完成并锁 PID，
-    ///     避免首次启动反复重试到上限 + 每次切 App 回来都重新平铺的回归。
-    static func frameMatchesTiledTarget(
-        _ frame: CGRect,
-        target: CGRect,
-        originTolerance: CGFloat = 3,
-        sizeTolerance: CGFloat = 16
-    ) -> Bool {
-        abs(frame.minX - target.minX) <= originTolerance &&
-            abs(frame.minY - target.minY) <= originTolerance &&
-            abs(frame.width - target.width) <= sizeTolerance &&
-            abs(frame.height - target.height) <= sizeTolerance
+    /// 容差策略（逐边，互不掩盖）：
+    ///   - **左边（锚定边，严格）**：`|frame.minX − target.minX| ≤ 3`
+    ///   - **底边（锚定边，向内宽松）**：`frame.minY − target.minY ∈ [−3, +16]`
+    ///   - **顶边（关键约束）**：`frame.maxY − target.maxY ∈ [−6, +6]`
+    ///   - **右边**：`frame.maxX − target.maxX ∈ [−16, +6]`
+    ///
+    /// 语义解释：
+    ///   - 底边/右边允许向内收 ≤16px：兼容 Terminal/electerm 等按字符网格 snap 尺寸的 app 的
+    ///     「保顶/保左」妥协（缺口落到底距/右距变宽）。这些 app 尺寸确实无法精确到位，但 origin
+    ///     正确，应判定为完成并锁 PID，避免每次切 App 重平铺的回归。
+    ///   - 顶边 ±6、右边向外 +6：origin 严格 3px + 尺寸噪声 3px 的合成上界；超过 6px 的顶边缺口
+    ///     意味着顶距被明显吃掉，必须拒绝（这正是本次 bug：贴底矮 16 → maxY 缺 16 → 拒）。
+    ///   - 底边向外 ≤3：不许吃底距（贴底是目标，但向下出屏会让底距消失，必须拒绝）。
+    ///
+    /// 顶距与底距「非对称」的原因：top 缺口直接吃掉用户设置顶距（外观为顶距翻倍），是本次
+    /// bug 的形态；bottom 缺口是 Terminal 类「保顶 snap」的合法妥协（顶距正确、底距放宽）。
+    /// 两者分别用 ±6 / [+16,−3] 容差独立处理，避免互相掩盖。
+    static func frameMatchesTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
+        // 左边（锚定边，严格）：不允许横向漂移（iWork resize 后 origin 漂移会破坏左右边距）。
+        let leftOff = frame.minX - target.minX
+        guard abs(leftOff) <= 3 else { return false }
+
+        // 底边（锚定边）：向内收 ≤16px 合法（保顶 snap 妥协），向外最多出屏 3px（不许吃底距）。
+        let bottomOff = frame.minY - target.minY
+        guard bottomOff >= -3, bottomOff <= 16 else { return false }
+
+        // 顶边（关键）：±6 合成上界（origin 3px + 尺寸噪声 3px）。顶边缺口意味着顶距被吃。
+        let topOff = frame.maxY - target.maxY
+        guard topOff >= -6, topOff <= 6 else { return false }
+
+        // 右边：向内收 ≤16px 合法（字符网格 snap），向外最多 +6px。
+        let rightOff = frame.maxX - target.maxX
+        guard rightOff >= -16, rightOff <= 6 else { return false }
+
+        return true
     }
 
     /// 平铺完成兜底判定：窗口没有向内露出空白，并且只少量外扩。
@@ -206,7 +226,8 @@ enum WindowGeometry {
     /// 统一平铺完成判定（唯一真源）：一个 frame 是否应被接受为「平铺完成」。
     ///
     /// 三选一，按此顺序短路：
-    ///   1. `frameMatchesTiledTarget` —— 真正落到平铺目标（origin 严格 3px / size 宽松 16px）。
+    ///   1. `frameMatchesTiledTarget` —— 真正落到平铺目标（逐边语义：左严格 3px、底向内宽松 16px、
+    ///      顶 ±6px、右 −16/+6px；防止「贴底短高」吃掉顶距）。
     ///   2. `frameMatchesFallbackProduct` —— 等于「妥协形态」（四维 3px）。这是 app 拒绝目标尺寸后
     ///      `emitFinalAnchor` 愿意留下的唯一妥协 frame；判定必然接受 → 锚定与判定同源，循环消除。
     ///   3. `frameCoversTiledTarget` —— 完整覆盖目标、四向外扩 ≤ 3px 的几何兜底（应对系统顶部夹取
