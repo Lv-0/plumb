@@ -42,14 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 随 app 生命周期，无需显式 invalidate（与 launchCenterTimer 同模式）。
     private var backgroundUpdateTimer: DispatchSourceTimer?
 
-    /// 逃生口（菜单栏图标隐藏时）的「连续两次打开」判定器。
+    /// 「连续两次打开 → 弹出设置」逃生口的判定器（无条件生效，不再限于图标隐藏时）。
     /// 若距上次打开 ≤ threshold 秒即视为「连续两次打开」→ 弹出设置；超过则重新计数。
     /// 纯逻辑状态机（无 macOS 依赖），threshold 与计数细节见 `ReopenDetector`（可单测）。
     ///
-    /// 信号选型（实测结论）：菜单栏图标隐藏后 Plumb 是纯后台 agent（无 Dock 图标 / 无菜单栏
-    /// 图标 / 无窗口）。此时经 Finder/启动台/Spotlight 再次打开，系统走 LaunchServices 路径
-    /// 投递 `applicationShouldHandleReopen`（每次打开都投递，hasVisibleWindows=false）——这是
-    /// 唯一对「隐藏 agent 的再次打开」可靠的系统信号。
+    /// 信号选型（实测结论）：Plumb 是无 Dock 图标的 agent。经 Finder/启动台/Spotlight 再次
+    /// 打开时，系统走 LaunchServices 路径投递 `applicationShouldHandleReopen`（每次打开都投递，
+    /// hasVisibleWindows=false）——这是唯一对「agent 的再次打开」可靠的系统信号。
     /// ⚠️ 历史教训：v2.0.10–v2.0.12 误判此信号无效，是因为只测了 CLI `open`（走另一条路径、
     /// 对隐藏 agent 不投递）。Finder 双击走 LaunchServices，该信号每次必触发。务必用真实
     /// LaunchServices 路径验证，不要用 CLI `open`。
@@ -63,6 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 按设置决定是否显示菜单栏图标：默认显示；开启「隐藏菜单栏图标」则不创建。
         if !tilingSettingsStore.load().hideStatusBarIcon {
             showStatusBarIcon()
+            // 启动后延迟做一次图标健康检查：macOS 26 状态栏项由 ControlCenter 托管布局，
+            // 偶发不分配槽位（图标创建成功但被「停」在屏幕右角、不显示）。5s 后布局已稳定，
+            // 命中指纹则重建一次。reopen 路径亦有同样的自愈（见 healStatusBarIconIfNeeded）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                self?.healStatusBarIconIfNeeded()
+            }
         }
         setupMainMenu()
         observeStatusBarVisibilityChanges()
@@ -102,21 +107,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UpdateCoordinator.shared.checkForUpdatesInBackground()
     }
 
-    // MARK: 菜单栏图标隐藏时的逃生口（连续两次打开 → 弹设置）
+    // MARK: 逃生口（连续两次打开 → 弹设置）+ 状态栏图标自愈
 
-    /// 经 Finder/启动台/Spotlight「再次打开」已运行的 Plumb 时触发。对隐藏图标的 agent app，
+    /// 经 Finder/启动台/Spotlight「再次打开」已运行的 Plumb 时触发。对无 Dock 图标的 agent app，
     /// 这是唯一可靠的「再次打开」系统信号（每次打开都投递，hasVisibleWindows=false）。
     ///
-    /// 当菜单栏图标被隐藏、用户无从进入设置时，**连续两次打开（间隔 ≤ threshold 秒）** 即弹出
-    /// 设置，这是隐藏后回到设置的唯一入口。图标可见时走默认行为（不计数、不弹窗）。
+    /// **连续两次打开（间隔 ≤ threshold 秒）→ 无条件弹出设置。**
+    /// 早期版本仅在「隐藏菜单栏图标」开启时才启用此逃生口；结果当图标因环境原因不可见时
+    /// （菜单栏图标过多被挤掉 / 刘海屏遮挡 / macOS 26 状态栏托管场景不渲染——设置仍是「显示」），
+    /// 用户既看不到图标、双开也不弹设置，被彻底锁在设置之外（2026-07 实测踩坑）。故改为无条件：
+    /// 双开已运行的 app 是明确的「给我界面」手势；图标可见时多弹一次设置也无副作用（关掉即可）。
     /// 计数与时间窗口判定委托给 `ReopenDetector`（纯逻辑，单测覆盖）。
+    ///
+    /// 顺带自愈：每次 reopen 都检查「设置要求显示但图标实际不可见」的情况并重建图标。
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard tilingSettingsStore.load().hideStatusBarIcon else { return true }
+        healStatusBarIconIfNeeded()
         // registerOpen 记录本次打开并判定：true = 距上次打开在窗口内 → 连续两次，弹设置。
         if reopenDetector.registerOpen() {
+            DiagnosticLog.debug("reopen: double-open within \(Int(ReopenDetector.threshold))s — opening settings")
             openSettings()
         }
         return true
+    }
+
+    /// 设置要求显示图标、但图标不存在或其状态栏窗口缺失/不可见时，销毁重建（重新注册托管场景）。
+    ///
+    /// 重建指纹刻意保守：仅 `button.window == nil` 或 `isVisible == false`。
+    /// ⚠️ 不要用 occlusionState / windowFrame 作为重建条件——2026-07 实测：macOS 26 起状态栏
+    /// 项的像素由 ControlCenter 托管渲染，app 侧的状态栏窗口即使在图标正常显示时也停在屏幕
+    /// 右下角「停车位」（本机实测 frame=(1478,960,34,22)、occluded=true；iStat 等第三方项同样
+    /// 如此）。若据此重建，健康图标每次 reopen 都会被销毁重建（闪烁 + 用户手排的图标顺序丢失）。
+    /// frame/occluded 仅作取证日志：真被菜单栏挤掉（图标过多/刘海屏）与托管场景不渲染时，
+    /// 这些字段的组合是事后区分两类问题的关键证据。
+    private func healStatusBarIconIfNeeded() {
+        guard !tilingSettingsStore.load().hideStatusBarIcon else { return }
+        guard let item = statusItem else {
+            DiagnosticLog.debug("statusIcon: health-check — item missing, creating")
+            showStatusBarIcon()
+            return
+        }
+        let win = item.button?.window
+        let frameDesc = win.map { "\($0.frame)" } ?? "nil"
+        let occluded = win.map { !$0.occlusionState.contains(.visible) } ?? true
+        DiagnosticLog.debug("statusIcon: health-check windowFrame=\(frameDesc) visible=\(win?.isVisible ?? false) occluded=\(occluded)")
+        if win == nil || win?.isVisible != true {
+            DiagnosticLog.debug("statusIcon: unhealthy — recreating")
+            hideStatusBarIcon()
+            showStatusBarIcon()
+        }
     }
 
     /// 监听设置 UI 的「隐藏菜单栏图标」开关变化：拨动后即时增/删状态栏图标。
@@ -252,6 +290,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 幂等：图标已存在则不重复创建（避免开关来回拨动时叠加多个图标）。
         if statusItem != nil { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // 防御：若系统曾持久化过「不可见」状态（isVisible=false），显式拉回可见。
+        item.isVisible = true
         if
             let iconURL = Bundle.main.url(forResource: "StatusIconTemplate", withExtension: "png"),
             let statusImage = NSImage(contentsOf: iconURL)
@@ -262,7 +302,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.button?.imagePosition = .imageOnly
             item.button?.title = ""
         } else {
+            // 图标资源缺失时退回文字，保证菜单入口仍可用。
             item.button?.title = "Plumb"
+            DiagnosticLog.debug("statusIcon: StatusIconTemplate.png load FAILED — using title fallback")
         }
 
         let menu = NSMenu()
@@ -304,6 +346,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 设为菜单委托：菜单每次打开前触发 menuNeedsChange，刷新两个总开关的勾选标记，
         // 让用户从下拉即可看到当前开/关状态（autoenablesItems=false 下 validateMenuItem 不被调用）。
         menu.delegate = self
+
+        // 取证日志：下一 runloop 记录图标的状态栏窗口 frame。菜单栏空间不足（图标过多/刘海屏）
+        // 时 AppKit 不报错、只是不显示——windowFrame 缺失或落在屏幕外即为「被挤掉」的证据，
+        // 与「托管场景不渲染」（frame 正常但用户看不到）可从日志区分。
+        DispatchQueue.main.async { [weak item] in
+            let win = item?.button?.window
+            let frameDesc = win.map { "\($0.frame)" } ?? "nil"
+            let screenW = NSScreen.main.map { "\($0.frame.width)" } ?? "?"
+            DiagnosticLog.debug("statusIcon: created windowFrame=\(frameDesc) visible=\(win?.isVisible ?? false) mainScreenW=\(screenW)")
+        }
     }
 
     /// 从状态栏移除水滴图标（「隐藏菜单栏图标」开启或切换时调用）。
