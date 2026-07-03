@@ -377,24 +377,28 @@ publish_github_release() {
 
 # ───────────────────────── appcast notes ─────────────────────────
 collect_appcast_notes() {
-  # 返回（echo）一个临时文件路径，内容是解析后的 JSON 片段（5 个 "lang": "..." 键值对）。
+  # 返回（echo 到 stdout）一个临时文件路径，内容是解析后的 JSON 片段（5 个 "lang": "..." 键值对）。
   # 调用方负责 rm。
+  # ⚠️ 本函数 stdout 只能输出路径本身 —— 所有诊断/进度必须走 stderr，否则会被
+  #    parsed=$(collect_appcast_notes) 捕获进路径变量。
   local parsed
   parsed=$(mktemp)
 
   if [[ -n "$NOTES_FILE" ]]; then
     [[ -f "$NOTES_FILE" ]] || die "notes 文件不存在: $NOTES_FILE"
-    ok "使用预写 notes 文件: $NOTES_FILE"
+    ok "使用预写 notes 文件: $NOTES_FILE" >&2
   else
     NOTES_FILE=$(mktemp -t plumb_notes)
     # 模板里 VERSION 占位替换
     print_notes_template | sed "s/VERSION/${VERSION}/g" > "$NOTES_FILE"
     local editor="${EDITOR:-vi}"
-    echo
-    echo "$(c_bold "?") 用 ${editor} 编辑 appcast notes（5 语言 OTA 摘要）。"
-    echo "    保存退出继续；格式: 5 行 'xx: <摘要>'，删掉 '# ' 注释行。"
-    echo "    风格参考: git show e220550 -- appcast.json"
-    echo
+    {
+      echo
+      echo "$(c_bold "?") 用 ${editor} 编辑 appcast notes（5 语言 OTA 摘要）。"
+      echo "    保存退出继续；格式: 5 行 'xx: <摘要>'，删掉 '# ' 注释行。"
+      echo "    风格参考: git show e220550 -- appcast.json"
+      echo
+    } >&2
     read -r -p "$(c_bold "?") 打开编辑器? [Y/n] " ans
     if [[ ! "${ans:-Y}" =~ ^[Nn]$ ]]; then
       "$editor" "$NOTES_FILE" || die "编辑器退出非零"
@@ -410,30 +414,24 @@ langs = ["en", "zh", "es", "fr", "ja"]
 notes = {}
 with open(src, encoding="utf-8") as f:
     for line in f:
-        line = line.rstrip("\n")
         s = line.strip()
         if not s or s.startswith("#"):
             continue
         m = re.match(r"^(en|zh|es|fr|ja)\s*:\s*(.*)$", s)
-        if not m:
-            continue
-        lang, val = m.group(1), m.group(2).strip()
-        if val:
-            notes[lang] = val
+        if m and m.group(2).strip():
+            notes[m.group(1)] = m.group(2).strip()
 missing = [l for l in langs if l not in notes]
 if missing:
     sys.stderr.write(f"错误: notes 缺少语言: {', '.join(missing)}\n")
     sys.exit(1)
-# 输出 5 个 "lang": "value", 行（带 4 空格缩进，匹配 appcast.json 现有格式）
 with open(out, "w", encoding="utf-8") as f:
     for i, l in enumerate(langs):
         comma = "," if i < len(langs) - 1 else ""
         f.write(f'    {json.dumps(l)}: {json.dumps(notes[l])}{comma}\n')
-print(f"解析到 {len(notes)} 语言 notes")
+sys.stderr.write(f"  ✓ 解析到 {len(notes)} 语言 notes\n")
 PY
 
-  # 如果 NOTES_FILE 是我们 mktemp 的（交互模式），用完清理；预写的不删。
-  if [[ -z "${INTERACTIVE_NOTES:-}" ]]; then :; fi
+  # 交互模式下清理我们 mktemp 的 NOTES_FILE；预写的 --notes-file 不删。
   echo "$parsed"
 }
 
