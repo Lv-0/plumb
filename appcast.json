@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.51/Plumb-2.0.51.zip",
   "sha256": "9097b3128b7ae8d541de1524e5bf2454ede19d2a4e4cae51e86d7b6545a742b5",
   "notes": {
-    "en": "New menu-bar icon — a code-drawn inverted triangle with a simplified Eye of Horus, replacing the logo-based icon from v2.0.49. It's self-contained (no external image asset), crisper at 22pt menu-bar size, and matches the app's plumb-line identity. Also: the release documentation now describes the one-command release flow, and the minimum-system-version metadata is corrected to macOS 26 (the actual deployment target). 246 tests pass.",
-    "zh": "全新菜单栏图标——代码绘制的倒三角 + 简化荷鲁斯之眼，替代 v2.0.49 的 logo 图标。自包含（无需外部图片素材）、22pt 菜单栏尺寸下更清晰、与 app 的铅垂线身份契合。另外：发布文档改为介绍一键发布流程；最低系统版本元数据修正为 macOS 26（实际部署目标）。246 项测试通过。",
-    "es": "Nuevo icono de barra de menús — un triángulo invertido dibujado por código con un Ojo de Horus simplificado, que reemplaza el icono basado en logo de v2.0.49. Es autónomo (sin recurso de imagen externo), más nítido a tamaño 22pt en la barra de menús y coincide con la identidad de la plomada de la app. Además: la documentación de publicación ahora describe el flujo de publicación con un solo comando, y los metadatos de versión mínima del sistema se corrigen a macOS 26 (el objetivo de despliegue real). 246 pruebas pasan.",
-    "fr": "Nouvelle icône de barre de menus — un triangle inversé dessiné par code avec un Œil d'Horus simplifié, remplaçant l'icône basée sur le logo de v2.0.49. Elle est autonome (sans ressource d'image externe), plus nette à la taille 22pt en barre de menus et correspond à l'identité du fil à plomb de l'app. Aussi : la documentation de publication décrit désormais le flux de publication en une seule commande, et les métadonnées de version minimale du système sont corrigées vers macOS 26 (la cible de déploiement réelle). 246 tests réussissent.",
-    "ja": "新しいメニューバーアイコン——コード描画の逆三角形＋簡略化されたホルスの眼。v2.0.49 のロゴベースアイコンを置き換えます。自己完結型（外部画像アセット不要）、22pt のメニューバーサイズで鮮明、アプリの鉛垂線アイデンティティに合致します。また：リリースドキュメントがワンコマンドリリースフローを説明するように更新され、最低システムバージョンメタデータが macOS 26（実際のデプロイ対象）に修正されました。246 テスト成功。"
+    "en": "Restores the v2.0.49 menu-bar logo — the line-art Millennium Puzzle icon generated from assets/logo.png, replacing the v2.0.50 code-drawn triangle. Display size back to 20pt. 246 tests pass.",
+    "zh": "恢复 v2.0.49 菜单栏图标——由 assets/logo.png 线稿生成的千年积木 logo，替代 v2.0.50 的代码绘制倒三角。显示尺寸回到 20pt。246 项测试通过。",
+    "es": "Restaura el icono de barra de menús de v2.0.49 — el logo lineal del Puzzle del Milenio generado desde assets/logo.png, reemplazando el triángulo dibujado por código de v2.0.50. Tamaño de visualización de vuelta a 20pt. 246 pruebas pasan.",
+    "fr": "Rétablit l'icône de barre de menus de v2.0.49 — le logo en traits du Puzzle du Millénaire généré depuis assets/logo.png, remplaçant le triangle dessiné par code de v2.0.50. Taille d'affichage revenue à 20pt. 246 tests réussissent.",
+    "ja": "v2.0.49 のメニューバーアイコンを復元——assets/logo.png の線画千年パズルロゴ。v2.0.50 のコード描画逆三角形を置き換えます。表示サイズは 20pt に戻ります。246 テスト成功。"
   },
   "minOS": "26.0"
 }
