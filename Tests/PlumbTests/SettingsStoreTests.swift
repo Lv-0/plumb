@@ -172,3 +172,127 @@ func settingsStoreBackwardCompatWhenCenterKeysAbsent() async throws {
     // 迁移后文件应已生成（含从 UserDefaults 读到的数据）。
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
 }
+
+// MARK: - resolvedAutomaticLayout (tile/center 互斥、平铺优先)
+
+@Test
+func resolvedLayoutTileWinsWhenAppInBothAllowlists() async throws {
+    // 一个 bundle id 合法地同时出现在 tiledBundleIDs 与 centeredBundleIDs（历史/用户选择）。
+    // 运行时必须确定性地解析为 .tile——平铺优先，不修改用户的设置。
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.netease.163music"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: ["com.netease.163music"],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.netease.163music") == .tile)
+    // 归一化（大小写/空格）后仍命中。
+    #expect(settings.resolvedAutomaticLayout(for: "  COM.NETEASE.163MUSIC  ") == .tile)
+}
+
+@Test
+func resolvedLayoutTileOnly() async throws {
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.finder"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.apple.finder") == .tile)
+}
+
+@Test
+func resolvedLayoutCenterOnly() async throws {
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: [],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: ["com.apple.safari"],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.apple.safari") == .center)
+}
+
+@Test
+func resolvedLayoutNoneWhenAppInNeitherAndAllowlistsNonEmpty() async throws {
+    // 列表非空 → 仅列表内；不在任何列表 → .none。
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.finder"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: ["com.apple.safari"],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.other.app") == .none)
+    #expect(settings.resolvedAutomaticLayout(for: nil) == .none)
+}
+
+@Test
+func resolvedLayoutCenterWhenTilingDisabledButCenteringEnabled() async throws {
+    // 平铺总开关关闭 → shouldTile 恒 false；居中开启 + 空列表 → 全部居中。
+    let settings = AppTilingSettings(
+        isEnabled: false, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.finder"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.apple.finder") == .center)
+    #expect(settings.resolvedAutomaticLayout(for: "anything") == .center)
+}
+
+@Test
+func resolvedLayoutTileWhenCenteringDisabledButTilingEnabled() async throws {
+    // 居中关闭、平铺开启且在平铺白名单 → .tile（平铺不依赖居中开关）。
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.finder"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: false,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.apple.finder") == .tile)
+    // 不在平铺白名单 → .none（居中已关闭）。
+    #expect(settings.resolvedAutomaticLayout(for: "com.other.app") == .none)
+}
+
+@Test
+func resolvedLayoutPreservesBundleIDNormalization() async throws {
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.pages"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: ["com.apple.PAGES"],   // 归一化后与平铺白名单同一 key
+        documentChooserBundleIDs: []
+    )
+    // 大小写/空格差异不影响：归一化后命中 → 平铺优先。
+    #expect(settings.resolvedAutomaticLayout(for: "Com.Apple.Pages") == .tile)
+    #expect(settings.resolvedAutomaticLayout(for: " com.apple.pages ") == .tile)
+}
+
+@Test
+func resolvedLayoutPreservesEmptyCenteredBundleIDsSemantics() async throws {
+    // 空 centeredBundleIDs => 居中全部；但平铺优先，故平铺白名单内 app 仍为 .tile，
+    // 不在平铺白名单的任意 app 为 .center（空列表=全部居中的既有语义）。
+    let settings = AppTilingSettings(
+        isEnabled: true, edgeInsets: TileInsets(all: 16),
+        tiledBundleIDs: ["com.apple.finder"],
+        hideSystemAppsInPicker: true,
+        centerEnabled: true,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: []
+    )
+    #expect(settings.resolvedAutomaticLayout(for: "com.apple.finder") == .tile)
+    #expect(settings.resolvedAutomaticLayout(for: "com.other.app") == .center)
+    #expect(settings.resolvedAutomaticLayout(for: nil) == .center)
+}
+

@@ -480,3 +480,61 @@ func frameSatisfiesFinalTiledTarget_offscreenBottom_rejects() async throws {
     let offscreenBottom = CGRect(x: 16, y: -16, width: 1888, height: 1050)
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(offscreenBottom, target: target) == false)
 }
+
+// MARK: - 尺寸受限平铺 App 的回归覆盖（NetEase Cloud Music 复现参数）
+//
+// 复现：NetEase Cloud Music 拒绝目标高度 707、读回 752。现有 taller-window fallback
+// 会把窗口锚定到妥协形态 (144,162,1224,752)。但旧实现的 centerAfterTile 会在锁定后
+// 把同一窗口居中移动到 (144,140,1224,752)，而居中后的 frame 不再被完成判定接受 →
+// 下次激活整条写入序列重来 → 反复上下跳动（113→68→90）。
+// 以下断言固化「妥协形态被接受、居中后形态被拒绝」，从而说明为何移除 centerAfterTile 后
+// preflight 能让已就位窗口被幂等锁定。
+
+@Test
+func netEaseReproduction_tileTargetExactValue() async throws {
+    // 复现参数：visibleFrame 与 per-app insets 推出的精确平铺目标。
+    let visible = CGRect(x: 0, y: 82, width: 1512, height: 867)
+    let insets = TileInsets(top: 80, bottom: 80, left: 144, right: 144)
+
+    let target = WindowGeometry.tiledFrame(visibleFrame: visible, insets: insets)
+
+    #expect(target == CGRect(x: 144, y: 162, width: 1224, height: 707))
+}
+
+@Test
+func netEaseReproduction_tallerWindowFallbackPreservesBottomEdge() async throws {
+    // app 拒绝高度 707、读回 752（比目标高）。taller-window fallback 保底边距：
+    // origin.y = targetFrame.minY（多出的高度向顶部外扩，底距严格 = bottom inset）。
+    let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
+    let actualSize = CGSize(width: 1224, height: 752)
+
+    let fallback = WindowGeometry.expectedFallbackFrame(targetFrame: target, actualSize: actualSize)
+
+    #expect(fallback == CGRect(x: 144, y: 162, width: 1224, height: 752))
+    // 底边严格 = visibleFrame.minY + bottom inset = 82 + 80 = 162。
+    #expect(fallback.minY == 162)
+}
+
+@Test
+func netEaseReproduction_fallbackFrameSatisfiesFinalTiledTarget() async throws {
+    // 锚定后的妥协形态必须被完成判定接受——这是「锚定愿意留下的，判定必然接受」不变量，
+    // 也是 no-write preflight 能识别并幂等锁定的前提。
+    let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
+    let fallback = CGRect(x: 144, y: 162, width: 1224, height: 752)
+
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(fallback, target: target) == true)
+}
+
+@Test
+func netEaseReproduction_centeredFrameRejectedAsTileProduct() async throws {
+    // 旧 centerAfterTile 把同一尺寸的窗口从妥协形态 (144,162) 居中移动到 (144,140)
+    //（centeredOrigin: visibleFrame.midY - height/2 = (82+867/2) - 752/2 = 495.5 - 376 = 119.5 → 120，
+    //  实测读回 140，含坐标空间/取整差异）。居中后的 frame 不等于妥协形态（minY 140 ≠ 162），
+    //  下次激活的完成判定不接受它 → 整条写入序列重来。本断言固化「居中后形态被拒绝」，
+    //  说明为何保留 centerAfterTile 会让 preflight 失效（preBlock 4）。
+    let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
+    let centeredAfterTile = CGRect(x: 144, y: 140, width: 1224, height: 752)
+
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(centeredAfterTile, target: target) == false)
+}
+

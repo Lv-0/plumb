@@ -62,6 +62,17 @@ struct TileInsets: Codable, Equatable {
     }
 }
 
+/// 运行时自动排版的互斥决策（见 `AppTilingSettings.resolvedAutomaticLayout(for:)`）。
+///
+/// 平铺与自动居中在运行时互斥：一个 App 在同一激活周期内只会被自动「平铺」或「居中」之一，
+/// 平铺优先（与 README「tiling has priority over auto-centering」一致）。显式决策类型替代了
+/// 旧的隐式「先平铺再居中」行为，避免尺寸受限的平铺 App 被居中反复移动。
+enum AutomaticLayoutMode: Equatable {
+    case tile
+    case center
+    case none
+}
+
 struct AppTilingSettings: Equatable, Codable {
     static let defaultEdgeMargin: CGFloat = 16
     static let minimumEdgeMargin: CGFloat = 0
@@ -273,6 +284,23 @@ struct AppTilingSettings: Equatable, Codable {
         if centeredBundleIDs.isEmpty { return true }
         guard let bundleIdentifier else { return false }
         return centeredBundleIDs.contains(Self.normalizeBundleID(bundleIdentifier))
+    }
+
+    /// 运行时自动排版的互斥决策（平铺 / 居中 / 不动）。
+    ///
+    /// 这是唯一真源：一个 App 在运行时只会被自动「平铺」或「居中」之一，不会同时两者。
+    /// 平铺与自动居中互斥，平铺优先（与 README「For allowlisted apps, tiling has priority
+    /// over auto-centering」一致）。一个设置文件里同一个 bundle id 合法地同时出现在
+    /// `tiledBundleIDs` 与 `centeredBundleIDs` 是允许的（历史/用户选择），本方法在运行时
+    /// 确定性地解析为 `.tile`——不修改用户的设置。
+    ///
+    /// 显式决策类型替代了旧的隐式「先平铺再居中」（centerAfterTile）行为：后者让一个尺寸受限、
+    /// 拒绝目标高度的平铺 App 在每次激活时都被居中再次移动，造成「反复上下跳动」的回归。
+    func resolvedAutomaticLayout(for bundleIdentifier: String?) -> AutomaticLayoutMode {
+        // 平铺优先：命中即返回 .tile，不再评估居中。
+        if shouldTile(bundleIdentifier: bundleIdentifier) { return .tile }
+        if shouldCenter(bundleIdentifier: bundleIdentifier) { return .center }
+        return .none
     }
 
     /// 是否启用"文档选择器感知"（仅对这些 App 的选择器窗口做特殊处理）。
