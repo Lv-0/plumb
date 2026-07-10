@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.52/Plumb-2.0.52.zip",
   "sha256": "10015ae9e56d435a4375fbf5ba8fba7ce66392c82e855dd26bc5fa6f97ff25d4",
   "notes": {
-    "en": "Restores the v2.0.49 menu-bar logo — the line-art Millennium Puzzle icon generated from assets/logo.png, replacing the v2.0.50 code-drawn triangle. Display size back to 20pt. 246 tests pass.",
-    "zh": "恢复 v2.0.49 菜单栏图标——由 assets/logo.png 线稿生成的千年积木 logo，替代 v2.0.50 的代码绘制倒三角。显示尺寸回到 20pt。246 项测试通过。",
-    "es": "Restaura el icono de barra de menús de v2.0.49 — el logo lineal del Puzzle del Milenio generado desde assets/logo.png, reemplazando el triángulo dibujado por código de v2.0.50. Tamaño de visualización de vuelta a 20pt. 246 pruebas pasan.",
-    "fr": "Rétablit l'icône de barre de menus de v2.0.49 — le logo en traits du Puzzle du Millénaire généré depuis assets/logo.png, remplaçant le triangle dessiné par code de v2.0.50. Taille d'affichage revenue à 20pt. 246 tests réussissent.",
-    "ja": "v2.0.49 のメニューバーアイコンを復元——assets/logo.png の線画千年パズルロゴ。v2.0.50 のコード描画逆三角形を置き換えます。表示サイズは 20pt に戻ります。246 テスト成功。"
+    "en": "Fixes repeated vertical jumping when reactivating tiled apps that reject the target window size (e.g. NetEase Cloud Music). Tiling and auto-centering are now mutually exclusive — tiling always wins — and an already-well-placed tiled window is locked without any re-write, so repeated Command+Tab is now stable. 258 tests pass.",
+    "zh": "修复尺寸受限的平铺应用（如网易云音乐）在切回时反复上下跳动的问题。平铺与自动居中现在互斥——平铺优先——且已经就位的平铺窗口会被直接锁定而不再重写，反复 Command+Tab 切换不再抖动。258 项测试通过。",
+    "es": "Corrige el salto vertical repetido al reactivar apps en mosaico que rechazan el tamaño de ventana objetivo (p. ej. NetEase Cloud Music). El mosaico y el centrado automático ahora son mutuamente excluyentes — el mosaico siempre gana — y una ventana en mosaico ya bien colocada se bloquea sin reescribirla, por lo que repetir Command+Tab ahora es estable. 258 pruebas pasan.",
+    "fr": "Corrige les sauts verticaux répétés lors de la réactivation d'apps en mosaïque qui refusent la taille de fenêtre cible (ex. NetEase Cloud Music). Le mosaïque et le centrage automatique sont désormais mutuellement exclusifs — le mosaïque gagne toujours — et une fenêtre déjà bien placée est verrouillée sans réécriture, donc les Command+Tab répétés sont désormais stables. 258 tests réussissent.",
+    "ja": "ターゲットウィンドウサイズを拒否するタイリングアプリ（例: NetEase Cloud Music）を再アクティブ化した際の繰り返される垂直のジャンプを修正します。タイリングと自動中央揃えは相互に排他的になり、タイリングが常に優先されます。既に適切に配置されたタイリング済みウィンドウは再書き込みなしでロックされるため、繰り返しの Command+Tab が安定します。258 テスト合格。"
   },
   "minOS": "26.0"
 }
