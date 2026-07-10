@@ -1,7 +1,7 @@
 {
-  "version": "2.0.51",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.51/Plumb-2.0.51.zip",
-  "sha256": "9097b3128b7ae8d541de1524e5bf2454ede19d2a4e4cae51e86d7b6545a742b5",
+  "version": "2.0.52",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.52/Plumb-2.0.52.zip",
+  "sha256": "10015ae9e56d435a4375fbf5ba8fba7ce66392c82e855dd26bc5fa6f97ff25d4",
   "notes": {
     "en": "Restores the v2.0.49 menu-bar logo — the line-art Millennium Puzzle icon generated from assets/logo.png, replacing the v2.0.50 code-drawn triangle. Display size back to 20pt. 246 tests pass.",
     "zh": "恢复 v2.0.49 菜单栏图标——由 assets/logo.png 线稿生成的千年积木 logo，替代 v2.0.50 的代码绘制倒三角。显示尺寸回到 20pt。246 项测试通过。",
