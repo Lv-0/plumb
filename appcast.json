@@ -1,7 +1,7 @@
 {
-  "version": "2.0.52",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.52/Plumb-2.0.52.zip",
-  "sha256": "10015ae9e56d435a4375fbf5ba8fba7ce66392c82e855dd26bc5fa6f97ff25d4",
+  "version": "2.0.53",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.53/Plumb-2.0.53.zip",
+  "sha256": "274b9b4aa13da83c696ecaabd0a8f36f3784548f5a4c7a1c732648f777c910dc",
   "notes": {
     "en": "Fixes repeated vertical jumping when reactivating tiled apps that reject the target window size (e.g. NetEase Cloud Music). Tiling and auto-centering are now mutually exclusive — tiling always wins — and an already-well-placed tiled window is locked without any re-write, so repeated Command+Tab is now stable. 258 tests pass.",
     "zh": "修复尺寸受限的平铺应用（如网易云音乐）在切回时反复上下跳动的问题。平铺与自动居中现在互斥——平铺优先——且已经就位的平铺窗口会被直接锁定而不再重写，反复 Command+Tab 切换不再抖动。258 项测试通过。",
