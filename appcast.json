@@ -1,7 +1,7 @@
 {
-  "version": "2.0.53",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.53/Plumb-2.0.53.zip",
-  "sha256": "274b9b4aa13da83c696ecaabd0a8f36f3784548f5a4c7a1c732648f777c910dc",
+  "version": "2.0.54",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.54/Plumb-2.0.54.zip",
+  "sha256": "c38e6d1ce885a57fb0ab1dc7477d43e5fc77fd56417e7e1c07d480301ab8383e",
   "notes": {
     "en": "Refactors the window-layout engine with activation-scoped ownership, FIFO single-flight scheduling, and lifecycle-safe callbacks for more reliable centering and tiling. Animation failures, user interruptions, PID reuse, and stale asynchronous work are now handled explicitly. 299 tests pass.",
     "zh": "重构窗口布局引擎，引入激活周期所有权、FIFO 单飞调度与生命周期安全回调，让自动居中和平铺更加稳定。现在会明确处理动画失败、用户中断、PID 复用和过期异步任务。299 项测试全部通过。",
