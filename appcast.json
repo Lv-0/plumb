@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.56/Plumb-2.0.56.zip",
   "sha256": "d139a96c20db088b93cb3b75b256a81bfeac2238383149f07de35916b1d92d2d",
   "notes": {
-    "en": "Hardens OTA updates end to end with strict manifests, bounded downloads, archive and signing validation, and transactional installation with rollback. Update/layout lifecycle handling and release publishing are also safer, including immutable assets and verified appcast publication. 389 tests plus the release safety suite pass.",
-    "zh": "端到端强化 OTA 更新安全，加入严格清单、有界下载、压缩包与签名校验，以及支持回滚的事务安装。更新与布局生命周期、不可变发布资产和 appcast 上线前验证也更加可靠。389 项测试及发布安全测试全部通过。",
-    "es": "Refuerza las actualizaciones OTA de extremo a extremo con manifiestos estrictos, descargas limitadas, validación de archivos y firmas, e instalación transaccional con reversión. También mejora la seguridad del ciclo de vida de actualizaciones y ventanas, los recursos inmutables y la verificación del appcast antes de publicarlo. Se superan 389 pruebas y la suite de seguridad de publicación.",
-    "fr": "Renforce les mises à jour OTA de bout en bout avec des manifestes stricts, des téléchargements bornés, la validation des archives et signatures, ainsi qu'une installation transactionnelle avec restauration. La gestion du cycle de vie, les ressources de publication immuables et la vérification de l'appcast avant publication sont également fiabilisées. 389 tests et la suite de sécurité de publication réussissent.",
-    "ja": "厳格なマニフェスト、上限付きダウンロード、アーカイブと署名の検証、ロールバック可能なトランザクション導入により OTA 更新を全面的に強化しました。更新・配置処理のライフサイクル、変更不可のリリース資産、appcast 公開前検証も安全になりました。389 テストとリリース安全テスト成功。"
+    "en": "Reopening the running Plumb app now opens Settings immediately. The menu-bar icon recovery behavior is preserved, and the full test suite passes.",
+    "zh": "重新打开正在运行的 Plumb 后会立即打开设置界面。保留菜单栏图标自愈行为，完整测试套件已通过。",
+    "es": "Volver a abrir Plumb mientras está en ejecución abre Ajustes de inmediato. Se conserva la recuperación del icono de la barra de menús y todas las pruebas pasan.",
+    "fr": "Rouvrir Plumb pendant son exécution ouvre désormais les Réglages immédiatement. La récupération de l’icône de la barre des menus est conservée et tous les tests passent.",
+    "ja": "実行中の Plumb をもう一度開くと、設定がすぐに表示されます。メニューバーアイコンの自動修復は維持され、すべてのテストに合格しています。"
   },
   "minOS": "26.0"
 }
