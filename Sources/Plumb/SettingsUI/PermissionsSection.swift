@@ -132,7 +132,7 @@ struct PermissionsSection: View {
     }
 
     /// 「隐藏菜单栏图标」独立卡片：视觉与开机自启动卡片一致。
-    /// 说明文案即为逃生口用法——隐藏后连续两次打开 Plumb（间隔 10 秒内）可重新进入设置。
+    /// 说明文案即为逃生口用法——隐藏后再次打开已运行的 Plumb 即可重新进入设置。
     ///
     /// 数据流：$hideStatusBarIcon 绑定自 SettingsView 的 settings，改它即触发其
     /// `.onChange(of: settings) → store.save(new)`，与本卡片共用唯一数据源，

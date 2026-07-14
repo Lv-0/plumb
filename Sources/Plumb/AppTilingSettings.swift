@@ -187,7 +187,7 @@ struct AppTilingSettings: Equatable, Codable {
     var hideSystemAppsInPicker: Bool
 
     /// 是否隐藏菜单栏水滴图标（默认 false = 显示，保持既有行为）。
-    /// 隐藏后无菜单栏入口，设置界面只能通过「连续两次打开 Plumb」的逃生口重新进入
+    /// 隐藏后无菜单栏入口，设置界面可通过再次打开已运行的 Plumb 重新进入
     ///（详见 AppDelegate.applicationShouldHandleReopen）。
     var hideStatusBarIcon: Bool
 
