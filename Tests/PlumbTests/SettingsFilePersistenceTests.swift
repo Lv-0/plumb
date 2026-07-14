@@ -48,9 +48,6 @@ func filePersistenceRoundTrip() async throws {
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
 
     // 用全新 store（同文件路径）读取——模拟 OTA 后新进程。
-    // 复用同一 UserDefaults suite：store.save 已双写文件 + UserDefaults 镜像，OTA 场景下
-    // 两者并存；用全新空 suite 会让 loadFromUserDefaults 回退 .default，其 documentChooser
-    // 条目数（6）多于文件，误触发 load() 的一致性守卫而错误回写——故复用同 suite。
     let freshStore = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
     let loaded = freshStore.load()
 
@@ -88,8 +85,8 @@ func filePersistenceMigrationFromUserDefaults() async throws {
 }
 
 @Test
-func filePersistenceFallbackOnCorruptFile() async throws {
-    // 文件损坏（非法 JSON）→ 应回退 UserDefaults；不崩溃。
+func filePersistenceCorruptFileFallsBackWithoutReverseMigration() async throws {
+    // 仓库契约保留损坏文件时的 UserDefaults 降级恢复，但不得把镜像反向覆盖损坏文件。
     let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
     defer {
         defaults.removePersistentDomain(forName: suiteName)
@@ -103,10 +100,13 @@ func filePersistenceFallbackOnCorruptFile() async throws {
     try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
     try? "{ not valid json ".write(to: fileURL, atomically: true, encoding: .utf8)
 
+    let corruptData = try Data(contentsOf: fileURL)
     let loaded = store.load()
-    // 文件解码失败 → 回退 UserDefaults。
     #expect(loaded.isEnabled == true)
     #expect(loaded.tiledBundleIDs == ["com.apple.safari"])
+    #expect(try Data(contentsOf: fileURL) == corruptData)
+    #expect(defaults.bool(forKey: "tiling.enabled") == true)
+    #expect(defaults.array(forKey: "tiling.bundleIDs") as? [String] == ["com.apple.safari"])
 }
 
 @Test
@@ -151,42 +151,89 @@ func filePersistenceDoubleWrite() async throws {
 }
 
 @Test
-func filePersistenceReconcilesEmptiedFileAgainstUserDefaults() async throws {
-    // 回归测试：文件被异常清空（如外部工具/历史事故写入空列表），但 UserDefaults 镜像仍有数据时，
-    // load() 应识别出"文件比 UserDefaults 少"并改以 UserDefaults 为准、回写修复文件，
-    // 而不是把空列表当权威返回。
+func filePersistenceDecodableFileWinsOverUserDefaultsWithMoreEntries() async throws {
+    // 可解码文件永远是主存储：镜像即使有更多条目，也可能只是上一代的旧值。
+    // 条目数不能代替 revision，否则用户合法删除列表项会在下次启动被“复活”。
     let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
     defer {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: tmpDir)
     }
 
-    // UserDefaults 保留真实数据（模拟双写后镜像依然完好的情况）。
+    // UserDefaults 保留旧数据，列表项比新文件更多。
     defaults.set(true, forKey: "tiling.enabled")
     defaults.set(["com.apple.safari", "com.apple.mail"], forKey: "tiling.bundleIDs")
     defaults.set(["com.apple.mail"], forKey: "centering.bundleIDs")
 
-    // 直接把一个"全空"的文件写到磁盘（模拟外部污染）。
+    // 新文件明确清空列表并关闭居中；这是合法的新一代设置。
     try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
     let emptied = AppTilingSettings.default
     try? JSONEncoder().encode(emptied).write(to: fileURL, options: [.atomic])
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
 
     let loaded = store.load()
-    // 不应返回空列表；应以 UserDefaults 为准。
-    #expect(loaded.tiledBundleIDs == Set(["com.apple.safari", "com.apple.mail"]))
-    #expect(loaded.centeredBundleIDs == Set(["com.apple.mail"]))
-    #expect(loaded.isEnabled == true)
-    // 文件应已被回写修复（不再是空列表）。
+    #expect(loaded == emptied)
+    // 文件不得被旧镜像回写。
     let reread = try JSONDecoder().decode(AppTilingSettings.self, from: Data(contentsOf: fileURL))
-    #expect(reread.tiledBundleIDs.count == 2)
+    #expect(reread == emptied)
+}
+
+@Test
+func filePersistenceValidFileWinsAgainstCompletelyEmptyDefaultsDomain() async throws {
+    // 签名身份变化/cfprefsd 域重置时，UserDefaults 可能一个键都没有。
+    // loadFromUserDefaults 会将其解释为带 6 个 chooser 的 `.default`；它不得覆盖有效文件。
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    let fileSettings = AppTilingSettings(
+        isEnabled: true,
+        edgeInsets: TileInsets(top: 11, bottom: 12, left: 13, right: 14),
+        tiledBundleIDs: ["com.example.one"],
+        hideSystemAppsInPicker: false,
+        centerEnabled: false,
+        centeredBundleIDs: [],
+        documentChooserBundleIDs: [],
+        perAppInsets: [:],
+        hideStatusBarIcon: true,
+        autoCheckUpdates: false
+    )
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    try JSONEncoder().encode(fileSettings).write(to: fileURL, options: [.atomic])
+
+    #expect(store.load() == fileSettings)
+    #expect(defaults.object(forKey: "tiling.enabled") == nil)
+    let reread = try JSONDecoder().decode(AppTilingSettings.self, from: Data(contentsOf: fileURL))
+    #expect(reread == fileSettings)
+}
+
+@Test
+func filePersistenceValidEmptyListsRemainAuthoritativeAgainstDefaultChooserSet() async throws {
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    var fileSettings = AppTilingSettings.default
+    fileSettings.documentChooserBundleIDs = []
+    fileSettings.centerEnabled = false
+    fileSettings.hideStatusBarIcon = true
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    try JSONEncoder().encode(fileSettings).write(to: fileURL, options: [.atomic])
+
+    let loaded = store.load()
+    #expect(loaded == fileSettings)
+    #expect(loaded.allListsEmpty)
+    #expect(loaded.documentChooserBundleIDs.isEmpty)
 }
 
 @Test
 func filePersistenceLegitimateEmptyListsArePreserved() async throws {
-    // 用户合法清空全部列表（经 save 双写：文件与 UserDefaults 同为空）→ load 不应误触发守卫。
-    // 这是守卫的反例保护：判据是"UserDefaults 严格多于文件"，合法清空两者一致，不触发。
-    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    // 用户合法清空全部列表（经 save 双写）后，权威文件必须原样保留该状态。
+    let (defaults, tmpDir, _, store, suiteName) = makeIsolated()
     defer {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: tmpDir)
@@ -200,4 +247,41 @@ func filePersistenceLegitimateEmptyListsArePreserved() async throws {
     let loaded = store.load()
     #expect(loaded.allListsEmpty)
     #expect(loaded.documentChooserBundleIDs.isEmpty)
+}
+
+@Test
+func failedPrimaryWriteDoesNotCacheOrReportUnsavedSettings() throws {
+    let (defaults, tmpDir, fileURL, store, suiteName) = makeIsolated()
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    var durable = AppTilingSettings.default
+    durable.centerEnabled = false
+    #expect(store.save(durable))
+
+    let failingStore = AppTilingSettingsStore(
+        defaults: defaults,
+        settingsFileURL: fileURL,
+        fileWriter: { _, _ in throw CocoaError(.fileWriteNoPermission) })
+    #expect(failingStore.load() == durable)
+
+    var attempted = durable
+    attempted.centerEnabled = true
+    attempted.isEnabled = true
+    #expect(!failingStore.save(attempted))
+    #expect(failingStore.load() == durable)
+
+    // A fresh process still sees the authoritative durable file.
+    let restarted = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    #expect(restarted.load() == durable)
+
+    // The failed value must not have entered the mirror either. If the old primary is later
+    // lost, fallback recovery must keep the last durable value rather than resurrecting the
+    // setting that save() explicitly rejected.
+    try FileManager.default.removeItem(at: fileURL)
+    let afterPrimaryLoss = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    #expect(afterPrimaryLoss.load() == durable)
+    #expect(afterPrimaryLoss.load() != attempted)
 }

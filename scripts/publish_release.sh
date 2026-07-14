@@ -17,12 +17,21 @@ if [[ -z "${TAG}" ]]; then
   exit 1
 fi
 
+VERSION="${VERSION:-${TAG#v}}"   # strip leading 'v' from tag as a fallback
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "VERSION must use X.Y.Z format, got: ${VERSION}" >&2
+  exit 2
+fi
+if [[ "$TAG" != "v${VERSION}" ]]; then
+  echo "Tag/version mismatch: TAG=${TAG}, expected v${VERSION}" >&2
+  exit 2
+fi
+
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   echo "Missing env var: GITHUB_TOKEN"
   exit 1
 fi
 
-VERSION="${VERSION:-${TAG#v}}"   # strip leading 'v' from tag as a fallback
 REPO="${GITHUB_REPOSITORY:-Lv-0/plumb}"
 DMG_PATH="dist/Plumb.dmg"
 ZIP_PATH="dist/Plumb-${VERSION}.zip"
@@ -37,7 +46,7 @@ if [[ ! -f "${ZIP_PATH}" ]]; then
 fi
 
 api() {
-  curl -sS \
+  curl --fail-with-body -sS \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -52,28 +61,84 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
-# Upload (or replace) one asset by name. Usage: upload_asset <release_id> <assets_json> <path> <name>
+# Release assets are immutable once a name exists. A retry may reuse the remote asset only
+# after downloading it and proving its SHA-256 is byte-for-byte identical to the local file.
+# A mismatch is never repaired in place: publish a new version/tag instead.
 upload_asset() {
   local release_id="$1"
   local assets="$2"
   local path="$3"
   local name="$4"
 
-  local existing_id
-  existing_id="$(echo "${assets}" | jq -r ".[] | select(.name==\"${name}\") | .id" | head -n 1)"
-  if [[ -n "${existing_id}" ]]; then
-    api -X DELETE "https://api.github.com/repos/${REPO}/releases/assets/${existing_id}" >/dev/null
+  local existing_count
+  existing_count="$(echo "${assets}" | jq -r --arg name "$name" '[.[] | select(.name == $name)] | length')"
+  if [[ "$existing_count" != "0" && "$existing_count" != "1" ]]; then
+    echo "Expected at most one immutable asset named ${name}, found ${existing_count}" >&2
+    exit 1
+  fi
+
+  if [[ "$existing_count" == "1" ]]; then
+    local remote_url remote_state local_sha remote_sha
+    remote_url="$(echo "${assets}" | jq -r --arg name "$name" '.[] | select(.name == $name) | .browser_download_url')"
+    remote_state="$(echo "${assets}" | jq -r --arg name "$name" '.[] | select(.name == $name) | .state')"
+    [[ "$remote_url" == https://* ]] || { echo "Existing asset ${name} has invalid download URL" >&2; exit 1; }
+    [[ "$remote_state" == "uploaded" ]] || { echo "Existing asset ${name} state is ${remote_state}, not uploaded" >&2; exit 1; }
+
+    local_sha="$(shasum -a 256 "$path" | awk '{print $1}')"
+    if ! remote_sha="$(curl --fail-with-body -sSL "$remote_url" | shasum -a 256 | awk '{print $1}')"; then
+      echo "Failed to download existing asset ${name} for immutable SHA verification" >&2
+      exit 1
+    fi
+    if [[ "$remote_sha" != "$local_sha" ]]; then
+      echo "Immutable asset mismatch for ${name}: remote SHA-256=${remote_sha}, local SHA-256=${local_sha}" >&2
+      echo "Refusing to delete or replace a published asset; release a new version/tag." >&2
+      exit 1
+    fi
+    echo "  reusing immutable ${name} (SHA-256 ${local_sha})"
+    return
   fi
 
   local upload_url
   upload_url="$(api "https://api.github.com/repos/${REPO}/releases/${release_id}" | jq -r '.upload_url' | sed 's/{?name,label}//')"
+  [[ "$upload_url" == https://* ]] || { echo "Invalid upload URL for release ${release_id}" >&2; exit 1; }
   echo "  uploading ${name}..."
-  curl -sS \
+  local upload_response local_size
+  local_size="$(wc -c < "$path" | tr -d '[:space:]')"
+  upload_response="$(curl --fail-with-body -sS \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "Content-Type: application/octet-stream" \
     --data-binary @"${path}" \
-    "${upload_url}?name=${name}" \
-    >/dev/null
+    "${upload_url}?name=${name}")"
+  echo "$upload_response" | jq -e \
+    --arg name "$name" \
+    --argjson size "$local_size" \
+    '.name == $name and .size == $size and .state == "uploaded" and (.id | type == "number")' \
+    >/dev/null || {
+      echo "GitHub did not confirm uploaded asset ${name} (${local_size} bytes)" >&2
+      exit 1
+    }
+}
+
+validate_uploaded_assets() {
+  local release_id="$1"
+  local assets path name local_size count remote_size state url
+  assets="$(api "https://api.github.com/repos/${REPO}/releases/${release_id}/assets")"
+  echo "$assets" | jq -e 'type == "array"' >/dev/null || {
+    echo "Invalid assets response for release ${release_id}" >&2
+    exit 1
+  }
+  for path in "$DMG_PATH" "$ZIP_PATH"; do
+    name="$(basename "$path")"
+    local_size="$(wc -c < "$path" | tr -d '[:space:]')"
+    count="$(echo "$assets" | jq --arg name "$name" '[.[] | select(.name == $name)] | length')"
+    [[ "$count" == "1" ]] || { echo "Expected exactly one uploaded asset named ${name}, found ${count}" >&2; exit 1; }
+    remote_size="$(echo "$assets" | jq -r --arg name "$name" '.[] | select(.name == $name) | .size')"
+    state="$(echo "$assets" | jq -r --arg name "$name" '.[] | select(.name == $name) | .state')"
+    url="$(echo "$assets" | jq -r --arg name "$name" '.[] | select(.name == $name) | .browser_download_url')"
+    [[ "$remote_size" == "$local_size" ]] || { echo "Asset size mismatch for ${name}: remote=${remote_size} local=${local_size}" >&2; exit 1; }
+    [[ "$state" == "uploaded" ]] || { echo "Asset ${name} state is ${state}, not uploaded" >&2; exit 1; }
+    [[ "$url" == https://* ]] || { echo "Asset ${name} has invalid download URL" >&2; exit 1; }
+  done
 }
 
 RELEASE_NAME="${TAG#v}"
@@ -121,9 +186,15 @@ EOF
 )
 
 echo "[1/5] Create release ${TAG} on ${REPO}"
-create_resp="$(api -X POST "https://api.github.com/repos/${REPO}/releases" -d "${payload}" || true)"
+set +e
+create_resp="$(api -X POST "https://api.github.com/repos/${REPO}/releases" -d "${payload}")"
+create_rc=$?
+set -e
 
-release_id="$(echo "${create_resp}" | jq -r '.id // empty')"
+release_id=""
+if [[ $create_rc -eq 0 ]]; then
+  release_id="$(echo "${create_resp}" | jq -r '.id // empty')"
+fi
 
 if [[ -z "${release_id}" ]]; then
   echo "Release may already exist, fetching by tag..."
@@ -145,6 +216,9 @@ upload_asset "${release_id}" "${assets}" "${DMG_PATH}" "$(basename "${DMG_PATH}"
 echo "[4/5] Upload ZIP asset (for OTA)"
 upload_asset "${release_id}" "${assets}" "${ZIP_PATH}" "$(basename "${ZIP_PATH}")"
 
+echo "      Verify both uploaded assets before publishing OTA metadata"
+validate_uploaded_assets "${release_id}"
+
 echo "[5/5] Publish appcast.json to main (so OTA picks up the new version)"
 # Update appcast version/url to match this release, then commit + push.
 export OTA_VERSION="${VERSION}" \
@@ -163,7 +237,7 @@ PY
 if [[ -n "$(git status --porcelain appcast.json)" ]]; then
   git add appcast.json
   git commit -m "chore(release): appcast.json for ${TAG}" >/dev/null
-  git push origin main >/dev/null 2>&1 || echo "  (git push skipped — push manually if needed)"
+  git push origin main >/dev/null
 fi
 
 echo "Release published: ${TAG} (assets: $(basename "${DMG_PATH}"), $(basename "${ZIP_PATH}"))"

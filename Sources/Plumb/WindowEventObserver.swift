@@ -20,6 +20,143 @@ enum TransientDetector {
     }
 }
 
+/// Pure policy for AX move/resize notifications while the global writer is busy.
+/// Only the exact owner can have self-generated geometry notifications. A different
+/// window remains a real manual event even though the service is globally single-flight.
+enum AnimationNotificationPolicy {
+    enum Disposition: Equatable {
+        case markManual
+        case suppressOwnerSelfWrite
+        case deferToOwnerDriftMonitor
+        case interruptOwnerAndMarkManual
+    }
+
+    static func disposition(
+        isExactAnimationOwner: Bool,
+        pointerButtonDown: Bool,
+        ownerHasActiveDriftMonitor: Bool
+    ) -> Disposition {
+        guard isExactAnimationOwner else { return .markManual }
+        if pointerButtonDown { return .interruptOwnerAndMarkManual }
+        // A no-pointer event cannot safely be called either a self-write or a user
+        // gesture from the notification alone (keyboard/VoiceOver/window managers do
+        // not hold a mouse button). Only suppress it while the exact writer has a
+        // readback-based drift monitor that will make the decision over time.
+        return ownerHasActiveDriftMonitor ? .deferToOwnerDriftMonitor : .markManual
+    }
+}
+
+enum BackgroundSpaceLayoutPolicy {
+    enum Disposition: Equatable {
+        case center
+        case skipTiled
+        case skipDisabled
+    }
+
+    static func disposition(for mode: AutomaticLayoutMode) -> Disposition {
+        switch mode {
+        case .center: .center
+        case .tile: .skipTiled
+        case .none: .skipDisabled
+        }
+    }
+}
+
+/// Pure ownership state for callbacks that make a second asynchronous hop before
+/// touching the main-actor observer. A cancellation after the trust timer fires but
+/// before its MainActor task runs must still invalidate that task, and a stale task
+/// must never consume a newer start generation's poll ownership.
+struct ObserverLifecycleState: Equatable {
+    struct Token: Equatable, Sendable {
+        fileprivate let generation: UInt64
+    }
+
+    private var latestGeneration: UInt64 = 0
+    private(set) var activeToken: Token?
+    private(set) var accessibilityPollOwner: Token?
+
+    mutating func start() -> Token {
+        precondition(latestGeneration < .max, "observer lifecycle generation exhausted")
+        latestGeneration += 1
+        let token = Token(generation: latestGeneration)
+        activeToken = token
+        accessibilityPollOwner = nil
+        return token
+    }
+
+    mutating func beginAccessibilityPoll(ownedBy token: Token) -> Bool {
+        guard activeToken == token else { return false }
+        accessibilityPollOwner = token
+        return true
+    }
+
+    mutating func consumeAccessibilityGrant(ownedBy token: Token) -> Bool {
+        guard activeToken == token, accessibilityPollOwner == token else { return false }
+        accessibilityPollOwner = nil
+        return true
+    }
+
+    mutating func stop() {
+        activeToken = nil
+        accessibilityPollOwner = nil
+    }
+}
+
+enum BackgroundWindowPIDConsumptionPolicy {
+    enum CandidateResult: Equatable {
+        case unboundOrIneligibleRecord
+        case secondaryWindow
+        case excludedSpecialWindow
+        case alreadyHandledMainWindow
+        case centerStarted
+        case centerCompletedSynchronously
+    }
+
+    static func shouldConsumePID(after result: CandidateResult) -> Bool {
+        switch result {
+        case .unboundOrIneligibleRecord, .secondaryWindow, .excludedSpecialWindow:
+            return false
+        case .alreadyHandledMainWindow, .centerStarted, .centerCompletedSynchronously:
+            return true
+        }
+    }
+}
+
+struct BackgroundCenterTerminalDecision: Equatable {
+    let markManual: Bool
+    let markCentered: Bool
+    let continueScan: Bool
+}
+
+enum BackgroundCenterTerminalPolicy {
+    /// Every real terminal outcome releases the global writer, so every outcome must
+    /// advance the background pass. Geometry readback only controls completion marking.
+    static func decision(
+        outcome: WindowAnimator.Outcome,
+        centeredReadbackMatches: Bool
+    ) -> BackgroundCenterTerminalDecision {
+        BackgroundCenterTerminalDecision(
+            markManual: outcome == .userInterrupted,
+            markCentered: outcome == .finished && centeredReadbackMatches,
+            continueScan: true
+        )
+    }
+}
+
+enum BackgroundCenterBusyRetryPolicy {
+    static let maxAttempts = 40
+    static let retryDelay: TimeInterval = 0.10
+
+    enum Decision: Equatable {
+        case retry(after: TimeInterval)
+        case abandonCurrentPID
+    }
+
+    static func decision(afterAttemptCount attempts: Int) -> Decision {
+        attempts >= maxAttempts ? .abandonCurrentPID : .retry(after: retryDelay)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - WindowEventObserver
 //
@@ -84,9 +221,21 @@ final class WindowEventObserver {
     /// observer 通知注册是否失败（AXError.cannotComplete，常见于 Electron 应用冷启动时 AX 未就绪）。
     /// 为 true 时，attachToFrontmostApp 的 `observedPID == pid` 早退守卫放行，允许重连。
     private var observerRegistrationFailed: Bool = false
+    private var observerLifecycle = ObserverLifecycleState()
+    /// Long-lived Accessibility trust polling belongs to the observer lifecycle just like
+    /// AX observers and retry timers. `stop()` must cancel it so an obsolete `start()`
+    /// generation cannot reattach after shutdown.
+    private var accessibilityTrustPolling: AccessibilityTrustPollingHandle?
     /// 注册失败后的重连重试定时器：周期性销毁/重建 observer 并重新注册通知，直到成功或 app 失焦。
     private var reattachTimer: DispatchSourceTimer?
     private var reattachTimerOwnership = OwnedOperationState<LayoutContinuationLease>()
+    /// Tracked one-shot continuation for the serialized background Space pass. This is
+    /// also used to retry `.busy` without dropping every remaining application.
+    private var backgroundCenterContinuationTimer: DispatchSourceTimer?
+    private var backgroundCenterContinuationOwnership = OwnedOperationState<LayoutContinuationLease>()
+    private var backgroundCenterPassToken: LayoutActivationToken?
+    private var backgroundCenterAttemptedPIDs: Set<pid_t> = []
+    private var backgroundCenterBusyAttempts: [pid_t: Int] = [:]
     /// 已完成居中/平铺的窗口 key（向后兼容 / 防抖）。
     private var centeredWindowKeys: [String] = []
     private var centeredWindowKeySet: Set<String> = []
@@ -107,7 +256,8 @@ final class WindowEventObserver {
     /// 按 pid 前缀清理（appDidTerminate）③stop()。
     /// 设计取舍：仅真正的拖动/缩放才标记——切聚焦/创建(focusedChanged/created) 走 handle() 主路径，
     /// **不**经过 move/resize 旁路，故不会被误标记。Plumb 自身的居中/平铺动画产生的 moved/resized
-    /// 由 service.isAnyAnimationInProgress 守卫排除，不会被误标记。
+    /// 仅当通知窗口与 service 的精确 animation owner 一致时才作为自写排除；另一窗口的
+    /// genuine move/resize 仍会被标记，避免全局单飞误吞多文档手势。
     private var manualWindowKeys: Set<String> = []
     /// Plumb 自己刚完成布局后的短暂宽限窗口。部分 app 会在 `activeAnimationKey` 清掉后才投递
     /// 由我们刚写入 AXPosition/AXSize 触发的迟到 move/resize 通知；这些通知不能被当作用户手动操作。
@@ -202,8 +352,10 @@ final class WindowEventObserver {
     }
 
     private func operationWindowKey(pid: pid_t, window: AXUIElement) -> String {
-        let stablePart = windowNumber(of: window).map(String.init) ?? "unknown"
-        return "\(pid):\(stablePart):ax:\(CFHash(window))"
+        WindowStateIdentity.key(
+            pid: pid,
+            windowNumber: windowNumber(of: window),
+            fallbackAXHash: Int(CFHash(window)))
     }
 
     private func tileOperationID(
@@ -259,6 +411,68 @@ final class WindowEventObserver {
         }
         reattachTimer?.cancel()
         reattachTimer = nil
+    }
+
+    private func cancelBackgroundCenterContinuation(ownedBy lease: LayoutContinuationLease? = nil) {
+        if let lease {
+            guard backgroundCenterContinuationOwnership.end(ifOwnedBy: lease) else { return }
+        } else {
+            backgroundCenterContinuationOwnership.reset()
+        }
+        backgroundCenterContinuationTimer?.cancel()
+        backgroundCenterContinuationTimer = nil
+    }
+
+    private func resetBackgroundCenterPass() {
+        cancelBackgroundCenterContinuation()
+        backgroundCenterPassToken = nil
+        backgroundCenterAttemptedPIDs.removeAll(keepingCapacity: false)
+        backgroundCenterBusyAttempts.removeAll(keepingCapacity: false)
+    }
+
+    private func beginBackgroundCenterPass(token: LayoutActivationToken) {
+        resetBackgroundCenterPass()
+        backgroundCenterPassToken = token
+    }
+
+    private func clearActivationScopedLayoutStateForSpaceChange() {
+        centeredWindowKeys.removeAll(keepingCapacity: true)
+        centeredWindowKeySet.removeAll(keepingCapacity: true)
+        processedPIDs.removeAll(keepingCapacity: true)
+        manualWindowKeys.removeAll(keepingCapacity: true)
+        selfLayoutGraceUntil.removeAll(keepingCapacity: true)
+        tileSessionAttempts.removeAll(keepingCapacity: true)
+        DiagnosticLog.debug("spaceDidChange: cleared activation-scoped layout state for all pids")
+    }
+
+    private func scheduleBackgroundCenterContinuation(
+        excluding frontmostPID: pid_t,
+        spaceToken: LayoutActivationToken,
+        delay: TimeInterval = 0
+    ) {
+        guard backgroundCenterPassToken == spaceToken,
+              ownsCurrentActivation(spaceToken, pid: frontmostPID)
+        else { return }
+        cancelBackgroundCenterContinuation()
+        let lease = makeContinuationLease(token: spaceToken)
+        _ = backgroundCenterContinuationOwnership.begin(owner: lease)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + max(0, delay))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.backgroundCenterContinuationOwnership.owner == lease else { return }
+            self.cancelBackgroundCenterContinuation(ownedBy: lease)
+            guard self.backgroundCenterPassToken == spaceToken,
+                  self.ownsCurrentActivation(spaceToken, pid: frontmostPID),
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmostPID
+            else { return }
+            self.recenterVisibleBackgroundWindows(
+                excluding: frontmostPID,
+                spaceToken: spaceToken
+            )
+        }
+        backgroundCenterContinuationTimer = timer
+        timer.resume()
     }
 
     private func cancelTileStabilizeTimer(ownedBy lease: LayoutContinuationLease? = nil) {
@@ -320,6 +534,7 @@ final class WindowEventObserver {
 
     func start() {
         stop()
+        let lifecycleToken = observerLifecycle.start()
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(activeAppChanged),
@@ -352,16 +567,31 @@ final class WindowEventObserver {
             // minutes later (often exactly what happens when "center now" is clicked and re-prompts)
             // must still get the observer attached afterwards — otherwise only manual centering works.
             attachToFrontmostApp()
-            AccessibilityPermission.awaitTrusted(timeout: 3 * 3600) { [weak self] in
-                self?.attachToFrontmostApp()
+            _ = observerLifecycle.beginAccessibilityPoll(ownedBy: lifecycleToken)
+            let polling = AccessibilityPermission.awaitTrusted(timeout: 3 * 3600) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.observerLifecycle.consumeAccessibilityGrant(ownedBy: lifecycleToken)
+                    else {
+                        DiagnosticLog.debug("awaitTrusted: discarded stale observer lifecycle callback")
+                        return
+                    }
+                    self.accessibilityTrustPolling = nil
+                    self.attachToFrontmostApp()
+                }
             }
+            accessibilityTrustPolling = polling.isActive ? polling : nil
         }
     }
 
     func stop() {
+        observerLifecycle.stop()
+        accessibilityTrustPolling?.cancel()
+        accessibilityTrustPolling = nil
         cancelInitialCenterTimer()
         cancelTileStabilizeTimer()
         cancelReattachTimer()
+        resetBackgroundCenterPass()
         observerRegistrationFailed = false
         service.abortActiveAnimations()
         service.invalidateAllCachedWindowContexts()
@@ -402,6 +632,11 @@ final class WindowEventObserver {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else { return }
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
 
+        // A Space change starts a new layout cycle for every visible/background PID,
+        // not only for the app that happens to be frontmost. Cross-cycle fallback
+        // provenance remains service-owned and is intentionally not touched here.
+        clearActivationScopedLayoutStateForSpaceChange()
+
         // 1) 前台 app：已观察 → 清缓存重启重试；前台变了 → 切 observer。
         if observedPID == frontmost.processIdentifier {
             recenterObservedApp(pid: frontmost.processIdentifier)
@@ -411,6 +646,7 @@ final class WindowEventObserver {
 
         // 2) 扫描当前屏可见的后台标准窗口，逐个居中。
         guard let spaceToken = currentActivationToken(for: frontmost.processIdentifier) else { return }
+        beginBackgroundCenterPass(token: spaceToken)
         recenterVisibleBackgroundWindows(
             excluding: frontmost.processIdentifier,
             spaceToken: spaceToken
@@ -439,7 +675,9 @@ final class WindowEventObserver {
         excluding frontmostPID: pid_t,
         spaceToken: LayoutActivationToken
     ) {
-        guard ownsCurrentActivation(spaceToken, pid: frontmostPID) else { return }
+        guard backgroundCenterPassToken == spaceToken,
+              ownsCurrentActivation(spaceToken, pid: frontmostPID)
+        else { return }
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return
         }
@@ -449,7 +687,20 @@ final class WindowEventObserver {
               let screenRect = cgDisplayBounds(for: mainScreen)
         else { return }
 
-        var seenPIDs: Set<pid_t> = []
+        var seenPIDs = backgroundCenterAttemptedPIDs
+        func consumePID(_ pid: pid_t) {
+            seenPIDs.insert(pid)
+            backgroundCenterAttemptedPIDs.insert(pid)
+            backgroundCenterBusyAttempts.removeValue(forKey: pid)
+        }
+        func recordCandidateResult(
+            _ result: BackgroundWindowPIDConsumptionPolicy.CandidateResult,
+            pid: pid_t
+        ) {
+            if BackgroundWindowPIDConsumptionPolicy.shouldConsumePID(after: result) {
+                consumePID(pid)
+            }
+        }
         let settings = tilingSettingsStore.load()
 
         for info in list {
@@ -470,7 +721,22 @@ final class WindowEventObserver {
 
             let app = NSRunningApplication(processIdentifier: pid)
             let bundleID = app?.bundleIdentifier
-            if !settings.shouldCenter(bundleIdentifier: bundleID) { seenPIDs.insert(pid); continue }  // 白名单
+            switch BackgroundSpaceLayoutPolicy.disposition(
+                for: settings.resolvedAutomaticLayout(for: bundleID)
+            ) {
+            case .center:
+                break
+            case .skipTiled:
+                // Background tiling would violate WindowCenteringService's frontmost-only
+                // Phase-B write guard. Preserve tiling priority by skipping instead of
+                // silently degrading the app to centering.
+                DiagnosticLog.debug("spaceDidChange: skip background tiled app pid=\(pid) bundle=\(bundleID ?? "?")")
+                consumePID(pid)
+                continue
+            case .skipDisabled:
+                consumePID(pid)
+                continue
+            }
 
             let appElement = AXUIElementCreateApplication(pid)
             let exactWindow: AXUIElement? = cgWindowNumber(from: info).flatMap { number in
@@ -485,7 +751,7 @@ final class WindowEventObserver {
                   let windowElement = eligibleWindowFromElement(exactWindow)
             else {
                 DiagnosticLog.debug("spaceDidChange: no exact AX/CG window identity pid=\(pid), skip")
-                seenPIDs.insert(pid)
+                recordCandidateResult(.unboundOrIneligibleRecord, pid: pid)
                 continue
             }
             // The CG record that admitted this PID and the AX window we will mutate must refer
@@ -501,26 +767,30 @@ final class WindowEventObserver {
                   )
             else {
                 DiagnosticLog.debug("spaceDidChange: background AX/CG window identity ambiguous pid=\(pid), skip")
-                seenPIDs.insert(pid)
+                recordCandidateResult(.unboundOrIneligibleRecord, pid: pid)
                 continue
             }
             // Atlas 设置窗口跳动：仅排除设置窗口，主窗口正常居中（与 handle 一致）。
-            if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) { seenPIDs.insert(pid); continue }
+            if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) {
+                recordCandidateResult(.excludedSpecialWindow, pid: pid)
+                continue
+            }
             // 所有 App 通用的二级窗口屏蔽：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
             //（与 handle 路径一致；候选非主窗口 → 跳过，保持弹出位置）。
             if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID) {
-                seenPIDs.insert(pid); continue
+                recordCandidateResult(.secondaryWindow, pid: pid)
+                continue
             }
             if hasCentered(windowElement: windowElement, pid: pid) {
-                seenPIDs.insert(pid)
+                recordCandidateResult(.alreadyHandledMainWindow, pid: pid)
                 continue
             }
             if let cacheKey = key(pid: pid, window: windowElement), manualWindowKeys.contains(cacheKey) {
-                seenPIDs.insert(pid)
+                recordCandidateResult(.alreadyHandledMainWindow, pid: pid)
                 continue
             }
             if isJournalBundle(bundleID), isJournalSettingsWindow(windowElement) {
-                seenPIDs.insert(pid)
+                recordCandidateResult(.excludedSpecialWindow, pid: pid)
                 continue
             }
             do {
@@ -532,41 +802,40 @@ final class WindowEventObserver {
                 ) { [weak self] outcome in
                     guard let self else { return }
                     guard self.ownsCurrentActivation(spaceToken, pid: frontmostPID) else { return }
-                    if outcome == .userInterrupted {
+                    let centeredReadbackMatches = outcome == .finished &&
+                        self.service.isWindowAtCenteredTarget(windowElement, pid: pid)
+                    let decision = BackgroundCenterTerminalPolicy.decision(
+                        outcome: outcome,
+                        centeredReadbackMatches: centeredReadbackMatches
+                    )
+                    if decision.markManual {
                         if let cacheKey = self.key(pid: pid, window: windowElement) {
                             self.manualWindowKeys.insert(cacheKey)
                         }
                         DiagnosticLog.debug("spaceDidChange: background center interrupted by user pid=\(pid)")
-                        return
                     }
-                    guard outcome == .finished else { return }
-                    if startFlag.didStart {
+                    if outcome == .finished, startFlag.didStart {
                         self.recordSelfLayoutGrace(
                             windowElement: windowElement,
                             pid: pid,
                             reason: "background center animation completion"
                         )
                     }
-                    guard self.service.isWindowAtCenteredTarget(windowElement, pid: pid) else {
+                    if outcome == .finished, !centeredReadbackMatches {
                         DiagnosticLog.debug("spaceDidChange: background center readback missed target pid=\(pid)")
-                        return
                     }
-                    self.markCentered(windowElement: windowElement, pid: pid)
-                    DiagnosticLog.debug("spaceDidChange: centered background window pid=\(pid) bundle=\(bundleID ?? "?")")
-                    // The service intentionally owns one global geometry writer.
-                    // Continue the background pass only after this exact write
-                    // finished so later apps are serialized instead of dropped
-                    // as `.busy`.
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self,
-                              self.ownsCurrentActivation(spaceToken, pid: frontmostPID),
-                              NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmostPID
-                        else {
-                            return
-                        }
-                        self.recenterVisibleBackgroundWindows(
+                    if decision.markCentered {
+                        self.markCentered(windowElement: windowElement, pid: pid)
+                        DiagnosticLog.debug("spaceDidChange: centered background window pid=\(pid) bundle=\(bundleID ?? "?")")
+                    }
+                    // Synchronous completions return to this loop directly. A genuinely
+                    // started writer resumes through a tracked activation-owned timer for
+                    // every terminal outcome, including failures and readback misses.
+                    if decision.continueScan, startFlag.didStart {
+                        self.scheduleBackgroundCenterContinuation(
                             excluding: frontmostPID,
-                            spaceToken: spaceToken
+                            spaceToken: spaceToken,
+                            delay: 0
                         )
                     }
                 }
@@ -580,14 +849,33 @@ final class WindowEventObserver {
                     reason: "background center synchronous fallback"
                 )
                 switch startResult {
-                case .started, .completedSynchronously:
-                    seenPIDs.insert(pid)
+                case .started:
+                    recordCandidateResult(.centerStarted, pid: pid)
+                    return
+                case .completedSynchronously:
+                    recordCandidateResult(.centerCompletedSynchronously, pid: pid)
                 case .busy:
-                    DiagnosticLog.debug("spaceDidChange: background center busy pid=\(pid), leave pending")
+                    let attempts = backgroundCenterBusyAttempts[pid, default: 0] + 1
+                    backgroundCenterBusyAttempts[pid] = attempts
+                    switch BackgroundCenterBusyRetryPolicy.decision(afterAttemptCount: attempts) {
+                    case .retry(let delay):
+                        DiagnosticLog.debug("spaceDidChange: background center busy pid=\(pid), retry \(attempts)/\(BackgroundCenterBusyRetryPolicy.maxAttempts)")
+                        scheduleBackgroundCenterContinuation(
+                            excluding: frontmostPID,
+                            spaceToken: spaceToken,
+                            delay: delay
+                        )
+                        return
+                    case .abandonCurrentPID:
+                        DiagnosticLog.debug("spaceDidChange: background center busy pid=\(pid), bounded retry exhausted; continue remaining apps")
+                        consumePID(pid)
+                        continue
+                    }
                 }
             } catch {
                 // 全屏/读取失败等静默跳过（与 handle 的错误语义一致）。
                 DiagnosticLog.debug("spaceDidChange: background center failed pid=\(pid) error=\(error)")
+                consumePID(pid)
             }
         }
     }
@@ -643,6 +931,7 @@ final class WindowEventObserver {
             cancelInitialCenterTimer()
             cancelTileStabilizeTimer()
             cancelReattachTimer()
+            resetBackgroundCenterPass()
             cancelPostCompletionCorrectionTimer()
             // 被观察的 app 退出时，其进行中的平铺/居中动画也必须停止，否则 Phase-B 定时器
             // 会在已退出的 pid 上继续尝试写 AX（必然失败，但仍占用 activeAnimationKey 锁）。
@@ -709,6 +998,7 @@ final class WindowEventObserver {
 
         cancelInitialCenterTimer()
         cancelReattachTimer()
+        resetBackgroundCenterPass()
         cancelTileStabilizeTimer()
         // 同步取消上一个 app 的 document-stable-gate 采样定时器（阶段 3.1），避免切走后 zombie
         // 定时器在后台继续对非前台 app 的窗口采样/平铺。
@@ -2074,6 +2364,41 @@ final class WindowEventObserver {
         }
     }
 
+    /// Returns true when an exact-owner animation consumed the AX notification.
+    /// Non-owner windows deliberately return false so the caller records manual state.
+    private func consumeAnimationOwnedManualEvent(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        event: String
+    ) -> Bool {
+        let isExactOwner = service.isAnimationInProgress(for: windowElement, pid: pid)
+        let disposition = AnimationNotificationPolicy.disposition(
+            isExactAnimationOwner: isExactOwner,
+            pointerButtonDown: NSEvent.pressedMouseButtons != 0,
+            ownerHasActiveDriftMonitor: isExactOwner && service.isUserDriftMonitoringActive(
+                for: windowElement,
+                pid: pid
+            )
+        )
+        switch disposition {
+        case .markManual:
+            return false
+        case .suppressOwnerSelfWrite:
+            DiagnosticLog.debug("handle[\(event)]: exact animation owner self-write — ignore")
+            return true
+        case .deferToOwnerDriftMonitor:
+            DiagnosticLog.debug("handle[\(event)]: no-pointer exact-owner event — defer to writer readback drift monitor")
+            return true
+        case .interruptOwnerAndMarkManual:
+            if let manualKey = key(pid: pid, window: windowElement) {
+                manualWindowKeys.insert(manualKey)
+            }
+            _ = service.requestUserInterruption(for: windowElement, pid: pid)
+            DiagnosticLog.debug("handle[\(event)]: pointer interaction interrupted exact animation owner pid=\(pid)")
+            return true
+        }
+    }
+
     /// 处理 `kAXResizedNotification`：用户缩放窗口 → 标记「手动」，不再立即重铺。
     ///
     /// 新需求：任何手动移动/缩放都不立即吸附（不再安排 resizeRetileTimer、不再因 resize 立即平铺
@@ -2081,8 +2406,8 @@ final class WindowEventObserver {
     /// attachToFrontmostApp / recenterObservedApp 清掉该 PID 的 manualWindowKeys 后才会被重新排版。
     ///
     /// 关键守卫：Plumb 自身的平铺动画（Phase-B 写尺寸）也会触发 kAXResizedNotification 回到本旁路。
-    /// 必须用 `service.isAnyAnimationInProgress` 排除——否则自己的平铺会把窗口误标记为「手动」，
-    /// 导致切 App/Space 后该窗口永远不再被平铺。
+    /// 必须只排除 service 的精确 animation owner——全局 writer 忙并不说明另一窗口的 resize
+    /// 是自写。Phase-B owner 的持续锚点漂移由 service 终止为 `.userInterrupted`。
     ///
     /// `element`：resize 通知的 element 通常就是被缩放的窗口本身（非 app 元素）。
     private func handleResize(element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
@@ -2108,9 +2433,9 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[resize]: element not a movable non-auxiliary window, skip")
             return false
         }
-        // 排除 Plumb 自身平铺动画产生的 resize：进行中的动画不视作用户手势，不标记手动。
-        guard !service.isAnyAnimationInProgress else {
-            DiagnosticLog.debug("handle[resize]: animation in progress (self-tile) — ignore, no manual mark")
+        // Only this exact window can emit self-generated resize notifications. A global
+        // animation for another document must not hide this window's manual gesture.
+        if consumeAnimationOwnedManualEvent(windowElement: element, pid: pid, event: "resize") {
             return false
         }
         if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
@@ -2138,8 +2463,8 @@ final class WindowEventObserver {
     /// 故不会误标记（符合「仅真正拖动/改尺寸才标记」的设计决策）。
     ///
     /// 关键守卫：Plumb 自身的平铺/居中动画（Phase-A 写 AXPosition）也会触发 kAXMovedNotification
-    /// 回到本旁路。必须用 `service.isAnyAnimationInProgress` 排除——否则自己的动画会把窗口误标记
-    /// 为「手动」，导致切 App/Space 后该窗口永远不再被居中/平铺。
+    /// 回到本旁路。必须只排除 service 的精确 animation owner；不同窗口的 move 是真实手势，
+    /// 仍须进入 manualWindowKeys。Phase-B owner 的持续锚点漂移由 service 主动中断。
     @discardableResult
     private func handleMove(element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
         // pid 已由 handle() 入口解析过；这里仅做必要的合法性确认。
@@ -2162,9 +2487,9 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[move]: element not a movable non-auxiliary window, skip")
             return false
         }
-        // 排除 Plumb 自身居中/平铺动画产生的 moved：进行中的动画不视作用户手势，不标记手动。
-        guard !service.isAnyAnimationInProgress else {
-            DiagnosticLog.debug("handle[move]: animation in progress (self-animated) — ignore, no manual mark")
+        // Only this exact window can emit self-generated move notifications. A global
+        // animation for another document must not hide this window's manual gesture.
+        if consumeAnimationOwnedManualEvent(windowElement: element, pid: pid, event: "move") {
             return false
         }
         if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
@@ -2799,9 +3124,9 @@ final class WindowEventObserver {
     }
 
     private func key(pid: pid_t, window: AXUIElement) -> String? {
-        // Include both the OS window number (when present) and the AX element
-        // identity. A window number can be reused within one activation; using
-        // it alone lets a new window inherit manual/centered/budget state.
+        // AX callbacks can re-wrap the same remote window, so state must use the stable
+        // WindowServer number when available. Operation sequence + activation teardown own
+        // ABA protection; CFHash is reserved for apps that omit AXWindowNumber.
         operationWindowKey(pid: pid, window: window)
     }
 

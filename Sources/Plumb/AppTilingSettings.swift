@@ -113,17 +113,17 @@ struct AppTilingSettings: Equatable, Codable {
         centerEnabled = try c.decodeIfPresent(Bool.self, forKey: .centerEnabled) ?? true
         centeredBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .centeredBundleIDs) ?? []
         documentChooserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .documentChooserBundleIDs) ?? Self.defaultDocumentChooserBundleIDs
-        perAppInsets = try c.decodeIfPresent([String: TileInsets].self, forKey: .perAppInsets) ?? [:]
-        // 旧文件迁移：perAppInsets 缺失但历史标量 perAppMargins 存在 → 每个标量转 TileInsets(all:)。
-        // 仅在 perAppInsets 为空时读取旧键，避免新文件因仍可解码到空 perAppMargins 而误判。
-        if perAppInsets.isEmpty {
+        // 旧文件迁移必须按“键是否缺失”判断，而不是按新映射是否为空判断。显式空映射
+        // 表示用户已经清除了所有 per-app override；若此时再读残留的 perAppMargins，
+        // 被删除的旧设置会在下一次启动复活。
+        if let decoded = try c.decodeIfPresent([String: TileInsets].self, forKey: .perAppInsets) {
+            perAppInsets = decoded
+        } else {
             let legacyContainer = try decoder.container(keyedBy: _LegacyKeys.self)
             let legacy = try legacyContainer.decodeIfPresent([String: CGFloat].self, forKey: .perAppMargins) ?? [:]
-            if !legacy.isEmpty {
-                perAppInsets = Dictionary(uniqueKeysWithValues: legacy.map { (k, v) in
-                    (Self.normalizeBundleID(k), TileInsets(all: v))
-                }.filter { !$0.0.isEmpty })
-            }
+            perAppInsets = Dictionary(uniqueKeysWithValues: legacy.map { (k, v) in
+                (Self.normalizeBundleID(k), TileInsets(all: v))
+            }.filter { !$0.0.isEmpty })
         }
         // 后增字段：旧 settings.json 不含此键 → 回退 false（默认显示图标，保持既有行为）。
         hideStatusBarIcon = try c.decodeIfPresent(Bool.self, forKey: .hideStatusBarIcon) ?? false
@@ -310,20 +310,9 @@ struct AppTilingSettings: Equatable, Codable {
         return documentChooserBundleIDs.contains(Self.normalizeBundleID(bundleIdentifier))
     }
 
-    /// 三个 app 列表是否全部为空。用于 load() 一致性守卫：文件被异常清空时三个列表通常同时变空。
-    /// perAppInsets（app→四向间距映射）的条目计数也纳入判断，保持"文件被清空时各映射同时变空"的守卫语义。
+    /// 三个 app 列表与 per-app 映射是否全部为空（测试与设置状态展示辅助）。
     var allListsEmpty: Bool {
         tiledBundleIDs.isEmpty && centeredBundleIDs.isEmpty && documentChooserBundleIDs.isEmpty && perAppInsets.isEmpty
-    }
-
-    /// 当前设置的列表是否"严格少于"另一份设置。
-    /// 用于一致性守卫：当文件全空、而 UserDefaults 镜像里仍有列表条目时，判定文件已被异常清空。
-    /// 仅比较列表条目总数（标量开关不参与判断，避免合法的"关开关"误判）。
-    /// perAppInsets 的条目计数一并纳入两侧比较。
-    func isEmptierThan(userDefaults other: AppTilingSettings) -> Bool {
-        let mine = tiledBundleIDs.count + centeredBundleIDs.count + documentChooserBundleIDs.count + perAppInsets.count
-        let theirs = other.tiledBundleIDs.count + other.centeredBundleIDs.count + other.documentChooserBundleIDs.count + other.perAppInsets.count
-        return mine < theirs
     }
 
     static func normalizeBundleID(_ value: String) -> String {
@@ -356,6 +345,9 @@ final class AppTilingSettingsStore {
     /// 仅取决于 bundle id 字符串，不依赖签名身份 → OTA 更新后设置不会丢失。
     /// 测试可注入临时路径。
     private let settingsFileURL: URL
+    /// Injectable atomic writer for deterministic failure-path tests. Production uses
+    /// `Data.write(options: .atomic)`.
+    private let fileWriter: (Data, URL) throws -> Void
 
     /// 内存缓存：避免窗口事件热路径每次都同步读 settings.json。
     /// store 本身不是 @MainActor（设置 UI、Observer、AppDelegate 都可能从主线程访问），
@@ -365,8 +357,15 @@ final class AppTilingSettingsStore {
     private var cachedSettings: AppTilingSettings?
     private let cacheLock = NSLock()
 
-    init(defaults: UserDefaults = .standard, settingsFileURL: URL? = nil) {
+    init(
+        defaults: UserDefaults = .standard,
+        settingsFileURL: URL? = nil,
+        fileWriter: @escaping (Data, URL) throws -> Void = { data, url in
+            try data.write(to: url, options: [.atomic])
+        }
+    ) {
         self.defaults = defaults
+        self.fileWriter = fileWriter
         if let settingsFileURL {
             self.settingsFileURL = settingsFileURL
         } else {
@@ -388,52 +387,51 @@ final class AppTilingSettingsStore {
     }
 
     func load() -> AppTilingSettings {
-        // 热路径优化：命中缓存直接返回，避免每次都同步读 settings.json。
-        // 缓存由首次 load() 或 save() 填充；新 store 实例缓存为空，仍走落盘读取。
+        // Serialize the first disk load with save(). Without holding ownership across IO,
+        // a slow initial load can read the old file, race a successful save, and overwrite
+        // the new in-memory cache after that save completes.
         cacheLock.lock()
+        defer { cacheLock.unlock() }
         if let cached = cachedSettings {
-            cacheLock.unlock()
             return cached
         }
-        cacheLock.unlock()
-
         let settings = loadUncached()
-
-        cacheLock.lock()
         cachedSettings = settings
-        cacheLock.unlock()
         return settings
     }
 
-    /// 不经过缓存的落盘读取（保留原有文件优先 → UserDefaults fallback → 一次性迁移 → 一致性修复逻辑）。
+    /// 不经过缓存的落盘读取（可解码文件绝对权威；文件失败时 UserDefaults 降级；仅缺失时迁移）。
     private func loadUncached() -> AppTilingSettings {
         // 1) 优先读文件（签名无关、跨更新稳定）。
+        // 只要文件可解码，它就是权威值；不再用 UserDefaults 的列表数量反向覆盖。
+        //
+        // 原来的“镜像条目更多就修复文件”有一个致命反例：UserDefaults 域在签名
+        // 变化/重置后可能完全为空，loadFromUserDefaults() 此时返回 `.default`；而默认值
+        // 自带 6 个 documentChooserBundleIDs。一份合法但列表少于 6 项的 settings.json 会因此被
+        // 误判为“更空”，整份配置（包括所有标量开关）被默认值覆盖。这恰好破坏了
+        // 设置文件用于抵御签名域漂移的核心目标。
+        //
+        // 文件损坏/不可读时仍可按仓库契约用 UserDefaults 做本次运行的降级恢复，但不得把镜像
+        // 回写覆盖损坏文件；只有文件确实缺失时才允许一次性迁移。未来若需双向修复，必须为
+        // 两份数据增加显式 generation/revision，不能再从条目数推断新旧。
+        let fileExists = FileManager.default.fileExists(atPath: settingsFileURL.path)
         if let fileSettings = readFromFile() {
-            // 一致性守卫：文件解码成功，但其列表条目总数严格少于 UserDefaults 镜像时，
-            // 视文件为被异常清空（历史上发生过的真实事故：单测/外部工具把空列表写进了真实文件），
-            // 改以 UserDefaults 为准并回写修复文件。
-            // 判据是「UserDefaults 严格比文件拥有更多列表条目」，因此：
-            //   - 正常的双写 save() 不会误触发（save 同步写文件+UserDefaults，两者一致）；
-            //   - 用户合法清空列表（save 写入全空）也不会误触发（UserDefaults 镜像同样为空）。
-            let udSettings = loadFromUserDefaults()
-            if fileSettings.isEmptierThan(userDefaults: udSettings) {
-                DiagnosticLog.debug("SettingsStore: load ← FILE lists fewer than UserDefaults → reconciling from UserDefaults \(summary(udSettings))")
-                writeToFile(udSettings)
-                return udSettings
-            }
             DiagnosticLog.debug("SettingsStore: load ← FILE ok \(summary(fileSettings))")
             return fileSettings
         }
 
-        // 2) 文件缺失/损坏 → 读 UserDefaults。
+        // 2) 文件缺失/损坏/不可读 → 读 UserDefaults 作为降级。
         let userDefaultsSettings = loadFromUserDefaults()
-        DiagnosticLog.debug("SettingsStore: load ← UserDefaults (file missing/corrupt) \(summary(userDefaultsSettings))")
+        DiagnosticLog.debug("SettingsStore: load ← UserDefaults (file \(fileExists ? "unreadable/corrupt" : "missing")) \(summary(userDefaultsSettings))")
 
-        // 3) 一次性迁移：UserDefaults 有非默认数据时，写入文件，之后文件为准。
+        // 3) 一次性迁移仅限文件不存在：UserDefaults 有非默认数据时写入文件，之后文件为准。
+        //    文件存在但损坏时保留原文件供诊断，绝不把可能陈旧的镜像反向覆盖进去。
         //    （UserDefaults 全空 → 返回的就是 .default，不写文件，保持首次启动干净。）
-        if userDefaultsSettings != .default {
+        if !fileExists, userDefaultsSettings != .default {
             DiagnosticLog.debug("SettingsStore: load migrating UserDefaults → file")
             writeToFile(userDefaultsSettings)
+        } else if fileExists {
+            DiagnosticLog.debug("SettingsStore: load preserving unreadable/corrupt file; no reverse migration")
         } else {
             DiagnosticLog.debug("SettingsStore: load UserDefaults==.default, no migration")
         }
@@ -449,18 +447,35 @@ final class AppTilingSettingsStore {
         summary(forLog: s)
     }
 
-    func save(_ settings: AppTilingSettings) {
+    @discardableResult
+    func save(_ settings: AppTilingSettings) -> Bool {
+        // One store instance has a single ordered persistence stream. This also prevents
+        // concurrent menu/UI saves from publishing a stale cache over a newer write.
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         let normalized = settings.normalized()
         DiagnosticLog.debug("SettingsStore: save called \(summary(normalized))")
         // 先写文件（主存储），再写 UserDefaults（镜像，向后兼容）。
-        // 任一失败不阻塞另一个：文件写失败仍写 UserDefaults（降级），UserDefaults 写失败不影响文件。
-        writeToFile(normalized)
-        saveToUserDefaults(normalized)
+        // 主文件写失败时，若旧文件仍可解码，它仍是权威值；镜像也必须保持该旧值，
+        // 否则主文件日后丢失/损坏时，刚被拒绝的设置会从 UserDefaults 重新复活。
+        // 只有不存在可解码主文件时，才把本次值作为唯一可恢复的降级副本。
+        let primaryWriteSucceeded = writeToFile(normalized)
 
-        // 更新内存缓存：后续 load() 命中缓存即返回，无需再读盘。
-        cacheLock.lock()
-        cachedSettings = normalized
-        cacheLock.unlock()
+        // A still-decodable old primary file remains authoritative after a failed write.
+        // Do not cache the unsaved value and pretend it persisted; menu/UI callers can use
+        // the returned false to revert. If no valid primary exists, the mirrored value is the
+        // only recoverable copy and remains the runtime fallback.
+        let cachedValue: AppTilingSettings
+        if primaryWriteSucceeded {
+            cachedValue = normalized
+        } else if let persisted = readFromFile() {
+            cachedValue = persisted
+        } else {
+            cachedValue = normalized
+        }
+        saveToUserDefaults(cachedValue)
+        cachedSettings = cachedValue
+        return primaryWriteSucceeded
     }
 
     // MARK: - File persistence（主存储，签名无关）
@@ -488,28 +503,31 @@ final class AppTilingSettingsStore {
         }
     }
 
-    private func writeToFile(_ settings: AppTilingSettings) {
+    @discardableResult
+    private func writeToFile(_ settings: AppTilingSettings) -> Bool {
         let path = settingsFileURL.path
         let data: Data
         do {
             data = try JSONEncoder().encode(settings)
         } catch {
             DiagnosticLog.debug("SettingsStore: writeToFile — JSON encode FAILED: \(error)")
-            return
+            return false
         }
         let dir = settingsFileURL.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {
             DiagnosticLog.debug("SettingsStore: writeToFile — createDirectory FAILED at \(dir.path): \(error)")
-            return
+            return false
         }
         // 原子写：避免写入中途崩溃导致文件损坏。
         do {
-            try data.write(to: settingsFileURL, options: [.atomic])
+            try fileWriter(data, settingsFileURL)
             DiagnosticLog.debug("SettingsStore: writeToFile — wrote \(data.count) bytes to \(path)")
+            return true
         } catch {
             DiagnosticLog.debug("SettingsStore: writeToFile — data.write FAILED at \(path): \(error)")
+            return false
         }
     }
 
@@ -575,7 +593,8 @@ final class AppTilingSettingsStore {
             }
         }
         // 旧键迁移：perAppInsets 缺失但历史标量 perAppMargins 存在 → 每个标量转 TileInsets(all:)。
-        if perAppInsets.isEmpty, let legacyRaw = defaults.dictionary(forKey: Keys.legacyPerAppMargins) as? [String: Double] {
+        if !hasPerAppInsets,
+           let legacyRaw = defaults.dictionary(forKey: Keys.legacyPerAppMargins) as? [String: Double] {
             for (k, v) in legacyRaw {
                 let key = AppTilingSettings.normalizeBundleID(k)
                 guard !key.isEmpty else { continue }
@@ -628,5 +647,9 @@ final class AppTilingSettingsStore {
         defaults.set(perAppDict, forKey: Keys.perAppInsets)
         defaults.set(normalized.hideStatusBarIcon, forKey: Keys.hideStatusBarIcon)
         defaults.set(normalized.autoCheckUpdates, forKey: Keys.autoCheckUpdates)
+        // 新键一旦写入（即使是显式空映射）就代表迁移已经完成。必须删除旧键；否则
+        // settings.json 丢失/损坏而降级读 UserDefaults 时，旧 per-app override 会复活。
+        defaults.removeObject(forKey: Keys.legacyEdgeMargin)
+        defaults.removeObject(forKey: Keys.legacyPerAppMargins)
     }
 }

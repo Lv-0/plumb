@@ -1,6 +1,62 @@
 import AppKit
 import ApplicationServices
 
+/// Cancellation handle for the long-running Accessibility trust poll.
+///
+/// `DispatchSourceTimer` does not provide structured cancellation to its caller. Keeping
+/// the timer behind this small thread-safe handle lets `WindowEventObserver.stop()` own
+/// the complete lifetime of a poll and prevents an old `start()` generation from
+/// re-attaching the observer after it has been stopped.
+final class AccessibilityTrustPollingHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var terminal = false
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !terminal
+    }
+
+    fileprivate func install(_ timer: DispatchSourceTimer) -> Bool {
+        lock.lock()
+        guard !terminal else {
+            lock.unlock()
+            timer.cancel()
+            return false
+        }
+        self.timer = timer
+        lock.unlock()
+        return true
+    }
+
+    /// Moves the poll to a terminal state exactly once. The winning caller owns any
+    /// associated callback; a concurrent/stale cancellation therefore suppresses it.
+    @discardableResult
+    fileprivate func finish() -> Bool {
+        let timerToCancel: DispatchSourceTimer?
+        lock.lock()
+        guard !terminal else {
+            lock.unlock()
+            return false
+        }
+        terminal = true
+        timerToCancel = timer
+        timer = nil
+        lock.unlock()
+        timerToCancel?.cancel()
+        return true
+    }
+
+    func cancel() {
+        _ = finish()
+    }
+
+    deinit {
+        cancel()
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - AccessibilityPermission
 //
@@ -29,30 +85,43 @@ enum AccessibilityPermission {
     /// `onGranted` is invoked exactly once on the main queue when the permission becomes available.
     /// macOS does not post a notification when Accessibility trust changes, so polling is the
     /// supported way to detect a user granting it after launch.
-    static func awaitTrusted(timeout: TimeInterval, interval: TimeInterval = 0.5, onGranted: @escaping () -> Void) {
+    @discardableResult
+    static func awaitTrusted(
+        timeout: TimeInterval,
+        interval: TimeInterval = 0.5,
+        trustCheck: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
+        now: @escaping @Sendable () -> Date = { Date() },
+        onGranted: @escaping @Sendable () -> Void
+    ) -> AccessibilityTrustPollingHandle {
+        let handle = AccessibilityTrustPollingHandle()
         // Already trusted: invoke immediately.
-        if AXIsProcessTrusted() {
-            onGranted()
-            return
+        if trustCheck() {
+            if handle.finish() {
+                onGranted()
+            }
+            return handle
         }
 
         DiagnosticLog.debug("awaitTrusted: start polling (timeout=\(timeout)s, interval=\(interval)s)")
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = now().addingTimeInterval(timeout)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + interval, repeating: interval)
         var polls = 0
-        timer.setEventHandler {
+        timer.setEventHandler { [weak handle] in
+            guard let handle, handle.isActive else { return }
             polls += 1
-            if AXIsProcessTrusted() {
-                timer.cancel()
+            if trustCheck() {
+                guard handle.finish() else { return }
                 DiagnosticLog.debug("awaitTrusted: GRANTED after \(polls) polls")
                 onGranted()
-            } else if Date() >= deadline {
-                timer.cancel()
+            } else if now() >= deadline {
+                guard handle.finish() else { return }
                 DiagnosticLog.debug("awaitTrusted: TIMEOUT after \(polls) polls — never granted")
             }
         }
+        guard handle.install(timer) else { return handle }
         timer.resume()
+        return handle
     }
 
     static func openSettings() {

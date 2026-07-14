@@ -28,6 +28,7 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         if let data = (message + "\n").data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
                 if let h = FileHandle(forWritingAtPath: logPath) {
@@ -110,7 +111,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func clickTilingTab() {
-        guard let window = controller?.window else { finish(); return }
+        guard let window = controller?.window else {
+            Self.log("SELFTEST-UI: FAIL — window disappeared before tab selection")
+            finish(); return
+        }
         // TabPills are 88x32 focus-ring views near the top of the window.
         // Order: 居中(x≈238), 平铺(x≈336), 权限(x≈434). The Tiling tab is the middle one.
         if let point = findTabPillCenter(in: window, index: 1) {
@@ -126,7 +130,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func screenshotTilingAndTestToggle() {
-        guard let window = controller?.window else { finish(); return }
+        guard let window = controller?.window else {
+            Self.log("SELFTEST-UI: FAIL — window disappeared before tiling verification")
+            finish(); return
+        }
         if let contentView = window.contentView {
             saveScreenshot(of: contentView, to: Self.shotTilingPath, label: "tiling")
             // Re-dump to see tiling section layout (esp. the PillToggle position).
@@ -152,7 +159,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func verifyToggleFlipped() {
-        guard let store else { finish(); return }
+        guard let store else {
+            Self.log("SELFTEST-UI: FAIL — settings store unavailable during toggle verification")
+            finish(); return
+        }
         let after = store.load()
         // Default was isEnabled=false. Clicking the PillToggle should flip to true.
         let flipped = after.isEnabled == true
@@ -166,7 +176,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func testSearchFocus() {
-        guard let window = controller?.window else { finish(); return }
+        guard let window = controller?.window else {
+            Self.log("SELFTEST-UI: FAIL — window disappeared before focus verification")
+            finish(); return
+        }
         // Force the window to be key & active so @FocusState auto-focus can fire.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -208,7 +221,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     //   5. 程序化删除 key（"使用默认"），验证回退
 
     private func testPerAppMarginDrawer() {
-        guard let store else { finish(); return }
+        guard let store else {
+            Self.log("SELFTEST-DRAWER: FAIL — settings store unavailable at start")
+            finish(); return
+        }
 
         // 设置已知状态：平铺开启 + 计算器在白名单。
         var settings = AppTilingSettings.default
@@ -237,7 +253,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func drawer_switchToTilingTab() {
-        guard let window = controller?.window else { finish(); return }
+        guard let window = controller?.window else {
+            Self.log("SELFTEST-DRAWER: FAIL — window disappeared before tab selection")
+            finish(); return
+        }
         // 切到平铺 tab（index 1）。
         if let point = findTabPillCenter(in: window, index: 1) {
             simulateClick(in: window, at: point)
@@ -252,7 +271,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func drawer_clickAppRow() {
-        guard let window = controller?.window else { finish(); return }
+        guard let window = controller?.window else {
+            Self.log("SELFTEST-DRAWER: FAIL — window disappeared before row selection")
+            finish(); return
+        }
         // 记录点击前的 slider 数（headerCard 的全局边距滑块 = baseline）。
         // 抽屉展开会新增一个 slider，故展开后 count 应 > baseline。
         var baselineSliders: [NSView] = []
@@ -310,7 +332,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func drawer_verifySliderAndSetMargin() {
-        guard let window = controller?.window, let store else { finish(); return }
+        guard let window = controller?.window, let store else {
+            Self.log("SELFTEST-DRAWER: FAIL — window or store unavailable during expansion verification")
+            finish(); return
+        }
 
         // 抽屉展开后，SwiftUI Slider 会出现在 NSView 树里。检查它是否渲染了。
         // headerCard 已有 1 个全局边距 slider（SystemSlider），抽屉展开应新增第 2 个。
@@ -346,7 +371,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func drawer_verifyMarginAndReset() {
-        guard let store else { finish(); return }
+        guard let store else {
+            Self.log("SELFTEST-DRAWER: FAIL — settings store unavailable during margin verification")
+            finish(); return
+        }
         // 验证：写入的间距已持久化，effectiveInsets 正确。
         let afterSet = store.load()
         let eff = afterSet.effectiveInsets(for: "com.apple.calculator")
@@ -366,7 +394,10 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func drawer_verifyReset() {
-        guard let store else { finish(); return }
+        guard let store else {
+            Self.log("SELFTEST-DRAWER: FAIL — settings store unavailable during reset verification")
+            finish(); return
+        }
         let afterReset = store.load()
         let keyRemoved = afterReset.perAppInsets["com.apple.calculator"] == nil
         let effAfterReset = afterReset.effectiveInsets(for: "com.apple.calculator")

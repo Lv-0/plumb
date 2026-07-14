@@ -34,8 +34,91 @@ extension UpdateConfig {
 }
 
 enum UpdateRelaunchCommand {
-    static func buildScript(appPath: String, delaySeconds: Int = 2) -> String {
-        "#!/bin/bash\nsleep \(delaySeconds)\n/usr/bin/open -n -- \(UpdateInstallerCommand.shellQuoted(appPath))\n"
+    static func buildScript(
+        appPath: String,
+        delaySeconds: Int = 2,
+        arguments: [String] = []
+    ) -> String {
+        let argumentSuffix = arguments.isEmpty
+            ? ""
+            : " --args " + arguments.map(UpdateInstallerCommand.shellQuoted).joined(separator: " ")
+        return "#!/bin/bash\nsleep \(delaySeconds)\n/usr/bin/open -n \(UpdateInstallerCommand.shellQuoted(appPath))\(argumentSuffix)\n"
+    }
+}
+
+/// 更新检查结果的展示语义。静默请求可以被后来的手动请求升级，
+/// 但同一时刻始终只有一个真实网络检查。
+enum UpdateCheckPresentation: Equatable {
+    case silent
+    case manual
+}
+
+/// OTA 顶层流程状态。整个 Coordinator 共享一个状态门禁，避免独立的
+/// 启动/设置/手动入口各自拉取、弹窗和下载，最后竞争 installerMode。
+enum UpdateFlowPhase: Equatable {
+    case idle
+    case checking
+    case presenting
+    case downloading
+    case handingOffToInstaller
+}
+
+/// 纯状态门禁（无 AppKit/网络依赖），便于用单测钉死 single-flight 语义。
+struct UpdateFlowGate {
+    private(set) var phase: UpdateFlowPhase = .idle
+    private var pendingPresentation: UpdateCheckPresentation = .silent
+
+    /// 返回 true 表示调用者获得本轮检查所有权，应实际启动 fetch。
+    /// checking 期间的重复请求被合并；其中任意手动请求会把最终展示升级为 manual。
+    mutating func requestCheck(_ presentation: UpdateCheckPresentation) -> Bool {
+        switch phase {
+        case .idle:
+            phase = .checking
+            pendingPresentation = presentation
+            return true
+        case .checking:
+            if presentation == .manual {
+                pendingPresentation = .manual
+            }
+            return false
+        case .presenting, .downloading, .handingOffToInstaller:
+            return false
+        }
+    }
+
+    /// 一次真实检查完成，转入结果展示阶段，并返回合并后的展示语义。
+    mutating func completeCheck() -> UpdateCheckPresentation? {
+        guard phase == .checking else { return nil }
+        phase = .presenting
+        let presentation = pendingPresentation
+        pendingPresentation = .silent
+        return presentation
+    }
+
+    /// 无更新、用户取消或结果提示结束后回到 idle。
+    mutating func finishPresentation() {
+        guard phase == .presenting else { return }
+        phase = .idle
+    }
+
+    /// 只允许已展示的单一更新进入下载。
+    mutating func beginDownload() -> Bool {
+        guard phase == .presenting else { return false }
+        phase = .downloading
+        return true
+    }
+
+    /// 只允许当前单一下载进入 installer handoff。
+    mutating func beginInstallerHandoff() -> Bool {
+        guard phase == .downloading else { return false }
+        phase = .handingOffToInstaller
+        return true
+    }
+
+    /// 取消/失败统一回收所有权。
+    mutating func reset() {
+        phase = .idle
+        pendingPresentation = .silent
     }
 }
 
@@ -45,6 +128,12 @@ final class UpdateCoordinator {
 
     private let checker: UpdateChecker
     private let downloader: UpdateDownloader
+
+    /// 所有检查入口共享的单飞状态门禁。
+    private var flowGate = UpdateFlowGate()
+
+    /// 当前唯一检查 Task。重复请求由 flowGate 合并，不另起 Task。
+    private var currentCheckTask: Task<Void, Never>?
 
     /// 当前下载 Task（用于 Cancel 时协作式取消）。
     private var currentDownloadTask: Task<Void, Never>?
@@ -89,7 +178,7 @@ final class UpdateCoordinator {
             return // 节流：距离上次检查不足间隔，跳过。
         }
         defaults.set(Date().timeIntervalSince1970, forKey: UpdateConfig.lastCheckKey)
-        runSilentCheck()
+        requestCheck(presentation: .silent)
     }
 
     /// 打开/重开设置窗口时触发的自动检查。
@@ -109,47 +198,68 @@ final class UpdateCoordinator {
             return // 独立短节流：防止设置窗口内反复重开触发连发请求。
         }
         defaults.set(Date().timeIntervalSince1970, forKey: UpdateConfig.settingsOpenCheckLastKey)
-        runSilentCheck()
-    }
-
-    /// 静默发起一次检查：发现更新 → notifyAvailable；upToDate/osTooOld/error 全部静默。
-    /// 后台与「打开设置」两条自动路径共用此实现，差别只在节流策略（调用方各自处理）。
-    private func runSilentCheck() {
-        Task { [weak self] in
-            guard let self else { return }
-            let result = await self.checker.check(current: AppVersion.current, osVersion: self.osVersion)
-            await MainActor.run {
-                if case .available(let manifest) = result {
-                    self.notifyAvailable(manifest: manifest)
-                }
-                // 静默：upToDate / osTooOld / error 全部不打扰。
-            }
-        }
+        requestCheck(presentation: .silent)
     }
 
     /// 手动检查。失败弹窗提示（不阻塞 app）。
     func checkForUpdatesManually() {
-        Task { [weak self] in
-            guard let self else { return }
-            let result = await self.checker.check(current: AppVersion.current, osVersion: self.osVersion)
-            await MainActor.run {
-                switch result {
-                case .available(let manifest):
-                    self.notifyAvailable(manifest: manifest)
-                case .upToDate:
-                    self.alert(title: L10n.otaUpToDate, message: "")
-                case .osTooOld:
-                    // 手动也不提示无法安装的版本（静默）。
-                    self.alert(title: L10n.otaUpToDate, message: "")
-                case .error:
-                    self.alert(title: L10n.otaCheckFailed, message: L10n.otaCheckFailedHint)
-                }
-            }
+        requestCheck(presentation: .manual)
+    }
+
+    /// 统一检查入口。启动/设置/手动调用只决定展示语义，不再各自创建 Task。
+    private func requestCheck(presentation: UpdateCheckPresentation) {
+        guard flowGate.requestCheck(presentation) else {
+            DiagnosticLog.debug("OTA: coalesced check request presentation=\(presentation) phase=\(flowGate.phase)")
+            return
+        }
+
+        let checker = self.checker
+        let currentVersion = AppVersion.current
+        let currentOS = osVersion
+        currentCheckTask = Task { [weak self] in
+            let result = await checker.check(current: currentVersion, osVersion: currentOS)
+            guard !Task.isCancelled, let self else { return }
+            self.completeCheck(with: result)
         }
     }
 
-    /// 展示"有新版本"提示，用户确认后走完整下载+安装流程。
-    private func notifyAvailable(manifest: UpdateManifest) {
+    /// 回收检查 Task，且在 presenting 所有权下完成唯一一次结果处理。
+    private func completeCheck(with result: UpdateResult) {
+        guard let presentation = flowGate.completeCheck() else { return }
+        currentCheckTask = nil
+
+        switch result {
+        case .available(let manifest):
+            if askToInstall(manifest: manifest) {
+                guard flowGate.beginDownload() else {
+                    flowGate.reset()
+                    return
+                }
+                startUpdate(manifest: manifest)
+            } else {
+                flowGate.finishPresentation()
+            }
+        case .upToDate:
+            if presentation == .manual {
+                alert(title: L10n.otaUpToDate, message: "")
+            }
+            flowGate.finishPresentation()
+        case .osTooOld:
+            if presentation == .manual {
+                // 保留现有用户语义：当前系统无可安装更新时显示“已是最新”。
+                alert(title: L10n.otaUpToDate, message: "")
+            }
+            flowGate.finishPresentation()
+        case .error:
+            if presentation == .manual {
+                alert(title: L10n.otaCheckFailed, message: L10n.otaCheckFailedHint)
+            }
+            flowGate.finishPresentation()
+        }
+    }
+
+    /// 展示"有新版本"提示，返回用户是否确认更新。
+    private func askToInstall(manifest: UpdateManifest) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = String(format: L10n.otaNewVersionTitle, manifest.version)
@@ -157,8 +267,7 @@ final class UpdateCoordinator {
         alert.addButton(withTitle: L10n.otaUpdateNow)
         alert.addButton(withTitle: L10n.otaCancel)
         let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return } // 用户取消
-        startUpdate(manifest: manifest)
+        return response == .alertFirstButtonReturn
     }
 
     /// 下载 → 校验 → 解压 → 写标志 → 重开自身进入安装器。
@@ -166,6 +275,10 @@ final class UpdateCoordinator {
     /// 下载阶段弹出进度窗口（百分比 + 字节数 + Cancel）。
     /// 用户点 Cancel → 取消下载 Task → downloader 抛 CancellationError → 静默关闭窗口。
     private func startUpdate(manifest: UpdateManifest) {
+        guard flowGate.phase == .downloading, currentDownloadTask == nil else {
+            DiagnosticLog.debug("OTA: refused duplicate download phase=\(flowGate.phase) taskExists=\(currentDownloadTask != nil)")
+            return
+        }
         DiagnosticLog.debug("OTA: update confirmed by user, target=\(manifest.version) starting download")
 
         let progressWindow = UpdateProgressWindow(version: manifest.version)
@@ -177,6 +290,13 @@ final class UpdateCoordinator {
 
         let task = Task { [weak self] in
             guard let self else { return }
+            var preparedApp: URL?
+            defer {
+                if let preparedApp {
+                    try? FileManager.default.removeItem(
+                        at: preparedApp.deletingLastPathComponent())
+                }
+            }
             do {
                 let zip = try await self.downloader.download(from: manifest.url) { downloaded, total in
                     // downloader 回调线程不保证；切回 MainActor 更新 UI。
@@ -184,25 +304,54 @@ final class UpdateCoordinator {
                         progressWindow.updateProgress(bytesDownloaded: downloaded, totalBytes: total)
                     }
                 }
+                defer { try? FileManager.default.removeItem(at: zip) }
                 DiagnosticLog.debug("OTA: downloaded \(manifest.version)")
-                try self.downloader.verify(file: zip, expectedHex: manifest.sha256)
-                DiagnosticLog.debug("OTA: sha256 verified")
-                let newApp = try self.downloader.unzip(zip)
-                DiagnosticLog.debug("OTA: unzipped → \(newApp.path), relaunching into installer")
-                await MainActor.run {
-                    progressWindow.close()
-                    self.relaunchIntoInstaller(with: newApp)
+                let newApp = try await self.downloader.prepareDownloadedUpdate(
+                    zip: zip,
+                    expectedSHA256: manifest.sha256,
+                    expectedVersion: manifest.version)
+                preparedApp = newApp
+                // `Task.cancel()` can race with a detached verifier finishing. Do not close the
+                // progress UI or transfer ownership to the installer until this MainActor task
+                // has observed every Cancel action queued while the window was still usable.
+                try Task.checkCancellation()
+                // A successful handoff terminates with `exit(0)`, which does not unwind Swift
+                // `defer` blocks. Remove the archive explicitly before that point; otherwise
+                // every successful update leaks the (up to 512 MiB) downloaded zip.
+                do {
+                    try FileManager.default.removeItem(at: zip)
+                } catch {
+                    DiagnosticLog.debug("OTA: downloaded archive cleanup FAILED: \(error)")
                 }
+                DiagnosticLog.debug("OTA: unzipped → \(newApp.path), relaunching into installer")
+                progressWindow.close()
+                self.currentDownloadTask = nil
+                guard self.flowGate.beginInstallerHandoff() else {
+                    self.flowGate.reset()
+                    return
+                }
+                try await self.relaunchIntoInstaller(
+                    with: newApp,
+                    expectedVersion: manifest.version)
+                // The installer process is now executing from this directory and owns its
+                // cleanup. `exit` does not unwind defer blocks, so leave the source intact.
+                preparedApp = nil
+                // 只有脚本中的 `/usr/bin/open` 真正返回 0 后才退出当前 app。
+                exit(0)
             } catch is CancellationError {
                 DiagnosticLog.debug("OTA: download canceled by user")
                 await MainActor.run {
                     progressWindow.close()
+                    self.currentDownloadTask = nil
+                    self.flowGate.reset()
                     // 静默取消（保留安装器阶段的 otaInstallCanceled 语义；下载取消无需额外提示）。
                 }
             } catch {
                 DiagnosticLog.debug("OTA: update FAILED: \(error)")
                 await MainActor.run {
                     progressWindow.close()
+                    self.currentDownloadTask = nil
+                    self.flowGate.reset()
                     self.alert(title: L10n.otaDownloadFailed, message: L10n.otaDownloadFailedHint)
                 }
             }
@@ -223,57 +372,28 @@ final class UpdateCoordinator {
     /// 新 app 以安装器模式启动 → 跑**自己**的安装器逻辑 → 把自己 cp 到 /Applications。
     /// 这样任何已修复的安装器代码都能立即生效，修复对旧版本是"自愈"的。
     ///
-    /// 仍把 newApp.path 写进 UserDefaults 作为冗余源路径（向后兼容 + 双保险）；
-    /// 安装器侧 (UpdateInstallerCommand.resolveSourcePath) 优先读它，缺失时回退到
-    /// Bundle.main.bundlePath（新 app 启动后即等于 newApp.path）。
+    /// 安装器 handoff 使用 argv（expectedVersion）；源固定为新进程自己的 Bundle.main。
+    /// 这既消除了可写 defaults 路径的信任提升，也让未来签名过渡不受 cfprefsd 域漂移阻断。
     ///
     /// ## 重启机制（保留，经实测稳定）
-    /// 用独立 shell 脚本 `sleep; open -n <newApp>` 启动：脚本作为独立进程，
-    /// 当前 app exit(0) 不会取消它；`-n` 强制 LaunchServices 开新实例（即便旧 app
-    /// 还在退出序列中也照开）。delay 给旧 app 留出退出时间，避免新旧实例同时持有
-    /// /Applications/Plumb.app 导致 cp 冲突。
-    private func relaunchIntoInstaller(with newApp: URL) {
+    /// 用 shell 脚本执行 `open -n <newApp> --args ...`，并等待脚本真实退出码。只有 open
+    /// 返回 0 才允许调用方退出；脚本写入、Process.run 或 open 失败都会保持当前 app 运行并提示。
+    private func relaunchIntoInstaller(with newApp: URL, expectedVersion: String) async throws {
         let defaults = UserDefaults.standard
-        defaults.set(true, forKey: UpdateConfig.installerModeKey)
-        defaults.set(newApp.path, forKey: UpdateConfig.installerAppPathKey)
+        // 新流程完全由 argv handoff 驱动。先清掉旧版兼容标志，避免签名相同的候选误走
+        // 可写 UserDefaults 路径；installer 自身只信任正在运行的 Bundle.main。
+        defaults.set(false, forKey: UpdateConfig.installerModeKey)
+        defaults.removeObject(forKey: UpdateConfig.installerAppPathKey)
 
-        // 写一个独立 shell 脚本到临时位置，内容是 `sleep; open -n <newApp>`。
-        // 用 Process 启动这个脚本（重定向 stdio 到 /dev/null），脚本作为独立进程运行，
-        // 不受当前 app 的 NSApplication session 约束。当前 app exit(0) 后，脚本继续执行 open，
-        // LaunchServices 从这个独立进程收到 open 请求，能正常启动新 app（有完整 GUI 会话，
-        // 安装器的密码框能正常显示）。
-        //
-        // 之前失败的方案（都不可靠）：
-        //   - NSWorkspace.openApplication + terminate → -609 connectionInvalid
-        //   - openApplication completion handler → 仍被 terminate 取消
-        //   - nohup 直接执行二进制 → 能启动但无 GUI 会话，密码框不显示
-        //   - nohup + open → app 的子 session，LS 拒绝
-        let scriptURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("plumb-relaunch-\(UUID().uuidString).sh")
-        // 用 -n 强制新实例；sleep 2 给当前 app 充分时间退出（避免新旧同时占用 /Applications）。
-        let script = UpdateRelaunchCommand.buildScript(appPath: newApp.path)
         do {
-            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
-            // 设可执行权限
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+            try await UpdateInstallerCommand.launchAndObserveRelaunch(
+                appPath: newApp.path,
+                delaySeconds: 0,
+                arguments: UpdateInstallerHandoff.commandLineArguments(
+                    expectedVersion: expectedVersion))
         } catch {
-            exit(0)
-        }
-        let proc = Process()
-        proc.executableURL = scriptURL
-        proc.standardInput = FileHandle(forWritingAtPath: "/dev/null")
-        proc.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-        proc.standardError = FileHandle(forWritingAtPath: "/dev/null")
-        do {
-            try proc.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                exit(0)
-            }
-        } catch {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                exit(0)
-            }
+            DiagnosticLog.debug("OTA: installer relaunch/open FAILED: \(error)")
+            throw InstallError.relaunchFailed
         }
     }
 

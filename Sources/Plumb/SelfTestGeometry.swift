@@ -17,6 +17,7 @@ final class SelfTestGeometryDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         let line = message + "\n"
         if let data = line.data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
@@ -50,7 +51,11 @@ final class SelfTestGeometryDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performGeometryCheck(visible: CGRect) {
-        guard let window else { finish(); return }
+        guard let window else {
+            Self.log("GEO: FAIL — controlled window was not created")
+            finish()
+            return
+        }
 
         // The EXACT computation the engine uses (pure, no AX).
         let target = WindowGeometry.tiledFrame(visibleFrame: visible, insets: TileInsets(all: 16))

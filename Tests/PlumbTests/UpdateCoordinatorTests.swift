@@ -36,7 +36,7 @@ struct UpdateCoordinatorSettingsOpenTests {
         func fetch() async throws -> Data {
             await counter.increment()
             // 返回与当前版本相等 → upToDate，避免触发 notifyAvailable 模态弹窗。
-            return Data(#"{"version":"0.0.0","url":"https://x/y.zip","sha256":"a","notes":{"en":"n"},"minOS":"0.0.0"}"#.utf8)
+            return Data(#"{"version":"0.0.0","url":"https://x/y.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000","notes":{"en":"n"},"minOS":"0.0.0"}"#.utf8)
         }
     }
 
@@ -118,5 +118,142 @@ struct UpdateCoordinatorSettingsOpenTests {
         try? await Task.sleep(nanoseconds: 200_000_000)
         let secondCalls = await counter.count
         #expect(secondCalls == firstCalls, "settings-open should throttle rapid reopens independently")
+    }
+}
+
+@Suite("UpdateFlowGate single-flight")
+struct UpdateFlowGateTests {
+    @Test("checking coalesces repeats and manual intent wins")
+    func coalescesChecksAndEscalatesPresentation() {
+        var gate = UpdateFlowGate()
+
+        let startsSilentCheck = gate.requestCheck(.silent)
+        #expect(startsSilentCheck == true)
+        #expect(gate.phase == .checking)
+        let coalescesSilentCheck = gate.requestCheck(.silent)
+        let coalescesAndEscalatesManualCheck = gate.requestCheck(.manual)
+        #expect(coalescesSilentCheck == false)
+        #expect(coalescesAndEscalatesManualCheck == false)
+
+        let presentation = gate.completeCheck()
+        #expect(presentation == .manual)
+        #expect(gate.phase == .presenting)
+        gate.finishPresentation()
+        #expect(gate.phase == .idle)
+    }
+
+    @Test("presenting downloading and handoff reject every new check")
+    func busyPhasesRejectNewChecks() {
+        var gate = UpdateFlowGate()
+        let startsCheck = gate.requestCheck(.silent)
+        let initialPresentation = gate.completeCheck()
+        #expect(startsCheck)
+        #expect(initialPresentation == .silent)
+
+        let presentingRejectsManual = gate.requestCheck(.manual)
+        let startsDownload = gate.beginDownload()
+        #expect(presentingRejectsManual == false)
+        #expect(startsDownload)
+        #expect(gate.phase == .downloading)
+        let downloadingRejectsManual = gate.requestCheck(.manual)
+        #expect(downloadingRejectsManual == false)
+
+        let startsHandoff = gate.beginInstallerHandoff()
+        #expect(startsHandoff)
+        #expect(gate.phase == .handingOffToInstaller)
+        let handoffRejectsSilent = gate.requestCheck(.silent)
+        #expect(handoffRejectsSilent == false)
+
+        gate.reset()
+        #expect(gate.phase == .idle)
+        let restartsAfterReset = gate.requestCheck(.manual)
+        #expect(restartsAfterReset)
+    }
+
+    @Test("invalid transitions cannot create a second download or handoff")
+    func invalidTransitionsAreRejected() {
+        var gate = UpdateFlowGate()
+        let downloadBeforePresentation = gate.beginDownload()
+        let handoffBeforeDownload = gate.beginInstallerHandoff()
+        #expect(downloadBeforePresentation == false)
+        #expect(handoffBeforeDownload == false)
+
+        let startsManualCheck = gate.requestCheck(.manual)
+        let presentation = gate.completeCheck()
+        let startsDownload = gate.beginDownload()
+        let duplicateDownload = gate.beginDownload()
+        let startsHandoff = gate.beginInstallerHandoff()
+        let duplicateHandoff = gate.beginInstallerHandoff()
+        #expect(startsManualCheck)
+        #expect(presentation == .manual)
+        #expect(startsDownload)
+        #expect(duplicateDownload == false)
+        #expect(startsHandoff)
+        #expect(duplicateHandoff == false)
+    }
+}
+
+@Suite("UpdateCoordinator single-flight integration", .serialized)
+struct UpdateCoordinatorSingleFlightIntegrationTests {
+    private actor FetchLatch {
+        private(set) var count = 0
+        private var released = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func enterAndWait() async {
+            count += 1
+            guard !released else { return }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        func release() {
+            released = true
+            let pending = waiters
+            waiters.removeAll()
+            for continuation in pending {
+                continuation.resume()
+            }
+        }
+    }
+
+    private struct BlockingFetcher: ManifestFetcher, Sendable {
+        let latch: FetchLatch
+
+        func fetch() async throws -> Data {
+            await latch.enterAndWait()
+            return Data(#"{"version":"0.0.0","url":"https://x/y.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000","notes":{"en":"n"},"minOS":"0.0.0"}"#.utf8)
+        }
+    }
+
+    @Test("background and settings requests share one real fetch")
+    func automaticEntrypointsCoalesceIntoOneFetch() async {
+        UserDefaults.standard.removeObject(forKey: UpdateConfig.lastCheckKey)
+        UserDefaults.standard.removeObject(forKey: UpdateConfig.settingsOpenCheckLastKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: UpdateConfig.lastCheckKey)
+            UserDefaults.standard.removeObject(forKey: UpdateConfig.settingsOpenCheckLastKey)
+        }
+
+        let latch = FetchLatch()
+        let checker = UpdateChecker(fetcher: BlockingFetcher(latch: latch))
+        let coordinator = await UpdateCoordinator(checker: checker)
+        await coordinator.setAutoCheckEnabled(true)
+
+        await coordinator.checkForUpdatesInBackground()
+        await coordinator.checkForUpdatesWhenOpeningSettings()
+
+        for _ in 0..<50 {
+            if await latch.count == 1 { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let countBeforeRelease = await latch.count
+        #expect(countBeforeRelease == 1)
+
+        await latch.release()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let countAfterRelease = await latch.count
+        #expect(countAfterRelease == 1)
     }
 }

@@ -34,6 +34,7 @@ final class SelfTestSwitchAbortDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         if let data = (message + "\n").data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
                 if let h = FileHandle(forWritingAtPath: logPath) {
@@ -173,6 +174,6 @@ final class SelfTestSwitchAbortDelegate: NSObject, NSApplicationDelegate {
 
     private func finish() {
         Self.log("ABORT-TEST: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(SelfTestOutcome.exitCode) }
     }
 }

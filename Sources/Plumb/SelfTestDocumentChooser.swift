@@ -34,6 +34,7 @@ final class SelfTestDocumentChooserDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         if let data = (message + "\n").data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
                 if let h = FileHandle(forWritingAtPath: logPath) {
@@ -123,8 +124,9 @@ final class SelfTestDocumentChooserDelegate: NSObject, NSApplicationDelegate {
         Self.log("SELFTEST-DOC: gallery frame = \(stringify(galleryFrame)) nearTiled=\(nearTiled)")
 
         if !docAttr.isEmpty {
-            Self.log("SELFTEST-DOC: NOTE — gallery window has a document attr; " +
-                     "the app may have already opened a document. Re-run from gallery state.")
+            Self.log("SELFTEST-DOC: FAIL — selected window has a document attr; re-run from a real gallery state")
+            finish()
+            return
         }
         // 核心断言：gallery（无文档）不应被平铺（nearTiled=false）。
         if docAttr.isEmpty && nearTiled {
@@ -175,6 +177,6 @@ final class SelfTestDocumentChooserDelegate: NSObject, NSApplicationDelegate {
 
     private func finish() {
         Self.log("SELFTEST-DOC: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(SelfTestOutcome.exitCode) }
     }
 }

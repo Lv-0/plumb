@@ -28,6 +28,10 @@ struct AppVersionTests {
         #expect(AppVersion(parsing: "latest") == nil)
         #expect(AppVersion(parsing: "1") == nil)                                            // 1-seg rejected
         #expect(AppVersion(parsing: "1.2.3.4") == nil)                                      // 4-seg rejected
+        #expect(AppVersion(parsing: "-1.0.0") == nil)
+        #expect(AppVersion(parsing: "1.-2.0") == nil)
+        #expect(AppVersion(parsing: "+1.0.0") == nil)
+        #expect(AppVersion(parsing: "1. 2.0") == nil)
     }
 
     // MARK: - Comparison (Comparable)

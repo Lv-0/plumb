@@ -104,7 +104,16 @@ struct SettingsView: View {
         }
         .onChange(of: settings) { _, new in
             DiagnosticLog.debug("SettingsUI: settings changed → save")
-            store.save(new)
+            if !store.save(new) {
+                // The signing-independent file is authoritative. If its atomic write fails,
+                // restore the last durable value instead of displaying a setting that will
+                // silently disappear after restart.
+                let persisted = store.load()
+                if settings != persisted {
+                    DiagnosticLog.debug("SettingsUI: primary settings write failed — reverting to durable value")
+                    settings = persisted
+                }
+            }
         }
         // 菜单栏下拉的「自动居中 / 自动平铺」快速开关拨动后经 settingsChangedExternally 通知本视图；
         // 重载本地 settings @State，使设置窗口与菜单状态保持一致（双向同步的「菜单→设置窗口」方向）。

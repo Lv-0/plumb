@@ -22,7 +22,7 @@ struct UpdateCheckerTests {
     struct StubError: Error {}
 
     private func manifestJSON(version: String, minOS: String = "0.0.0") -> String {
-        return #"{"version":"\#(version)","url":"https://x/y.zip","sha256":"a","notes":{"en":"n"},"minOS":"\#(minOS)"}"#
+        return #"{"version":"\#(version)","url":"https://x/y.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000","notes":{"en":"n"},"minOS":"\#(minOS)"}"#
     }
 
     @Test("returns upToDate when manifest version equals current")
@@ -47,12 +47,12 @@ struct UpdateCheckerTests {
         guard case .upToDate = result else { Issue.record("older version should be upToDate"); return }
     }
 
-    @Test("treats malformed manifest version as upToDate")
+    @Test("treats malformed manifest version as an error")
     func malformedVersion() async {
-        let json = #"{"version":"latest","url":"https://x/y.zip","sha256":"a","notes":{"en":"n"},"minOS":"0.0.0"}"#
+        let json = #"{"version":"latest","url":"https://x/y.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000","notes":{"en":"n"},"minOS":"0.0.0"}"#
         let checker = UpdateChecker(fetcher: MockFetcher(data: Data(json.utf8)))
         let result = await checker.check(current: AppVersion(major: 1, minor: 0, patch: 0), osVersion: AppVersion(major: 26, minor: 0, patch: 0))
-        guard case .upToDate = result else { Issue.record("malformed should be upToDate"); return }
+        guard case .error = result else { Issue.record("malformed manifest must fail closed"); return }
     }
 
     @Test("returns osTooOld when minOS exceeds running OS")
@@ -74,5 +74,18 @@ struct UpdateCheckerTests {
         let checker = UpdateChecker(fetcher: MockFetcher(data: Data("not json".utf8)))
         let result = await checker.check(current: AppVersion(major: 1, minor: 0, patch: 0), osVersion: AppVersion(major: 26, minor: 0, patch: 0))
         guard case .error = result else { Issue.record("expected error"); return }
+    }
+
+    @Test("returns error when minOS is present but malformed")
+    func malformedMinOS() async {
+        let json = #"{"version":"2.0.0","url":"https://x/y.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000","notes":{"en":"n"},"minOS":"not-a-version"}"#
+        let checker = UpdateChecker(fetcher: MockFetcher(data: Data(json.utf8)))
+        let result = await checker.check(
+            current: AppVersion(major: 1, minor: 0, patch: 0),
+            osVersion: AppVersion(major: 26, minor: 0, patch: 0))
+        guard case .error = result else {
+            Issue.record("malformed minOS must fail closed")
+            return
+        }
     }
 }

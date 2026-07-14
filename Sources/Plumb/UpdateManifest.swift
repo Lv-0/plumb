@@ -30,12 +30,55 @@ struct UpdateManifest: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.version = try c.decode(String.self, forKey: .version)
-        self.url = try c.decode(URL.self, forKey: .url)
-        self.sha256 = try c.decode(String.self, forKey: .sha256)
+        let version = try c.decode(String.self, forKey: .version)
+        guard AppVersion(parsing: version) != nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version,
+                in: c,
+                debugDescription: "Invalid update version: \(version)"
+            )
+        }
+        self.version = version
+
+        let url = try c.decode(URL.self, forKey: .url)
+        guard url.scheme?.lowercased() == "https", url.host?.isEmpty == false else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .url,
+                in: c,
+                debugDescription: "Update URL must be an absolute HTTPS URL"
+            )
+        }
+        self.url = url
+
+        let sha256 = try c.decode(String.self, forKey: .sha256)
+        guard sha256.utf8.count == 64,
+              sha256.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
+              })
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sha256,
+                in: c,
+                debugDescription: "sha256 must contain exactly 64 hexadecimal characters"
+            )
+        }
+        self.sha256 = sha256
         self.notes = try c.decodeIfPresent([String: String].self, forKey: .notes) ?? [:]
-        let minOSRaw = try c.decodeIfPresent(String.self, forKey: .minOS)
-        self.minOS = minOSRaw.flatMap { AppVersion(parsing: $0) }
+        if let minOSRaw = try c.decodeIfPresent(String.self, forKey: .minOS) {
+            // “缺失”与“存在但非法”必须分开：缺失保留旧 manifest 的无门槛语义；
+            // 非法值则是发布数据错误，必须 fail closed。若将非法值 flatMap 成 nil，反而会
+            // 取消系统版本门槛，向不兼容的 macOS 提供无法启动的更新。
+            guard let parsed = AppVersion(parsing: minOSRaw) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .minOS,
+                    in: c,
+                    debugDescription: "Invalid minOS version: \(minOSRaw)"
+                )
+            }
+            self.minOS = parsed
+        } else {
+            self.minOS = nil
+        }
     }
 
     /// 把 version 字段解析为 AppVersion；非法时返回 nil（调用方视为"无更新"）。

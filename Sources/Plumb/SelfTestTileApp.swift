@@ -23,6 +23,7 @@ final class SelfTestTileAppDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         if let data = (message + "\n").data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
                 if let h = FileHandle(forWritingAtPath: logPath) {
@@ -99,14 +100,14 @@ final class SelfTestTileAppDelegate: NSObject, NSApplicationDelegate {
             }
             Self.log("SELFTEST-APP: tileWindowElementAnimated started (no throw)")
         } catch {
-            Self.log("SELFTEST-APP: threw: \(error)")
+            Self.log("SELFTEST-APP: FAIL — tileWindowElementAnimated threw: \(error)")
             finish()
         }
     }
 
     private func finish() {
         Self.log("SELFTEST-APP: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(SelfTestOutcome.exitCode) }
     }
 
     private func readFrame(_ el: AXUIElement) -> CGRect {

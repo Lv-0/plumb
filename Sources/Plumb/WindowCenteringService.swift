@@ -244,12 +244,51 @@ struct AcceptedTileFallbackStore {
     }
 }
 
+/// Exact identity of the window that owns the global geometry writer.
+///
+/// The service still serializes all writes globally, but move/resize filtering must be
+/// window-scoped: an animation for document A must never hide a real user gesture on
+/// document B in the same process.
+struct WindowAnimationOwner: Equatable, Sendable {
+    let pid: pid_t?
+    let windowIdentity: String
+
+    static func resolved(
+        pid: pid_t?,
+        windowNumber: CGWindowID?,
+        fallbackAXHash: Int
+    ) -> WindowAnimationOwner {
+        // AX callbacks may re-wrap the same remote window in a different local
+        // AXUIElement object. A real WindowServer number is the stable identity for
+        // the short animation lifetime; CFHash is only needed when the app omits it.
+        let identity = windowNumber.map { "window:\($0)" } ?? "ax:\(fallbackAXHash)"
+        return WindowAnimationOwner(pid: pid, windowIdentity: identity)
+    }
+}
+
+/// Stable state identity shared by animation ownership, observer FIFO/manual/budget state,
+/// and writer-produced fallback provenance. AX may re-wrap one remote window in a different
+/// local object, so CFHash is only a fallback when the app omits AXWindowNumber.
+enum WindowStateIdentity {
+    static func key(
+        pid: pid_t,
+        windowNumber: Int?,
+        fallbackAXHash: Int
+    ) -> String {
+        if let windowNumber {
+            return "\(pid):window:\(windowNumber)"
+        }
+        return "\(pid):ax:\(fallbackAXHash)"
+    }
+}
+
 /// Pure global single-flight gate. A lease, rather than a bare window key, owns
 /// the slot so a delayed completion from an aborted request cannot release a
 /// newer request for the same window key.
 struct WindowAnimationSlot {
     struct Lease: Equatable {
         let key: String
+        let owner: WindowAnimationOwner
         fileprivate let generation: UInt64
     }
 
@@ -257,11 +296,12 @@ struct WindowAnimationSlot {
     private var nextGeneration: UInt64 = 0
 
     var activeKey: String? { activeLease?.key }
+    var activeOwner: WindowAnimationOwner? { activeLease?.owner }
 
-    mutating func acquire(key: String) -> Lease? {
+    mutating func acquire(key: String, owner: WindowAnimationOwner) -> Lease? {
         guard activeLease == nil else { return nil }
         nextGeneration &+= 1
-        let lease = Lease(key: key, generation: nextGeneration)
+        let lease = Lease(key: key, owner: owner, generation: nextGeneration)
         activeLease = lease
         return lease
     }
@@ -275,6 +315,44 @@ struct WindowAnimationSlot {
 
     mutating func cancel() {
         activeLease = nil
+    }
+}
+
+/// Pure Phase-B guard for detecting sustained displacement from every legal writer trajectory.
+/// A bottom-left reporter can legitimately keep either its raw origin or its physical top edge
+/// stable while size changes, so callers provide all context-aware legal readback positions.
+struct FixedAnchorDriftMonitor {
+    private(set) var consecutiveDrift = 0
+    let threshold: CGFloat
+    let requiredSamples: Int
+
+    init(
+        threshold: CGFloat = WindowAnimator.jumpAbortThreshold,
+        requiredSamples: Int = WindowAnimator.jumpAbortConsecutiveTicks
+    ) {
+        self.threshold = max(0, threshold)
+        self.requiredSamples = max(1, requiredSamples)
+    }
+
+    mutating func observesUserDrift(position: CGPoint?, expectedPosition: CGPoint) -> Bool {
+        observesUserDrift(position: position, expectedPositions: [expectedPosition])
+    }
+
+    mutating func observesUserDrift(position: CGPoint?, expectedPositions: [CGPoint]) -> Bool {
+        guard let position, !expectedPositions.isEmpty else {
+            consecutiveDrift = 0
+            return false
+        }
+        let matchesLegalTrajectory = expectedPositions.contains { expected in
+            abs(position.x - expected.x) <= threshold &&
+                abs(position.y - expected.y) <= threshold
+        }
+        if !matchesLegalTrajectory {
+            consecutiveDrift += 1
+        } else {
+            consecutiveDrift = 0
+        }
+        return consecutiveDrift >= requiredSamples
     }
 }
 
@@ -316,14 +394,253 @@ enum WindowScreenOverlapSelection {
     }
 }
 
+enum WindowCoordinateSpace: CaseIterable, Equatable, Sendable {
+    case globalBottomLeft
+    case globalTopLeft
+    case localBottomLeft
+    case localTopLeft
+
+    var isTopLeft: Bool {
+        self == .globalTopLeft || self == .localTopLeft
+    }
+}
+
+/// Context-aware legal readbacks for a Phase-B writer.
+///
+/// App/AX combinations differ in what remains stable when only size is written:
+/// some keep the raw AX origin fixed, while others keep the physical top-left fixed
+/// and therefore change raw Y in a bottom-left coordinate space. Both are Plumb-owned
+/// trajectories; only sustained displacement from both is evidence of user movement.
+struct PhaseBAnchorTrajectory: Equatable, Sendable {
+    let fixedRawOrigin: CGPoint
+    let topLeftGlobal: CGPoint
+    let screenFrame: CGRect
+    let space: WindowCoordinateSpace
+    let primaryTopY: CGFloat
+
+    func expectedRawOrigins(currentSize: CGSize?) -> [CGPoint] {
+        guard let currentSize, currentSize.width > 0, currentSize.height > 0 else {
+            return [fixedRawOrigin]
+        }
+        let bottomLeft = CGPoint(
+            x: topLeftGlobal.x,
+            y: topLeftGlobal.y - currentSize.height
+        )
+        let physicalTopLeftOrigin = Self.rawOrigin(
+            bottomLeftOrigin: bottomLeft,
+            windowSize: currentSize,
+            screenFrame: screenFrame,
+            space: space,
+            primaryTopY: primaryTopY
+        )
+        if physicalTopLeftOrigin == fixedRawOrigin {
+            return [fixedRawOrigin]
+        }
+        return [fixedRawOrigin, physicalTopLeftOrigin]
+    }
+
+    private static func rawOrigin(
+        bottomLeftOrigin: CGPoint,
+        windowSize: CGSize,
+        screenFrame: CGRect,
+        space: WindowCoordinateSpace,
+        primaryTopY: CGFloat
+    ) -> CGPoint {
+        switch space {
+        case .globalBottomLeft:
+            CGPoint(x: bottomLeftOrigin.x.rounded(), y: bottomLeftOrigin.y.rounded())
+        case .globalTopLeft:
+            CGPoint(
+                x: bottomLeftOrigin.x.rounded(),
+                y: (primaryTopY - bottomLeftOrigin.y - windowSize.height).rounded()
+            )
+        case .localBottomLeft:
+            CGPoint(
+                x: (bottomLeftOrigin.x - screenFrame.minX).rounded(),
+                y: (bottomLeftOrigin.y - screenFrame.minY).rounded()
+            )
+        case .localTopLeft:
+            CGPoint(
+                x: (bottomLeftOrigin.x - screenFrame.minX).rounded(),
+                y: (screenFrame.maxY - bottomLeftOrigin.y - windowSize.height).rounded()
+            )
+        }
+    }
+}
+
+/// Pure screen × coordinate-space scorer used when WindowServer geometry is unavailable.
+///
+/// Local AX coordinates are inherently screen-relative, so projecting them through only
+/// the primary display manufactures a false primary-screen vote. Every screen receives
+/// both local projections. `preferredScreenIndex` is the target app's current `NSScreen.main`
+/// and breaks otherwise information-theoretic ties when no CG or PID cache exists.
+enum WindowCoordinateContextSelection {
+    struct Match: Equatable {
+        let screenIndex: Int
+        let space: WindowCoordinateSpace
+        let globalRect: CGRect
+        let overlap: CGFloat
+        let distance2: CGFloat
+    }
+
+    static func bestMatch(
+        rawPosition: CGPoint,
+        windowSize: CGSize,
+        screenFrames: [CGRect],
+        primaryTopY: CGFloat,
+        cachedScreenIndex: Int? = nil,
+        cachedSpace: WindowCoordinateSpace? = nil,
+        preferredScreenIndex: Int? = nil
+    ) -> Match? {
+        guard windowSize.width > 0, windowSize.height > 0, !screenFrames.isEmpty else { return nil }
+        var best: Match?
+        var candidates: [Match] = []
+        for (screenIndex, screenFrame) in screenFrames.enumerated() where !screenFrame.isEmpty && !screenFrame.isNull {
+            for space in WindowCoordinateSpace.allCases {
+                let rect = globalRect(
+                    space: space,
+                    screenFrame: screenFrame,
+                    rawPosition: rawPosition,
+                    windowSize: windowSize,
+                    primaryTopY: primaryTopY
+                )
+                let overlap = intersectionArea(rect, screenFrame)
+                let candidate = Match(
+                    screenIndex: screenIndex,
+                    space: space,
+                    globalRect: rect,
+                    overlap: overlap,
+                    distance2: distanceSquaredFromRectCenter(rect, to: screenFrame)
+                )
+                candidates.append(candidate)
+                consider(
+                    candidate,
+                    best: &best,
+                    cachedScreenIndex: cachedScreenIndex,
+                    cachedSpace: cachedSpace,
+                    preferredScreenIndex: preferredScreenIndex
+                )
+            }
+        }
+        if cachedScreenIndex == nil, preferredScreenIndex == nil,
+           let maximumOverlap = candidates.map(\.overlap).max()
+        {
+            let overlapPeers = candidates.filter { abs($0.overlap - maximumOverlap) <= 0.5 }
+            if let minimumDistance = overlapPeers.map(\.distance2).min() {
+                let equallyPlausibleScreens = Set(
+                    overlapPeers
+                        .filter { abs($0.distance2 - minimumDistance) <= 0.5 }
+                        .map(\.screenIndex)
+                )
+                if equallyPlausibleScreens.count > 1 {
+                    return nil
+                }
+            }
+        }
+        return best
+    }
+
+    static func globalRect(
+        space: WindowCoordinateSpace,
+        screenFrame: CGRect,
+        rawPosition: CGPoint,
+        windowSize: CGSize,
+        primaryTopY: CGFloat
+    ) -> CGRect {
+        switch space {
+        case .globalBottomLeft:
+            return CGRect(origin: rawPosition, size: windowSize)
+        case .globalTopLeft:
+            return CGRect(
+                x: rawPosition.x,
+                y: primaryTopY - rawPosition.y - windowSize.height,
+                width: windowSize.width,
+                height: windowSize.height
+            )
+        case .localBottomLeft:
+            return CGRect(
+                x: screenFrame.minX + rawPosition.x,
+                y: screenFrame.minY + rawPosition.y,
+                width: windowSize.width,
+                height: windowSize.height
+            )
+        case .localTopLeft:
+            return CGRect(
+                x: screenFrame.minX + rawPosition.x,
+                y: screenFrame.maxY - rawPosition.y - windowSize.height,
+                width: windowSize.width,
+                height: windowSize.height
+            )
+        }
+    }
+
+    private static func consider(
+        _ candidate: Match,
+        best: inout Match?,
+        cachedScreenIndex: Int?,
+        cachedSpace: WindowCoordinateSpace?,
+        preferredScreenIndex: Int?
+    ) {
+        let overlapTolerance: CGFloat = 0.5
+
+        guard let current = best else {
+            best = candidate
+            return
+        }
+        if candidate.overlap > current.overlap + overlapTolerance {
+            best = candidate
+            return
+        }
+        guard abs(candidate.overlap - current.overlap) <= overlapTolerance else { return }
+
+        let candidateCachedScreen = cachedScreenIndex == candidate.screenIndex
+        let currentCachedScreen = cachedScreenIndex == current.screenIndex
+        if candidateCachedScreen != currentCachedScreen {
+            if candidateCachedScreen { best = candidate }
+            return
+        }
+        if candidateCachedScreen, currentCachedScreen {
+            let candidateCachedSpace = cachedSpace == candidate.space
+            let currentCachedSpace = cachedSpace == current.space
+            if candidateCachedSpace != currentCachedSpace {
+                if candidateCachedSpace { best = candidate }
+                return
+            }
+        }
+        let candidatePreferred = preferredScreenIndex == candidate.screenIndex
+        let currentPreferred = preferredScreenIndex == current.screenIndex
+        if candidatePreferred != currentPreferred {
+            if candidatePreferred { best = candidate }
+            return
+        }
+        if candidate.distance2 + 0.5 < current.distance2 {
+            best = candidate
+            return
+        }
+        guard abs(candidate.distance2 - current.distance2) <= 0.5 else { return }
+        if candidate.space.isTopLeft, !current.space.isTopLeft {
+            best = candidate
+        }
+    }
+
+    private static func intersectionArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+        return intersection.width * intersection.height
+    }
+
+    private static func distanceSquaredFromRectCenter(_ rect: CGRect, to bounds: CGRect) -> CGFloat {
+        let nearestX = max(bounds.minX, min(rect.midX, bounds.maxX))
+        let nearestY = max(bounds.minY, min(rect.midY, bounds.maxY))
+        let dx = rect.midX - nearestX
+        let dy = rect.midY - nearestY
+        return dx * dx + dy * dy
+    }
+}
+
 @MainActor
 final class WindowCenteringService {
-    private enum RawSpace {
-        case globalBottomLeft
-        case globalTopLeft
-        case localBottomLeft
-        case localTopLeft
-    }
+    private typealias RawSpace = WindowCoordinateSpace
 
     private struct WindowContext {
         let screen: NSScreen
@@ -439,6 +756,10 @@ final class WindowCenteringService {
     /// 全局动画租约。底层只有一个 Phase-B timer ownership channel，因此不是按窗口单飞，
     /// 而是整个 service 同时最多一个动画请求。
     private var animationSlot = WindowAnimationSlot()
+    /// A real pointer-driven move/resize notification for the exact owner asks the
+    /// service-owned Phase-B timer to terminate with `.userInterrupted` on its next tick.
+    /// The lease prevents a delayed event from interrupting a replacement animation.
+    private var userInterruptionRequestedFor: WindowAnimationSlot.Lease?
 
     /// 进行中的动画定时器句柄（Phase-A 由 WindowAnimator 返回；Phase-B 平铺推进由本类持有）。
     /// 切换 app 时通过 `abortActiveAnimations()` 全部取消，避免 zombie 定时器在后台继续
@@ -449,6 +770,32 @@ final class WindowCenteringService {
 
     /// 是否有任意窗口动画正在进行中（供观察者决定是否需要重试）。
     var isAnyAnimationInProgress: Bool { animationSlot.activeLease != nil }
+
+    /// Exact-owner variant used by move/resize notification filtering. A global busy
+    /// writer is not evidence that an event from a different window was self-generated.
+    func isAnimationInProgress(for windowElement: AXUIElement, pid: pid_t?) -> Bool {
+        animationSlot.activeOwner == animationOwner(for: windowElement, pid: pid)
+    }
+
+    /// Every active writer is paired with readback drift validation: WindowAnimator owns
+    /// center/Phase-A validation, while the context-aware Phase-B monitor owns size/settle
+    /// continuations. The observer uses this fact to defer ambiguous no-pointer notifications
+    /// instead of unconditionally calling them self-writes or genuine user gestures.
+    func isUserDriftMonitoringActive(for windowElement: AXUIElement, pid: pid_t?) -> Bool {
+        isAnimationInProgress(for: windowElement, pid: pid)
+    }
+
+    /// Records an explicit user-interaction request for the current exact owner. The
+    /// animation driver consumes this request and emits a real terminal outcome rather
+    /// than letting an external timer cancellation strand its observer coordinator.
+    @discardableResult
+    func requestUserInterruption(for windowElement: AXUIElement, pid: pid_t?) -> Bool {
+        guard let lease = animationSlot.activeLease,
+              lease.owner == animationOwner(for: windowElement, pid: pid)
+        else { return false }
+        userInterruptionRequestedFor = lease
+        return true
+    }
 
     /// 切换 app / 手动中止时调用：立即停止所有进行中的动画，窗口停在最后一帧已写入的位置
     ///（不回弹、不再写）。消除 zombie 定时器在非前台时继续移动窗口的缺陷。
@@ -462,6 +809,7 @@ final class WindowCenteringService {
         activeAnimatorTimers.removeAll()
         // 清空锁，确保后续动画能正常启动（被 cancel 的定时器不会触发其 completion，故主动清空）。
         animationSlot.cancel()
+        userInterruptionRequestedFor = nil
         if hadActive {
             DiagnosticLog.debug("abortActiveAnimations: stopped all in-flight animations")
         }
@@ -639,11 +987,12 @@ final class WindowCenteringService {
         }
 
         let animKey = animationKey(for: windowElement, pid: pid, kind: "center")
+        let animOwner = animationOwner(for: windowElement, pid: pid)
         // 全局单飞：底层 Phase-B 仍只有一个 timer ownership channel，任何不同窗口/不同 kind
         // 的并发动画都会覆盖句柄并使 abort 失效。已有动画时显式返回 busy，由上层稍后重试。
         // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。调用方（如平铺完成回调里的
         // markCentered + processedPIDs.insert）会把假完成当作真完成，提前锁死在错误几何上。
-        guard let animationLease = animationSlot.acquire(key: animKey) else {
+        guard let animationLease = animationSlot.acquire(key: animKey, owner: animOwner) else {
             DiagnosticLog.debug("center-animator: busy active=\(animationSlot.activeKey ?? "?") skip requested=\(animKey) (no completion)")
             return .busy
         }
@@ -658,6 +1007,7 @@ final class WindowCenteringService {
             writer: { [weak self] frame in
                 guard let self else { return false }
                 guard self.animationSlot.activeLease == animationLease else { return false }
+                guard !self.userInterruptionWasRequested(for: animationLease) else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
                     return true
                 }
@@ -673,6 +1023,9 @@ final class WindowCenteringService {
             },
             completion: { [weak self] outcome in
                 let completedCurrentLease = self?.animationSlot.release(animationLease) ?? false
+                if completedCurrentLease {
+                    self?.userInterruptionRequestedFor = nil
+                }
                 // 任一驱动终态都从追踪列表移除（timer 已 cancel，避免句柄堆积）。
                 if let timer = animatorTimerBox {
                     self?.activeAnimatorTimers.removeAll { $0 === timer }
@@ -860,7 +1213,8 @@ final class WindowCenteringService {
         // 全局单飞：Phase-B 只有一个 timer ownership channel。任何已有动画（即使是不同窗口
         // 或 center/tile 不同 kind）都必须返回 busy，不能覆盖 singleton state。
         let animKey = animationKey(for: windowElement, pid: pid, kind: "tile")
-        guard let animationLease = animationSlot.acquire(key: animKey) else {
+        let animOwner = animationOwner(for: windowElement, pid: pid)
+        guard let animationLease = animationSlot.acquire(key: animKey, owner: animOwner) else {
             // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。旧实现调用 completion
             // 会触发调用方的 markCentered + processedPIDs.insert + startTileStabilizationRetries，
             // 把「跳过的这次」当作真完成锁死，并启动新的稳定重试 → 假完成 + 真重试叠加，
@@ -878,6 +1232,7 @@ final class WindowCenteringService {
             targetFrame: targetFrame
         ) {
             _ = animationSlot.release(animationLease)
+            userInterruptionRequestedFor = nil
             completion?(.finished)
             return .completedSynchronously(didWriteGeometry: false)
         }
@@ -899,6 +1254,7 @@ final class WindowCenteringService {
             if self.animationSlot.release(animationLease) {
                 // 只允许当前 slot owner 清除 timer；过期 continuation 不得破坏后续会话。
                 self.activeTileTimer = nil
+                self.userInterruptionRequestedFor = nil
             }
         }
 
@@ -960,6 +1316,13 @@ final class WindowCenteringService {
                 space: context.space,
                 primaryTopY: primaryTopY
             )
+            let phaseBAnchorTrajectory = PhaseBAnchorTrajectory(
+                fixedRawOrigin: tileOriginAXForCurrentSize,
+                topLeftGlobal: CGPoint(x: targetFrame.minX, y: targetFrame.maxY),
+                screenFrame: context.screen.frame,
+                space: context.space,
+                primaryTopY: primaryTopY
+            )
 
             // Phase A 已把窗口锚到平铺左上角原点（以当前尺寸）；此处不再单次写入 origin（旧实现的
             // 那次写入恰是「窗口停在中心开始放大」bug 的根因——被 Phase A 收尾期的 relayout 拖垮）。
@@ -971,6 +1334,7 @@ final class WindowCenteringService {
                     windowElement: windowElement,
                     startSize: windowSize,
                     endSize: endSize,
+                    phaseBAnchorTrajectory: phaseBAnchorTrajectory,
                     targetAXOrigin: targetAXOrigin,
                     targetFrame: targetFrame,
                     visibleFrame: visibleFrame,
@@ -990,6 +1354,7 @@ final class WindowCenteringService {
                 windowElement: windowElement,
                 startSize: windowSize,
                 endSize: endSize,
+                phaseBAnchorTrajectory: phaseBAnchorTrajectory,
                 targetAXOrigin: targetAXOrigin,
                 targetFrame: targetFrame,
                 visibleFrame: visibleFrame,
@@ -1016,6 +1381,7 @@ final class WindowCenteringService {
             writer: { [weak self] frame in
                 guard let self else { return false }
                 guard self.animationSlot.activeLease == animationLease else { return false }
+                guard !self.userInterruptionWasRequested(for: animationLease) else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
                     return true
                 }
@@ -1071,6 +1437,24 @@ final class WindowCenteringService {
 
     // MARK: - Phase-B 丝滑放大 / 稳健降级
 
+    private func shouldInterruptPhaseB(
+        windowElement: AXUIElement,
+        expectedTrajectory: PhaseBAnchorTrajectory,
+        anchorDrift: inout FixedAnchorDriftMonitor
+    ) -> Bool {
+        if let requested = userInterruptionRequestedFor,
+           animationSlot.activeLease == requested
+        {
+            return true
+        }
+        let position = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
+        let currentSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        return anchorDrift.observesUserDrift(
+            position: position,
+            expectedPositions: expectedTrajectory.expectedRawOrigins(currentSize: currentSize)
+        )
+    }
+
     /// 丝滑放大（默认）：60Hz × ease-out 帧驱动尺寸放大，左上角锚定向右下扩展。每帧读回实际尺寸
     /// 做弹回检测；若连续帧落后写入值超阈值，降级到 `runPhaseBRobust`（稳健大步）兜底。
     /// 末帧强制 pos+size 落地、读回重居中，逻辑与稳健模式完全一致（保持终端类 app grid snap 兼容）。
@@ -1078,6 +1462,7 @@ final class WindowCenteringService {
         windowElement: AXUIElement,
         startSize: CGSize,
         endSize: CGSize,
+        phaseBAnchorTrajectory: PhaseBAnchorTrajectory,
         targetAXOrigin: CGPoint,
         targetFrame: CGRect,
         visibleFrame: CGRect,
@@ -1116,6 +1501,7 @@ final class WindowCenteringService {
         timer.schedule(deadline: .now() + .milliseconds(Self.smoothPhaseBLeadInMs), repeating: .nanoseconds(intervalNs))
         let startTime = DispatchTime.now()
         var bounceTicks = 0
+        var anchorDrift = FixedAnchorDriftMonitor()
         timer.setEventHandler { [weak self] in
             guard let self else {
                 timer.cancel()
@@ -1131,6 +1517,18 @@ final class WindowCenteringService {
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
                 finishActive()
                 DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
+                return
+            }
+            if self.shouldInterruptPhaseB(
+                windowElement: windowElement,
+                expectedTrajectory: phaseBAnchorTrajectory,
+                anchorDrift: &anchorDrift
+            ) {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                finishActive()
+                DiagnosticLog.debug("tile-animator: phase B interrupted by user pid=\(pid.map(String.init) ?? "?")")
+                completion?(.userInterrupted)
                 return
             }
 
@@ -1187,6 +1585,7 @@ final class WindowCenteringService {
                             windowElement: windowElement,
                             startSize: actual,
                             endSize: endSize,
+                            phaseBAnchorTrajectory: phaseBAnchorTrajectory,
                             targetAXOrigin: targetAXOrigin,
                             targetFrame: targetFrame,
                             visibleFrame: visibleFrame,
@@ -1217,6 +1616,7 @@ final class WindowCenteringService {
         windowElement: AXUIElement,
         startSize: CGSize,
         endSize: CGSize,
+        phaseBAnchorTrajectory: PhaseBAnchorTrajectory,
         targetAXOrigin: CGPoint,
         targetFrame: CGRect,
         visibleFrame: CGRect,
@@ -1234,6 +1634,7 @@ final class WindowCenteringService {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
         var step = 0
+        var anchorDrift = FixedAnchorDriftMonitor()
         let leadInMs = skipLeadIn ? 0 : Self.tilePhaseBLeadInMs
         timer.schedule(deadline: .now() + .milliseconds(leadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
         timer.setEventHandler { [weak self] in
@@ -1252,6 +1653,18 @@ final class WindowCenteringService {
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
                 finishActive()
                 DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
+                return
+            }
+            if self.shouldInterruptPhaseB(
+                windowElement: windowElement,
+                expectedTrajectory: phaseBAnchorTrajectory,
+                anchorDrift: &anchorDrift
+            ) {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                finishActive()
+                DiagnosticLog.debug("tile-animator: robust Phase B interrupted by user pid=\(pid.map(String.init) ?? "?")")
+                completion?(.userInterrupted)
                 return
             }
             step += 1
@@ -1375,6 +1788,14 @@ final class WindowCenteringService {
         activeTileTimer = timer
         var round = 0
         var didWriteTargetSize = firstOutcome.didResize
+        var anchorDrift = FixedAnchorDriftMonitor()
+        let anchorTrajectory = PhaseBAnchorTrajectory(
+            fixedRawOrigin: targetAXOrigin,
+            topLeftGlobal: CGPoint(x: targetFrame.minX, y: targetFrame.maxY),
+            screenFrame: context.screen.frame,
+            space: context.space,
+            primaryTopY: primaryTopY
+        )
         timer.schedule(deadline: .now() + .milliseconds(Self.settleDelayMs), repeating: .milliseconds(Self.settleDelayMs))
         timer.setEventHandler { [weak self] in
             guard let self else {
@@ -1392,6 +1813,18 @@ final class WindowCenteringService {
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
                 DiagnosticLog.debug("tile-animator: settle aborted (pid=\(pid) no longer frontmost)")
                 finishActive()
+                return
+            }
+            if self.shouldInterruptPhaseB(
+                windowElement: windowElement,
+                expectedTrajectory: anchorTrajectory,
+                anchorDrift: &anchorDrift
+            ) {
+                timer.cancel()
+                if self.activeTileTimer === timer { self.activeTileTimer = nil }
+                finishActive()
+                DiagnosticLog.debug("tile-animator: settle interrupted by user pid=\(pid.map(String.init) ?? "?")")
+                completion?(.userInterrupted)
                 return
             }
             round += 1
@@ -1484,6 +1917,7 @@ final class WindowCenteringService {
                 sizeOutcome: sizeOutcome,
                 didWriteTargetSize: didWriteTargetSize,
                 attemptIndex: 0,
+                priorAnchorDrift: FixedAnchorDriftMonitor(requiredSamples: 3),
                 isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
                 completion: completion
@@ -1537,6 +1971,7 @@ final class WindowCenteringService {
         sizeOutcome: ResizeOutcome,
         didWriteTargetSize: Bool,
         attemptIndex: Int,
+        priorAnchorDrift: FixedAnchorDriftMonitor,
         isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
         completion: WindowAnimator.Completion?
@@ -1549,6 +1984,14 @@ final class WindowCenteringService {
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
+        var anchorDrift = priorAnchorDrift
+        let anchorTrajectory = PhaseBAnchorTrajectory(
+            fixedRawOrigin: targetAXOrigin,
+            topLeftGlobal: CGPoint(x: targetFrame.minX, y: targetFrame.maxY),
+            screenFrame: context.screen.frame,
+            space: context.space,
+            primaryTopY: primaryTopY
+        )
         timer.schedule(deadline: .now() + .milliseconds(delayMs))
         timer.setEventHandler { [weak self] in
             guard let self else {
@@ -1568,6 +2011,16 @@ final class WindowCenteringService {
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 DiagnosticLog.debug("tile-animator: precise-rewrite aborted (pid=\(pid) no longer frontmost)")
                 finishActive()
+                return
+            }
+            if self.shouldInterruptPhaseB(
+                windowElement: windowElement,
+                expectedTrajectory: anchorTrajectory,
+                anchorDrift: &anchorDrift
+            ) {
+                finishActive()
+                DiagnosticLog.debug("tile-animator: precise rewrite interrupted by user pid=\(pid.map(String.init) ?? "?")")
+                completion?(.userInterrupted)
                 return
             }
 
@@ -1625,6 +2078,7 @@ final class WindowCenteringService {
                     sizeOutcome: sizeOutcome,
                     didWriteTargetSize: hasWriterEvidence,
                     attemptIndex: attemptIndex + 1,
+                    priorAnchorDrift: anchorDrift,
                     isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
@@ -1966,11 +2420,25 @@ final class WindowCenteringService {
         return "\(kind):\(pidPart):ax:\(CFHash(windowElement))"
     }
 
+    private func animationOwner(for windowElement: AXUIElement, pid: pid_t?) -> WindowAnimationOwner {
+        WindowAnimationOwner.resolved(
+            pid: pid,
+            windowNumber: windowIDAttribute(on: windowElement),
+            fallbackAXHash: Int(CFHash(windowElement))
+        )
+    }
+
+    private func userInterruptionWasRequested(for lease: WindowAnimationSlot.Lease) -> Bool {
+        userInterruptionRequestedFor == lease
+    }
+
     /// Fallback provenance needs a window identity that remains stable across observer
     /// re-enumeration but does not leak across a recycled PID/window object.
     private func acceptedTileFallbackKey(for windowElement: AXUIElement, pid: pid_t) -> String {
-        let windowPart = windowIDAttribute(on: windowElement).map(String.init) ?? "unknown"
-        return "\(pid):\(windowPart):ax:\(CFHash(windowElement))"
+        WindowStateIdentity.key(
+            pid: pid,
+            windowNumber: windowIDAttribute(on: windowElement).map(Int.init),
+            fallbackAXHash: Int(CFHash(windowElement)))
     }
 
     private func frameSatisfiesUnprovenTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
@@ -2193,47 +2661,10 @@ final class WindowCenteringService {
         // === 中心点归属优先（需求4：app 原先在哪屏就在哪屏）===
         // globalBottomLeft / globalTopLeft 的全局 rect 不依赖屏幕 frame，可稳定求窗口中心，
         // 用 ScreenSelection 纯函数决定它属于哪屏。命中即锁定屏幕，再在该屏上逐空间评分。
-        if let locked = lockScreenByWindowCenter(
+        return lockScreenByWindowCenter(
             rawPosition: rawPosition, windowSize: windowSize, pid: pid, screens: screens,
             primaryTopY: primaryTopY, cachedScreen: cachedScreen, cachedSpace: cachedSpace
-        ) {
-            return locked
-        }
-
-        // === 回退：旧的逐屏 × 逐空间最大重叠评分 ===
-        var best: ContextCandidate?
-
-        for screen in screens {
-            let screenFrame = screen.frame
-
-            for space in [RawSpace.globalBottomLeft, .globalTopLeft, .localBottomLeft, .localTopLeft] {
-                let globalRect = rawToGlobalRect(space: space, screenFrame: screenFrame, rawPosition: rawPosition, windowSize: windowSize, primaryTopY: primaryTopY)
-                let overlap = globalRect.intersection(screenFrame).area
-                let dist2 = distanceSquaredFromRectCenter(globalRect, to: screenFrame)
-                consider(
-                    candidate: ContextCandidate(screen: screen, space: space, globalRect: globalRect, overlap: overlap, distance2: dist2),
-                    best: &best,
-                    cachedScreen: cachedScreen,
-                    cachedSpace: cachedSpace
-                )
-            }
-        }
-
-        if let best {
-            // If we had any meaningful overlap, treat this as reliable and update cache.
-            if let pid, best.overlap > 1 {
-                if let id = displayID(for: best.screen) {
-                    cachedDisplayByPID[pid] = id
-                }
-                cachedSpaceByPID[pid] = best.space
-            } else if cachedScreen != nil, let cachedScreen, let cachedSpace {
-                let screenFrame = cachedScreen.frame
-                let globalRect = rawToGlobalRect(space: cachedSpace, screenFrame: screenFrame, rawPosition: rawPosition, windowSize: windowSize, primaryTopY: primaryTopY)
-                return WindowContext(screen: cachedScreen, space: cachedSpace, overlap: 0, currentGlobalRect: globalRect)
-            }
-            return WindowContext(screen: best.screen, space: best.space, overlap: best.overlap, currentGlobalRect: best.globalRect)
-        }
-        return nil
+        )
     }
 
     /// 用窗口中心点（globalBottomLeft / globalTopLeft 两种全局空间）决定它属于哪个屏幕。
@@ -2248,71 +2679,39 @@ final class WindowCenteringService {
         cachedScreen: NSScreen?,
         cachedSpace: RawSpace?
     ) -> WindowContext? {
-        // 这两个空间的全局 rect 不依赖屏幕 frame，可稳定计算窗口中心。
-        let globalSpaces: [RawSpace] = [.globalBottomLeft, .globalTopLeft]
-        // 用任一稳定参照屏求 local 空间的中心候选（local 转换依赖 screenFrame，
-        // 但对“窗口中心在哪屏”的判定影响很小，用缓存屏/主屏作参照即可）。
-        let refScreen = cachedScreen ?? screens.first(where: { abs($0.frame.minX) < 0.5 && abs($0.frame.minY) < 0.5 }) ?? screens[0]
-        let localSpaces: [RawSpace] = [.localBottomLeft, .localTopLeft]
-
         let screenFrames = screens.map { $0.frame }
-
-        // 收集所有 (space, 该空间下的窗口全局中心) 候选。
-        var centerCandidates: [(space: RawSpace, center: CGPoint)] = []
-        for space in globalSpaces {
-            let r = rawToGlobalRect(space: space, screenFrame: refScreen.frame, rawPosition: rawPosition, windowSize: windowSize, primaryTopY: primaryTopY)
-            centerCandidates.append((space, CGPoint(x: r.midX, y: r.midY)))
+        let cachedScreenIndex = cachedScreen.flatMap { cached in
+            screens.firstIndex(where: { displayID(for: $0) == displayID(for: cached) })
         }
-        for space in localSpaces {
-            let r = rawToGlobalRect(space: space, screenFrame: refScreen.frame, rawPosition: rawPosition, windowSize: windowSize, primaryTopY: primaryTopY)
-            centerCandidates.append((space, CGPoint(x: r.midX, y: r.midY)))
-        }
-
-        // 对每个候选中心，看它属于哪屏；多个 space 投票一致即采纳该屏。
-        // （不同 space 给出的中心可能不同，但若多数一致，说明窗口确实在该屏。）
-        var screenVotes: [CGDirectDisplayID: Int] = [:]
-        var chosenScreen: NSScreen?
-        for cand in centerCandidates {
-            guard let idx = ScreenSelection.screenIndex(forCenter: cand.center, inScreens: screenFrames) else { continue }
-            let s = screens[idx]
-            chosenScreen = s
-            if let id = displayID(for: s) {
-                screenVotes[id, default: 0] += 1
-            }
-        }
-
-        // 取得票最多的屏幕（至少 1 票）。
-        let winnerID = screenVotes.max { $0.value < $1.value }?.key
-        let lockedScreen: NSScreen? = {
-            if let winnerID { return screens.first(where: { displayID(for: $0) == winnerID }) }
-            return chosenScreen
-        }()
-        guard let lockedScreen else { return nil }
-
-        // 在锁定屏幕上逐空间评分选最优 RawSpace。
-        let screenFrame = lockedScreen.frame
-        var best: ContextCandidate?
-        for space in [RawSpace.globalBottomLeft, .globalTopLeft, .localBottomLeft, .localTopLeft] {
-            let globalRect = rawToGlobalRect(space: space, screenFrame: screenFrame, rawPosition: rawPosition, windowSize: windowSize, primaryTopY: primaryTopY)
-            let overlap = globalRect.intersection(screenFrame).area
-            let dist2 = distanceSquaredFromRectCenter(globalRect, to: screenFrame)
-            consider(
-                candidate: ContextCandidate(screen: lockedScreen, space: space, globalRect: globalRect, overlap: overlap, distance2: dist2),
-                best: &best,
-                cachedScreen: cachedScreen,
-                cachedSpace: cachedSpace
-            )
-        }
-        guard let best else { return nil }
+        let mayUseFrontmostScreen = pid == nil ||
+            NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        let preferredScreenIndex = mayUseFrontmostScreen ? NSScreen.main.flatMap { main in
+            screens.firstIndex(where: { displayID(for: $0) == displayID(for: main) })
+        } : nil
+        guard let match = WindowCoordinateContextSelection.bestMatch(
+            rawPosition: rawPosition,
+            windowSize: windowSize,
+            screenFrames: screenFrames,
+            primaryTopY: primaryTopY,
+            cachedScreenIndex: cachedScreenIndex,
+            cachedSpace: cachedSpace,
+            preferredScreenIndex: preferredScreenIndex
+        ) else { return nil }
+        let lockedScreen = screens[match.screenIndex]
 
         // 更新缓存（中心归属是强信号，即便重叠小也采纳）。
         if let pid {
             if let id = displayID(for: lockedScreen) {
                 cachedDisplayByPID[pid] = id
             }
-            cachedSpaceByPID[pid] = best.space
+            cachedSpaceByPID[pid] = match.space
         }
-        return WindowContext(screen: lockedScreen, space: best.space, overlap: best.overlap, currentGlobalRect: best.globalRect)
+        return WindowContext(
+            screen: lockedScreen,
+            space: match.space,
+            overlap: match.overlap,
+            currentGlobalRect: match.globalRect
+        )
     }
 
     private func detectWindowContextUsingCG(
@@ -2547,24 +2946,13 @@ final class WindowCenteringService {
     }
 
     private func rawToGlobalRect(space: RawSpace, screenFrame: CGRect, rawPosition: CGPoint, windowSize: CGSize, primaryTopY: CGFloat) -> CGRect {
-        switch space {
-        case .globalBottomLeft:
-            return CGRect(origin: rawPosition, size: windowSize)
-        case .globalTopLeft:
-            let convertedBottomY = primaryTopY - rawPosition.y - windowSize.height
-            return CGRect(x: rawPosition.x, y: convertedBottomY, width: windowSize.width, height: windowSize.height)
-        case .localBottomLeft:
-            return CGRect(
-                x: screenFrame.minX + rawPosition.x,
-                y: screenFrame.minY + rawPosition.y,
-                width: windowSize.width,
-                height: windowSize.height
-            )
-        case .localTopLeft:
-            let x = screenFrame.minX + rawPosition.x
-            let y = screenFrame.maxY - rawPosition.y - windowSize.height
-            return CGRect(x: x, y: y, width: windowSize.width, height: windowSize.height)
-        }
+        WindowCoordinateContextSelection.globalRect(
+            space: space,
+            screenFrame: screenFrame,
+            rawPosition: rawPosition,
+            windowSize: windowSize,
+            primaryTopY: primaryTopY
+        )
     }
 
     private func tileReachedTarget(

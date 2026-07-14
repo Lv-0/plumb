@@ -78,6 +78,54 @@ func perAppInsetsMirroredToUserDefaults() async throws {
 }
 
 @Test
+func explicitEmptyPerAppInsetsSuppressesAndDeletesLegacyMirror() async throws {
+    let (store, defaults, fileURL, cleanup) = makeIsolatedStore()
+    defer { cleanup() }
+
+    defaults.set(["com.legacy": 28.0], forKey: "tiling.perAppMargins")
+    defaults.set(28.0, forKey: "tiling.edgeMargin")
+
+    var settings = AppTilingSettings.default
+    settings.perAppInsets = [:]
+    store.save(settings)
+
+    #expect(defaults.object(forKey: "tiling.perAppMargins") == nil)
+    #expect(defaults.object(forKey: "tiling.edgeMargin") == nil)
+
+    // 模拟权威文件丢失后的 UserDefaults 降级读取。显式空的新键必须胜过任何旧镜像。
+    try FileManager.default.removeItem(at: fileURL)
+    let freshStore = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    #expect(freshStore.load().perAppInsets.isEmpty)
+
+    // 即使外部旧工具随后又写回 legacy 键，只要新键存在（哪怕为空）也不得迁移旧值。
+    defaults.set(["com.legacy": 31.0], forKey: "tiling.perAppMargins")
+    let anotherStore = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    #expect(anotherStore.load().perAppInsets.isEmpty)
+}
+
+@Test
+func explicitEmptyPerAppInsetsInJSONSuppressesLegacyScalarMap() throws {
+    let json = """
+    {
+      "isEnabled": true,
+      "edgeInsets": {"top": 16, "bottom": 16, "left": 16, "right": 16},
+      "tiledBundleIDs": [],
+      "hideSystemAppsInPicker": true,
+      "centerEnabled": true,
+      "centeredBundleIDs": [],
+      "documentChooserBundleIDs": [],
+      "perAppInsets": {},
+      "perAppMargins": {"com.legacy": 31}
+    }
+    """
+
+    let decoded = try JSONDecoder().decode(
+        AppTilingSettings.self,
+        from: try #require(json.data(using: .utf8)))
+    #expect(decoded.perAppInsets.isEmpty)
+}
+
+@Test
 func perAppInsetsBackwardCompatWhenKeyAbsent() async throws {
     // 老版本 settings：UserDefaults 无 tiling.perAppInsets 键，文件也不存在。
     // 读回应回退空 perAppInsets → 全部走默认边距（四向统一）。

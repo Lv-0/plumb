@@ -247,7 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleAutoCentering() {
         var s = tilingSettingsStore.load()
         s.centerEnabled.toggle()
-        tilingSettingsStore.save(s)
+        if !tilingSettingsStore.save(s) {
+            DiagnosticLog.debug("SettingsStore: menu auto-centering toggle was not persisted")
+            NSSound.beep()
+        }
         NotificationCenter.default.post(name: SettingsWindowNotifications.settingsChangedExternally, object: nil)
     }
 
@@ -257,7 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleAutoTiling() {
         var s = tilingSettingsStore.load()
         s.isEnabled.toggle()
-        tilingSettingsStore.save(s)
+        if !tilingSettingsStore.save(s) {
+            DiagnosticLog.debug("SettingsStore: menu auto-tiling toggle was not persisted")
+            NSSound.beep()
+        }
         NotificationCenter.default.post(name: SettingsWindowNotifications.settingsChangedExternally, object: nil)
     }
 

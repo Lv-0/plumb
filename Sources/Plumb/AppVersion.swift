@@ -29,17 +29,23 @@ struct AppVersion: Comparable, Equatable, Codable {
     var formatted: String { "\(major).\(minor).\(patch)" }
 
     /// 从字符串解析；支持可选前导 'v'，接受 2 段（major.minor，patch=0）或 3 段。
-    /// 非数字段或含非数字字符则返回 nil。
+    /// 每段只允许非空 ASCII 十进制数字；符号、空白、负数与其它字符均拒绝。
     init?(parsing raw: String) {
         var s = raw
         if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
         let parts = s.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 2 || parts.count == 3 else { return nil }
-        guard let maj = Int(parts[0]),
-              let min = Int(parts[1]) else { return nil }
+        func parseUnsignedDecimal(_ part: Substring) -> Int? {
+            guard !part.isEmpty,
+                  part.unicodeScalars.allSatisfy({ (48...57).contains($0.value) })
+            else { return nil }
+            return Int(part)
+        }
+        guard let maj = parseUnsignedDecimal(parts[0]),
+              let min = parseUnsignedDecimal(parts[1]) else { return nil }
         let pat: Int
         if parts.count == 3 {
-            guard let p = Int(parts[2]) else { return nil }
+            guard let p = parseUnsignedDecimal(parts[2]) else { return nil }
             pat = p
         } else {
             pat = 0

@@ -20,6 +20,7 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         let line = message + "\n"
         if let data = line.data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
@@ -52,7 +53,11 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performTile() {
-        guard window != nil else { finish(); return }
+        guard window != nil else {
+            Self.log("SELFTEST: FAIL — controlled window was not created")
+            finish()
+            return
+        }
         let pid = ProcessInfo.processInfo.processIdentifier
         let appElement = AXUIElementCreateApplication(pid)
         Self.log("SELFTEST: AXIsProcessTrusted() = \(AXIsProcessTrusted()); pid=\(pid)")
@@ -108,7 +113,7 @@ final class SelfTestTileDelegate: NSObject, NSApplicationDelegate {
             }
             Self.log("SELFTEST: tileWindowElementAnimated started OK (no throw)")
         } catch {
-            Self.log("SELFTEST: tileWindowElementAnimated threw: \(error)")
+            Self.log("SELFTEST: FAIL — tileWindowElementAnimated threw: \(error)")
             finish()
         }
     }

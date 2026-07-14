@@ -64,8 +64,9 @@ struct UpdateChecker: Sendable {
         } catch {
             return .error
         }
-        // manifest 版本非法 → 视为无更新（静默）。
-        guard let remote = manifest.parsedVersion else { return .upToDate }
+        // JSON 解码路径已拒绝非法版本；保留此守卫处理测试/未来程序化构造，仍须 fail closed，
+        // 不能把发布数据损坏误报为“已是最新”。
+        guard let remote = manifest.parsedVersion else { return .error }
         // 只升不降。
         guard remote.isNewerThan(current) else { return .upToDate }
         // minOS 门槛：本机低于要求 → 不提示（静默）。

@@ -3,7 +3,7 @@
 #
 # 用法：
 #   ./scripts/release.sh <版本号>              # 本地签名（默认）
-#   ./scripts/release.sh <版本号> --sign developer-id   # Developer ID + 公证
+#   ./scripts/release.sh <版本号> --sign developer-id   # 当前硬阻断：等待 OTA signer bridge
 #   ./scripts/release.sh <版本号> --notes-file <path>   # 预写好的 5 语言 appcast notes
 #   ./scripts/release.sh <版本号> --skip-bump           # 不 bump README badge（已手动 bump 过）
 #   ./scripts/release.sh --help
@@ -37,7 +37,7 @@ usage() {
 用法: scripts/release.sh <版本号> [选项]
 
 选项:
-  --sign developer-id      Developer ID 签名 + 公证（默认: 本地签名 Plumb Local Signer）
+  --sign developer-id      当前硬阻断；bridge signer allowlist 发布后才可启用
   --notes-file <path>      预写好的 5 语言 appcast notes 文件（格式见 --print-notes-template）
   --skip-bump              跳过 README badge bump（已手动 bump 时用）
   --print-notes-template   打印 appcast notes 模板到 stdout 后退出
@@ -46,7 +46,7 @@ usage() {
 示例:
   scripts/release.sh 2.0.48
   scripts/release.sh 2.0.48 --notes-file /tmp/notes-v2.0.48.txt
-  scripts/release.sh 2.0.48 --sign developer-id
+  # scripts/release.sh 2.0.48 --sign developer-id  # 当前会安全退出
 
 环境变量:
   PLUMB_SECRETS_FILE       凭据文件路径（默认: /Users/space/IdeaProjects/comv/setting.txt）
@@ -93,10 +93,25 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
+if [[ "$SIGN_MODE" != "local" && "$SIGN_MODE" != "developer-id" ]]; then
+  echo "错误: --sign 仅支持 local 或 developer-id，收到: $SIGN_MODE"
+  exit 2
+fi
+
 # 校验版本号格式
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "错误: 版本号格式应为 X.Y.Z，收到: $VERSION"
   exit 1
+fi
+
+# 当前已发布客户端用本地证书 leaf hash 作为 designated requirement，并要求 OTA 候选
+# 满足该 requirement。Developer ID 候选不可能满足旧 leaf，因此直接发布会让所有尚未
+# 迁移的客户端下载后失败。只有先发布本地签名 bridge（精确 allowlist 新 signer），并为
+# 未安装 bridge 的客户端提供可持续的分阶段升级路径后，才允许解除此门禁。
+if [[ "$SIGN_MODE" == "developer-id" ]]; then
+  echo "错误: Developer ID 发布已硬阻断：OTA bridge signer allowlist 与分阶段迁移尚未发布。"
+  echo "请继续使用 --sign local；不得绕过此门禁直接更新 appcast。"
+  exit 2
 fi
 
 TAG="v${VERSION}"
@@ -183,14 +198,23 @@ preflight() {
   [[ "$branch" == "main" ]] || die "当前分支 ${branch}，发版应在 main 上"
   ok "在 main 分支"
 
-  # 1.3 本地不领先未推送的无关 commit（避免把意外 commit 打进 tag）
-  #     注: 允许领先，但会显示出来让用户在 confirm 时看到
-  local ahead
-  ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "?")
-  if [[ "$ahead" != "0" && "$ahead" != "?" ]]; then
+  # 1.3 必须先刷新远端状态。允许本地单向领先（待发布 commit），但落后或分叉
+  #     都必须在创建 release commit/tag 之前停止。
+  git fetch --prune --tags origin || die "git fetch origin 失败，无法确认发布基线"
+  git show-ref --verify --quiet refs/remotes/origin/main || die "origin/main 不存在"
+  local behind ahead
+  read -r behind ahead < <(git rev-list --left-right --count origin/main...HEAD)
+  if [[ "$behind" != "0" ]]; then
+    if [[ "$ahead" != "0" ]]; then
+      die "main 已与 origin/main 分叉（behind=${behind}, ahead=${ahead}），请先同步并解决分叉"
+    fi
+    die "本地 main 落后 origin/main ${behind} 个 commit，请先 fast-forward 后再发版"
+  fi
+  if [[ "$ahead" != "0" ]]; then
     warn "本地领先 origin/main ${ahead} 个 commit，它们会被一并推送:"
     git log --oneline origin/main..HEAD | sed 's/^/      /'
   fi
+  ok "发布基线已同步（behind=0, ahead=${ahead}）"
 
   # 1.4 版本号严格大于最新 tag
   local latest
@@ -271,6 +295,9 @@ preflight() {
   else
     : "${DEVELOPER_ID_APP:?Developer ID 模式需要 DEVELOPER_ID_APP 环境变量}"
     : "${NOTARY_PROFILE:?Developer ID 模式需要 NOTARY_PROFILE 环境变量}"
+    if ! security find-identity -v 2>/dev/null | grep -Fq "\"${DEVELOPER_ID_APP}\""; then
+      die "未找到精确 Developer ID 签名身份 '${DEVELOPER_ID_APP}'"
+    fi
     ok "Developer ID + 公证 profile 就绪"
   fi
 }
@@ -320,11 +347,27 @@ build_artifacts() {
   VERSION="$VERSION" scripts/build_app.sh >/dev/null
   ok "build_app.sh → ${APP_DIR}"
 
-  scripts/create_dmg.sh >/dev/null
-  ok "create_dmg.sh → ${DMG_PATH}"
+  if [[ "$SIGN_MODE" == "developer-id" ]]; then
+    scripts/sign_and_notarize.sh --sign-app >/dev/null
+    ok "Developer ID 已签名 .app（Authority/Team ID 已校验）"
 
-  VERSION="$VERSION" scripts/create_zip.sh >/dev/null
-  ok "create_zip.sh → ${ZIP_PATH}"
+    # DMG must be assembled only after the app has its final Developer ID signature.
+    scripts/create_dmg.sh >/dev/null
+    ok "create_dmg.sh（来自 Developer ID app）→ ${DMG_PATH}"
+
+    scripts/sign_and_notarize.sh --notarize-dmg >/dev/null
+    ok "DMG 已签名、公证、staple 并通过 Gatekeeper"
+
+    # OTA ZIP is deliberately last so it contains the final stapled app.
+    VERSION="$VERSION" scripts/create_zip.sh >/dev/null
+    ok "create_zip.sh（来自最终 stapled app）→ ${ZIP_PATH}"
+  else
+    scripts/create_dmg.sh >/dev/null
+    ok "create_dmg.sh → ${DMG_PATH}"
+
+    VERSION="$VERSION" scripts/create_zip.sh >/dev/null
+    ok "create_zip.sh → ${ZIP_PATH}"
+  fi
 }
 
 # ───────────────────────── 签名校验 ─────────────────────────
@@ -345,6 +388,27 @@ verify_signature() {
     warn "无法识别 DR 形式: ${dr:-(空)}"
   fi
 
+  if [[ "$SIGN_MODE" == "developer-id" ]]; then
+    local signature_details authority team expected_team
+    signature_details=$(codesign -dv --verbose=4 "${APP_DIR}" 2>&1)
+    authority=$(echo "$signature_details" | awk -F= '$1 == "Authority" { sub(/^[^=]*=/, ""); print; exit }')
+    team=$(echo "$signature_details" | awk -F= '$1 == "TeamIdentifier" { sub(/^[^=]*=/, ""); print; exit }')
+    if [[ -n "${DEVELOPER_TEAM_ID:-}" ]]; then
+      expected_team="$DEVELOPER_TEAM_ID"
+    elif [[ "$DEVELOPER_ID_APP" =~ \(([A-Z0-9]{10})\)$ ]]; then
+      expected_team="${BASH_REMATCH[1]}"
+    else
+      die "无法从 DEVELOPER_ID_APP 提取 Team ID；请设置 DEVELOPER_TEAM_ID"
+    fi
+    [[ "$authority" == "$DEVELOPER_ID_APP" ]] || die "App Authority 不匹配: '${authority}'"
+    [[ "$team" == "$expected_team" ]] || die "App TeamIdentifier 不匹配: '${team}'"
+    xcrun stapler validate "${APP_DIR}" >/dev/null || die "App notarization ticket 校验失败"
+    xcrun stapler validate "${DMG_PATH}" >/dev/null || die "DMG notarization ticket 校验失败"
+    spctl --assess --type execute --verbose=4 "${APP_DIR}" >/dev/null 2>&1 || die "App Gatekeeper 校验失败"
+    spctl --assess --type open --context context:primary-signature --verbose=4 "${DMG_PATH}" >/dev/null 2>&1 || die "DMG Gatekeeper 校验失败"
+    ok "Developer ID Authority=${authority}, TeamIdentifier=${team}, Gatekeeper=accepted"
+  fi
+
   # 版本号嵌入校验
   local embedded
   embedded=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${APP_DIR}/Contents/Info.plist" 2>/dev/null || echo "")
@@ -353,6 +417,26 @@ verify_signature() {
 
   # zip 完整性
   unzip -t "${ZIP_PATH}" >/dev/null || die "zip 完整性校验失败"
+  local zip_extract zip_app
+  zip_extract=$(mktemp -d "${TMPDIR:-/tmp}/plumb-zip-verify.XXXXXX")
+  if ! ditto -x -k "${ZIP_PATH}" "$zip_extract"; then
+    rm -rf "$zip_extract"
+    die "zip 解包校验失败"
+  fi
+  zip_app="${zip_extract}/${APP_NAME}.app"
+  if ! codesign --verify --deep --strict "$zip_app"; then
+    rm -rf "$zip_extract"
+    die "zip 内 App 签名校验失败"
+  fi
+  if [[ "$SIGN_MODE" == "developer-id" ]]; then
+    local zip_details zip_authority zip_team
+    zip_details=$(codesign -dv --verbose=4 "$zip_app" 2>&1)
+    zip_authority=$(echo "$zip_details" | awk -F= '$1 == "Authority" { sub(/^[^=]*=/, ""); print; exit }')
+    zip_team=$(echo "$zip_details" | awk -F= '$1 == "TeamIdentifier" { sub(/^[^=]*=/, ""); print; exit }')
+    [[ "$zip_authority" == "$DEVELOPER_ID_APP" ]] || { rm -rf "$zip_extract"; die "zip 内 App Authority 不匹配"; }
+    [[ "$zip_team" == "$expected_team" ]] || { rm -rf "$zip_extract"; die "zip 内 App TeamIdentifier 不匹配"; }
+  fi
+  rm -rf "$zip_extract"
   ok "zip 完整性 OK (sha256: $(shasum -a 256 "${ZIP_PATH}" | awk '{print $1}'))"
 }
 

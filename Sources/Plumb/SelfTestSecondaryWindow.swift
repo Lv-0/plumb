@@ -32,6 +32,7 @@ final class SelfTestSecondaryWindowDelegate: NSObject, NSApplicationDelegate {
 
     private static func log(_ message: String) {
         print(message)
+        SelfTestOutcome.observe(message)
         if let data = (message + "\n").data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logPath) {
                 if let h = FileHandle(forWritingAtPath: logPath) {
@@ -163,7 +164,7 @@ final class SelfTestSecondaryWindowDelegate: NSObject, NSApplicationDelegate {
         let mainGrew = (mainAfter.width > mainBefore.width + 100) || (mainAfter.height > mainBefore.height + 100)
         Self.log("SELFTEST-SEC: main AFTER observer = \(stringify(mainAfter)) grew=\(mainGrew)")
         if !mainGrew {
-            Self.log("SELFTEST-SEC: WARN — main window did NOT grow (tiling may not have applied; check fullscreen detection or settings)")
+            Self.log("SELFTEST-SEC: FAIL — main window did NOT grow, so secondary suppression was not tested through a working layout pipeline")
         }
 
         let appEl = AXUIElementCreateApplication(app.processIdentifier)
@@ -337,6 +338,6 @@ final class SelfTestSecondaryWindowDelegate: NSObject, NSApplicationDelegate {
 
     private func finish() {
         Self.log("SELFTEST-SEC: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(SelfTestOutcome.exitCode) }
     }
 }
