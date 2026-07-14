@@ -1,7 +1,7 @@
 {
-  "version": "2.0.54",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.54/Plumb-2.0.54.zip",
-  "sha256": "c38e6d1ce885a57fb0ab1dc7477d43e5fc77fd56417e7e1c07d480301ab8383e",
+  "version": "2.0.55",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.55/Plumb-2.0.55.zip",
+  "sha256": "3b86c212d424e1983b709034a32f076898d2a3cacfcbf306a62702f8a2a85db1",
   "notes": {
     "en": "Improves multi-display centering and tiling with exact window identity, safer coordinate conversion, and writer-proven fallback reuse. Startup layout now has a single owner, and physical multi-screen tests plus a trusted failure canary strengthen release validation. 315 tests pass.",
     "zh": "改进多显示器居中和平铺，通过精确窗口身份、更安全的坐标转换和带真实写入证明的 fallback 复用提升可靠性。启动布局现在只有一个所有者，并强化真实多屏自测及失败门禁。315 项测试全部通过。",
