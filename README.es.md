@@ -13,7 +13,7 @@ Centra y coloca en mosaico las apps de macOS automáticamente — ¡una bendici�
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg?style=flat-square)](#requisitos)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138.svg?style=flat-square)](https://swift.org)
-[![Release](https://img.shields.io/badge/release-v2.0.53-success.svg?style=flat-square)](#descarga-e-instalación)
+[![Release](https://img.shields.io/badge/release-v2.0.54-success.svg?style=flat-square)](#descarga-e-instalación)
 
 [English](./README.md) · [简体中文](./README.zh.md) · **Español** · [Français](./README.fr.md) · [日本語](./README.ja.md)
 
