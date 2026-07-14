@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.55/Plumb-2.0.55.zip",
   "sha256": "3b86c212d424e1983b709034a32f076898d2a3cacfcbf306a62702f8a2a85db1",
   "notes": {
-    "en": "Improves multi-display centering and tiling with exact window identity, safer coordinate conversion, and writer-proven fallback reuse. Startup layout now has a single owner, and physical multi-screen tests plus a trusted failure canary strengthen release validation. 315 tests pass.",
-    "zh": "改进多显示器居中和平铺，通过精确窗口身份、更安全的坐标转换和带真实写入证明的 fallback 复用提升可靠性。启动布局现在只有一个所有者，并强化真实多屏自测及失败门禁。315 项测试全部通过。",
-    "es": "Mejora el centrado y el mosaico en varias pantallas mediante identidad exacta de ventanas, conversión de coordenadas más segura y reutilización de fallback respaldada por escrituras reales. El diseño al iniciar tiene ahora un único propietario, y las pruebas físicas multipantalla junto con un canario de fallos refuerzan la validación de versiones. 315 pruebas superadas.",
-    "fr": "Améliore le centrage et le pavage multi-écrans grâce à une identité exacte des fenêtres, une conversion de coordonnées plus sûre et une réutilisation des fallbacks prouvée par une écriture réelle. La disposition au démarrage n'a désormais qu'un seul propriétaire, et les tests physiques multi-écrans ainsi qu'un canari d'échec renforcent la validation des versions. 315 tests réussis.",
-    "ja": "正確なウインドウ識別、安全な座標変換、実際の書き込み記録に基づく fallback 再利用により、マルチディスプレイでの中央配置とタイル表示を改善しました。起動時レイアウトを単一所有者に統一し、実機マルチ画面テストと失敗カナリアでリリース検証を強化しました。315 テスト成功。"
+    "en": "Hardens OTA updates end to end with strict manifests, bounded downloads, archive and signing validation, and transactional installation with rollback. Update/layout lifecycle handling and release publishing are also safer, including immutable assets and verified appcast publication. 389 tests plus the release safety suite pass.",
+    "zh": "端到端强化 OTA 更新安全，加入严格清单、有界下载、压缩包与签名校验，以及支持回滚的事务安装。更新与布局生命周期、不可变发布资产和 appcast 上线前验证也更加可靠。389 项测试及发布安全测试全部通过。",
+    "es": "Refuerza las actualizaciones OTA de extremo a extremo con manifiestos estrictos, descargas limitadas, validación de archivos y firmas, e instalación transaccional con reversión. También mejora la seguridad del ciclo de vida de actualizaciones y ventanas, los recursos inmutables y la verificación del appcast antes de publicarlo. Se superan 389 pruebas y la suite de seguridad de publicación.",
+    "fr": "Renforce les mises à jour OTA de bout en bout avec des manifestes stricts, des téléchargements bornés, la validation des archives et signatures, ainsi qu'une installation transactionnelle avec restauration. La gestion du cycle de vie, les ressources de publication immuables et la vérification de l'appcast avant publication sont également fiabilisées. 389 tests et la suite de sécurité de publication réussissent.",
+    "ja": "厳格なマニフェスト、上限付きダウンロード、アーカイブと署名の検証、ロールバック可能なトランザクション導入により OTA 更新を全面的に強化しました。更新・配置処理のライフサイクル、変更不可のリリース資産、appcast 公開前検証も安全になりました。389 テストとリリース安全テスト成功。"
   },
   "minOS": "26.0"
 }
