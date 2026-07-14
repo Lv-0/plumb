@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.53/Plumb-2.0.53.zip",
   "sha256": "274b9b4aa13da83c696ecaabd0a8f36f3784548f5a4c7a1c732648f777c910dc",
   "notes": {
-    "en": "Fixes repeated vertical jumping when reactivating tiled apps that reject the target window size (e.g. NetEase Cloud Music). Tiling and auto-centering are now mutually exclusive — tiling always wins — and an already-well-placed tiled window is locked without any re-write, so repeated Command+Tab is now stable. 258 tests pass.",
-    "zh": "修复尺寸受限的平铺应用（如网易云音乐）在切回时反复上下跳动的问题。平铺与自动居中现在互斥——平铺优先——且已经就位的平铺窗口会被直接锁定而不再重写，反复 Command+Tab 切换不再抖动。258 项测试通过。",
-    "es": "Corrige el salto vertical repetido al reactivar apps en mosaico que rechazan el tamaño de ventana objetivo (p. ej. NetEase Cloud Music). El mosaico y el centrado automático ahora son mutuamente excluyentes — el mosaico siempre gana — y una ventana en mosaico ya bien colocada se bloquea sin reescribirla, por lo que repetir Command+Tab ahora es estable. 258 pruebas pasan.",
-    "fr": "Corrige les sauts verticaux répétés lors de la réactivation d'apps en mosaïque qui refusent la taille de fenêtre cible (ex. NetEase Cloud Music). Le mosaïque et le centrage automatique sont désormais mutuellement exclusifs — le mosaïque gagne toujours — et une fenêtre déjà bien placée est verrouillée sans réécriture, donc les Command+Tab répétés sont désormais stables. 258 tests réussissent.",
-    "ja": "ターゲットウィンドウサイズを拒否するタイリングアプリ（例: NetEase Cloud Music）を再アクティブ化した際の繰り返される垂直のジャンプを修正します。タイリングと自動中央揃えは相互に排他的になり、タイリングが常に優先されます。既に適切に配置されたタイリング済みウィンドウは再書き込みなしでロックされるため、繰り返しの Command+Tab が安定します。258 テスト合格。"
+    "en": "Refactors the window-layout engine with activation-scoped ownership, FIFO single-flight scheduling, and lifecycle-safe callbacks for more reliable centering and tiling. Animation failures, user interruptions, PID reuse, and stale asynchronous work are now handled explicitly. 299 tests pass.",
+    "zh": "重构窗口布局引擎，引入激活周期所有权、FIFO 单飞调度与生命周期安全回调，让自动居中和平铺更加稳定。现在会明确处理动画失败、用户中断、PID 复用和过期异步任务。299 项测试全部通过。",
+    "es": "Se refactoriza el motor de distribución de ventanas con propiedad por ciclo de activación, programación FIFO de una sola operación y callbacks seguros durante todo el ciclo de vida para un centrado y mosaico más fiables. Los fallos de animación, las interrupciones del usuario, la reutilización de PID y el trabajo asíncrono obsoleto ahora se gestionan explícitamente. 299 pruebas superadas.",
+    "fr": "Le moteur de disposition des fenêtres est remanié avec une propriété liée au cycle d'activation, une planification FIFO à opération unique et des rappels sûrs sur tout le cycle de vie, pour un centrage et un pavage plus fiables. Les échecs d'animation, interruptions utilisateur, réutilisations de PID et tâches asynchrones obsolètes sont désormais gérés explicitement. 299 tests réussis.",
+    "ja": "ウインドウ配置エンジンを、アクティベーション単位の所有権、FIFO シングルフライト制御、ライフサイクル安全なコールバックで再構成し、自動中央配置とタイル表示の信頼性を高めました。アニメーション失敗、ユーザー操作による中断、PID 再利用、古い非同期処理を明示的に扱います。299 テスト成功。"
   },
   "minOS": "26.0"
 }
