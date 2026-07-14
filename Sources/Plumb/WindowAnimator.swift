@@ -30,6 +30,88 @@ import Foundation
 /// 反复写入 `AXPosition`/`AXSize` 来插值出丝滑动画。使用 easeInOut 三次曲线插值，
 /// 并在动画中读取窗口实际位置：若窗口被用户拖动（与上次写入位置偏离过大）则中止动画。
 enum WindowAnimator {
+    /// 动画驱动可报告的终态。
+    ///
+    /// 调用方必须显式区分正常完成、AX 写入失败和用户持续拖动中断；后两者不能被当成
+    /// “布局已经完成”继续推进后续阶段。
+    enum Outcome: Equatable {
+        case finished
+        case writerFailed
+        case userInterrupted
+    }
+
+    /// 单次 tick 的纯状态机动作。由真实定时器和单元测试共同驱动，避免依赖 sleep 验证终态。
+    enum TickAction: Equatable {
+        case write(progress: CGFloat, isFinal: Bool)
+        case complete(Outcome)
+        case none
+    }
+
+    /// 动画 tick 的纯状态：负责进度、持续漂移计数、写入结果和 exactly-once 终态。
+    struct TickState {
+        private let tickCount: Int
+        private let monitorsUserDrift: Bool
+        private(set) var index = 0
+        private(set) var lastWritten: CGRect?
+        private(set) var consecutiveDrift = 0
+        private(set) var outcome: Outcome?
+
+        init(tickCount: Int, initialFrame: CGRect?, monitorsUserDrift: Bool) {
+            self.tickCount = Swift.max(1, tickCount)
+            self.lastWritten = initialFrame
+            self.monitorsUserDrift = monitorsUserDrift
+        }
+
+        /// 计算下一次 tick 应执行的动作。终态只会返回一次；后续调用一律为 `.none`。
+        mutating func next(currentFrame: CGRect?) -> TickAction {
+            guard outcome == nil else { return .none }
+
+            if index >= tickCount {
+                return .write(progress: 1, isFinal: true)
+            }
+
+            let progress = CGFloat(index) / CGFloat(tickCount)
+            index += 1
+
+            if monitorsUserDrift,
+               index > 1,
+               let lastWritten,
+               let currentFrame
+            {
+                let dx = abs(currentFrame.midX - lastWritten.midX)
+                let dy = abs(currentFrame.midY - lastWritten.midY)
+                if dx > WindowAnimator.jumpAbortThreshold || dy > WindowAnimator.jumpAbortThreshold {
+                    consecutiveDrift += 1
+                    if consecutiveDrift >= WindowAnimator.jumpAbortConsecutiveTicks {
+                        outcome = .userInterrupted
+                        return .complete(.userInterrupted)
+                    }
+                } else {
+                    consecutiveDrift = 0
+                }
+            }
+
+            return .write(progress: progress, isFinal: false)
+        }
+
+        /// 记录一次实际 writer 调用。失败立即成为终态；最终帧成功才算 `.finished`。
+        /// 返回 nil 表示动画应继续，返回 outcome 表示调用方应停止 timer 并回调一次。
+        mutating func recordWrite(frame: CGRect, succeeded: Bool, isFinal: Bool) -> Outcome? {
+            guard outcome == nil else { return nil }
+
+            guard succeeded else {
+                outcome = .writerFailed
+                return .writerFailed
+            }
+
+            lastWritten = frame
+            guard isFinal else { return nil }
+
+            outcome = .finished
+            return .finished
+        }
+    }
+
     /// 动画默认时长（秒）。足够短以避免打断，又足够长以呈现丝滑感。
     ///
     /// 取值说明（提速调整）：居中/平铺的 Phase-A 只写 AXPosition（移动、不改尺寸），
@@ -103,18 +185,19 @@ enum WindowAnimator {
     typealias FrameWriter = (_ frame: CGRect) -> Bool
     /// 每帧读取窗口当前 AX 坐标（用于检测用户拖动）。返回 nil 表示读不到。
     typealias CurrentReader = () -> CGRect?
-    /// 动画结束回调。
-    typealias Completion = () -> Void
+    /// 动画自然终止或同步执行时的终态回调。外部直接 cancel timer 不走该回调。
+    typealias Completion = (_ outcome: Outcome) -> Void
 
     /// 驱动一段从 startFrame 到 endFrame 的动画。
     ///
     /// - `writer`: 将给定 rect 写入窗口（origin+size），返回是否成功。
     /// - `reader`: 读取窗口当前真实 rect；若与上次写入位置偏离超过阈值则中止。
-    /// - `completion`: 动画正常结束或被外部取消时都会调用（主线程）。
+    /// - `completion`: 动画正常结束、写入失败或用户持续拖动中断时调用一次（主线程）。
     ///
     /// 返回底层 `DispatchSourceTimer`，调用方可持有并在切换 app 等场景下 `cancel()` 以立即
-    /// 中止动画（窗口停在最后一帧已写入的位置，不回弹、不再写）。返回 nil 表示因 duration<=0
-    /// 未启动定时器（已同步写完最终帧）。
+    /// 中止动画（窗口停在最后一帧已写入的位置，不回弹、不再写）。外部直接 `cancel()` 不产生
+    /// completion；其生命周期由持有 timer 的调用方负责。返回 nil 表示因 duration<=0 未启动
+    /// 定时器（已同步尝试最终帧并返回 `.finished` 或 `.writerFailed`）。
     @discardableResult
     static func animate(
         from startFrame: CGRect,
@@ -126,8 +209,7 @@ enum WindowAnimator {
         completion: Completion? = nil
     ) -> DispatchSourceTimer? {
         guard duration > 0 else {
-            _ = writer(endFrame)
-            completion?()
+            completion?(writer(endFrame) ? .finished : .writerFailed)
             return nil
         }
 
@@ -137,66 +219,37 @@ enum WindowAnimator {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .nanoseconds(intervalNanos))
 
-        // Boxed mutable state（闭包内可变）。
-        var index = 0
-        var lastWritten: CGRect? = startFrame
-        var finished = false
-        // 连续偏离计数：只有连续多帧读回位置都偏离写入位置超过阈值，才中止。
-        // 初始为 0；每帧若偏离大则 +1，否则归 0；达到 jumpAbortConsecutiveTicks 才中止。
-        // 关键：初始几帧不参与判定（启动宽限），避免把"系统激活动画把窗口从起始位置弹开"
-        // 误判为用户拖动。前若干帧只写不判，等我们自己写入的位置稳定后再开始监控漂移。
-        var consecutiveDrift = 0
+        var state = TickState(tickCount: tickCount, initialFrame: startFrame, monitorsUserDrift: true)
 
         timer.setEventHandler {
-            // 完成态：写最终帧并停止。
-            if index >= tickCount {
-                if !finished {
-                    finished = true
-                    _ = writer(endFrame)
-                    lastWritten = endFrame
-                    timer.cancel()
-                    completion?()
-                }
+            switch state.next(currentFrame: reader()) {
+            case .none:
                 return
-            }
-
-            // 计时（基于已推进的步数）以保持稳定步进，不受调度抖动影响。
-            let progress = CGFloat(index) / CGFloat(tickCount)
-            index += 1
-
-            let p = easing(progress)
-            let frame = CGRect(
-                x: (startFrame.minX + (endFrame.minX - startFrame.minX) * p).rounded(),
-                y: (startFrame.minY + (endFrame.minY - startFrame.minY) * p).rounded(),
-                width: (startFrame.width + (endFrame.width - startFrame.width) * p).rounded(),
-                height: (startFrame.height + (endFrame.height - startFrame.height) * p).rounded()
-            )
-
-            // 检测用户是否在动画过程中拖动了窗口。
-            // 仅在我们已经写入过至少一帧之后才监控（index > 1 表示已写过 frame[0]），
-            // 且要求连续 jumpAbortConsecutiveTicks 帧都偏离——过滤掉 macOS 激活动画造成的
-            // 瞬时弹动（单帧大 Δ 不再误判中止，见 jumpAbortConsecutiveTicks 注释）。
-            if index > 1, let lastWritten, let current = reader() {
-                let dx = abs(current.midX - lastWritten.midX)
-                let dy = abs(current.midY - lastWritten.midY)
-                if dx > jumpAbortThreshold || dy > jumpAbortThreshold {
-                    consecutiveDrift += 1
-                    if consecutiveDrift >= jumpAbortConsecutiveTicks {
-                        if !finished {
-                            finished = true
-                            timer.cancel()
-                            DiagnosticLog.debug("animator: aborted (user moved window sustained dx=\(dx) dy=\(dy) ticks=\(consecutiveDrift))")
-                            completion?()
-                        }
-                        return
-                    }
+            case .complete(let outcome):
+                timer.cancel()
+                DiagnosticLog.debug("animator: aborted outcome=\(outcome)")
+                completion?(outcome)
+            case .write(let progress, let isFinal):
+                let frame: CGRect
+                if isFinal {
+                    // 最终帧保持旧契约：无条件写入调用方给定的精确 endFrame，不依赖 easing(1)。
+                    frame = endFrame
                 } else {
-                    consecutiveDrift = 0
+                    let p = easing(progress)
+                    frame = CGRect(
+                        x: (startFrame.minX + (endFrame.minX - startFrame.minX) * p).rounded(),
+                        y: (startFrame.minY + (endFrame.minY - startFrame.minY) * p).rounded(),
+                        width: (startFrame.width + (endFrame.width - startFrame.width) * p).rounded(),
+                        height: (startFrame.height + (endFrame.height - startFrame.height) * p).rounded()
+                    )
                 }
-            }
-
-            if writer(frame) {
-                lastWritten = frame
+                if let outcome = state.recordWrite(frame: frame, succeeded: writer(frame), isFinal: isFinal) {
+                    timer.cancel()
+                    if outcome != .finished {
+                        DiagnosticLog.debug("animator: aborted outcome=\(outcome)")
+                    }
+                    completion?(outcome)
+                }
             }
         }
 
@@ -215,12 +268,12 @@ enum WindowAnimator {
         duration: TimeInterval = defaultDuration,
         frameForProgress: @escaping (CGFloat) -> CGRect,
         writer: @escaping FrameWriter,
-        reader: @escaping CurrentReader,
+        reader _: @escaping CurrentReader,
         completion: Completion? = nil
     ) -> DispatchSourceTimer? {
         guard duration > 0 else {
-            _ = writer(frameForProgress(1).rounded())
-            completion?()
+            let finalFrame = frameForProgress(1).rounded()
+            completion?(writer(finalFrame) ? .finished : .writerFailed)
             return nil
         }
 
@@ -230,36 +283,27 @@ enum WindowAnimator {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .nanoseconds(intervalNanos))
 
-        var index = 0
-        var lastWritten: CGRect? = nil
-        var finished = false
+        // custom 路径历史上只把 reader 保留为接口兼容参数、不做用户拖动判定；继续保持该语义。
+        var state = TickState(tickCount: tickCount, initialFrame: nil, monitorsUserDrift: false)
 
         timer.setEventHandler {
-            if index >= tickCount {
-                if !finished {
-                    finished = true
-                    _ = writer(frameForProgress(1).rounded())
-                    timer.cancel()
-                    completion?()
-                }
+            switch state.next(currentFrame: nil) {
+            case .none:
                 return
-            }
-
-            let progress = CGFloat(index) / CGFloat(tickCount)
-            index += 1
-
-            let frame = frameForProgress(easeInOut(progress)).rounded()
-
-            if !writer(frame) {
-                if !finished {
-                    finished = true
+            case .complete(let outcome):
+                timer.cancel()
+                DiagnosticLog.debug("animator-custom: aborted outcome=\(outcome)")
+                completion?(outcome)
+            case .write(let progress, let isFinal):
+                let frame = frameForProgress(isFinal ? 1 : easeInOut(progress)).rounded()
+                if let outcome = state.recordWrite(frame: frame, succeeded: writer(frame), isFinal: isFinal) {
                     timer.cancel()
-                    DiagnosticLog.debug("animator-custom: aborted (writer failed)")
-                    completion?()
+                    if outcome != .finished {
+                        DiagnosticLog.debug("animator-custom: aborted outcome=\(outcome)")
+                    }
+                    completion?(outcome)
                 }
-                return
             }
-            lastWritten = frame
         }
 
         timer.resume()

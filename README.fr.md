@@ -43,20 +43,20 @@ Centre et place automatiquement en mosaïque les apps macOS — un bonheur pour 
 Nommé d'après le **fil à plomb** (plumb line) — le poids que le charpentier laisse tomber pour trouver la vraie verticale, le vrai centre. C'est exactement ce que fait Plumb : placer doucement une fenêtre au vrai centre de l'écran ou à une position désignée.
 
 - 🪧 Réside dans la barre de menus — aucune icône dans le Dock, zéro intrusion
-- 🎯 Centre une fois au lancement, puis uniquement lorsqu'une fenêtre est rouverte / une nouvelle fenêtre est mise au premier plan
+- 🎯 Évalue la disposition à chaque activation d'app ou changement de Space, puis évite les opérations en double pendant ce cycle
 - 🖥️ Calcule dans la zone utile de l'écran (exclut automatiquement le Dock et la barre de menus), stable en multi-écrans
-- 📐 Mosaïque automatique par app (liste autorisée) avec une marge de bord uniforme configurable
+- 📐 Mosaïque automatique par app (liste autorisée) avec une marge globale et des marges directionnelles facultatives par app
 - 🪟 Interface de réglages Liquid Glass (macOS 26) — verre dépoli, recherche d'apps, interrupteurs en pilule
 
 ## ✨ Fonctionnalités
 
 | Fonctionnalité | Description |
 | --- | --- |
-| 🎯 Centrer une fois | Centre une fois au lancement ; ensuite uniquement lorsqu'une fenêtre est rouverte / une nouvelle fenêtre est mise au premier plan |
-| ✋ Ne lutte pas avec votre disposition | Glisser une fenêtre ne redéclenche jamais le centrage |
+| 🎯 Disposition par activation | Réévalue la disposition lors de l'activation d'une app ou d'un changement de Space, tout en évitant les opérations en double pendant le cycle en cours |
+| ✋ Respecte la disposition manuelle | Un déplacement ou redimensionnement réel laisse cette fenêtre intacte pendant le reste du cycle d'activation/Space en cours |
 | 🖥️ Évite précisément le Dock/barre de menus | Basé sur `screen.frame - screen.visibleFrame`, stable en multi-écrans |
-| 📐 Mosaïque automatique par app | Mécanisme de liste autorisée avec une marge uniforme configurable (px) |
-| 🎚️ Marge de mosaïque par app | Touchez une app en mosaïque pour définir une marge personnalisée uniquement pour elle ; les apps sans réglage utilisent la marge globale par défaut |
+| 📐 Mosaïque automatique par app | Mécanisme de liste autorisée avec une marge globale configurable (px) |
+| 🎚️ Marges de mosaïque par app | Cliquez sur une app en mosaïque pour régler séparément ses marges supérieure, inférieure, gauche et droite ; les apps sans réglage utilisent la valeur globale par défaut |
 | 🔄 Rafraîchissement en direct de la liste d'apps | Les apps nouvellement installées apparaissent immédiatement dans le sélecteur, sans redémarrage |
 | 🪟 Interface Liquid Glass | Verre dépoli macOS 26, recherche, interrupteurs en pilule |
 | 🧠 Détection intelligente d'espace de coordonnées | Détecte automatiquement l'espace de coordonnées de chaque app et le met en cache pour la stabilité |
@@ -67,12 +67,12 @@ Nommé d'après le **fil à plomb** (plumb line) — le poids que le charpentier
 Ouvrez `Réglages de mosaïque…` depuis la barre de menus pour activer/désactiver la fonction et gérer votre flux de travail.
 
 - Configurez une seule marge de bord uniforme (px)
-- **Marge de mosaïque par app** : touchez une app dans la liste de mosaïque pour déployer un tiroir de marge intégré et définir une marge personnalisée uniquement pour cette app ; les apps sans réglage personnalisé continuent d'utiliser la marge globale par défaut. Un bouton « Par défaut » réinitialise une app à la valeur globale.
+- **Réglage des marges par app** : cliquez sur une app dans la liste de mosaïque pour déployer un panneau intégré et régler séparément ses marges supérieure, inférieure, gauche et droite. Les apps sans réglage utilisent la marge globale sur les quatre côtés ; « Par défaut » supprime le réglage propre à l'app.
 - Sélectionnez les apps autorisées parmi les applications installées (les apps système sont masquées par défaut, commutable)
 - Pour les apps autorisées, **la mosaïque a la priorité** sur le centrage automatique
-- Le déclenchement se fait une fois par démarrage de processus (PID) ; aucune mosaïque répétée dans le même processus
-- Si une fenêtre ne peut pas être redimensionnée, elle est ignorée
-- Les apps de documents (Pages, Numbers, Word, Excel) ignorent automatiquement le sélecteur de modèles/fichiers ; seul le document ouvert est placé en mosaïque
+- Le déclenchement est limité à un cycle d'activation de l'app ou de Space, et non à toute la durée de vie du processus. Réactiver une app ou changer de Space lance une nouvelle évaluation.
+- Plumb essaie à la fois l'écriture de taille AX standard et une solution de repli via AXFrame. Un résultat qui ne fait que repositionner la fenêtre n'est pas considéré comme une mosaïque réussie : les tentatives se poursuivent dans une limite définie, et Plumb n'accepte qu'une géométrie respectant la largeur cible ou la solution de repli documentée avec ancrage vertical.
+- Pour les apps de documents (Pages, Numbers, Word, Excel), les galeries de modèles et les listes de fichiers sont uniquement centrées. Les documents enregistrés sont placés en mosaïque ; lorsqu'un document non enregistré est détecté, Plumb attend brièvement que son cadre se stabilise avant de le placer en mosaïque.
 
 > La sémantique s'inspire des concepts de configuration d'Amethyst :
 > - `window-margin-size` : équivalent à la marge de mosaïque de ce projet
@@ -122,9 +122,9 @@ Voir [Compiler localement](#compiler-localement).
 3. (Facultatif) Accordez la permission d'[Enregistrement d'écran](#enregistrement-décran) pour améliorer la stabilité de la détection des coordonnées en multi-écrans.
 4. Cliquez sur l'icône de la barre de menus :
    - Déclenchez le centrage manuellement
-   - Ouvrez `Réglages de mosaïque…` pour configurer la liste autorisée et la marge
+   - Ouvrez `Réglages de mosaïque…` pour configurer la liste autorisée, la marge globale et les marges directionnelles par app
 
-> 💡 **Principe de conception** : chaque fenêtre est centrée/mosaïque **une seule fois** (clé `pid:windowNumber`). Glisser manuellement une fenêtre n'est jamais « corrigé » — Plumb ne lutte pas avec votre disposition manuelle.
+> 💡 **Principe de conception** : la disposition automatique est limitée au cycle d'activation de l'app ou de Space en cours. Un déplacement ou redimensionnement manuel réel est respecté pendant le reste de ce cycle ; réactiver l'app ou changer de Space efface la marque manuelle et réévalue la disposition.
 
 ## Permissions
 
@@ -231,7 +231,7 @@ Accordez la permission d'**Enregistrement d'écran**. Plumb utilise l'API `CGWin
 <details>
 <summary><b>J'ai glissé une fenêtre et elle a été recentrée ?</b></summary>
 
-Non. Plumb centre/place en mosaïque chaque fenêtre **une seule fois** — les glissés manuels ne sont jamais « corrigés ».
+Pendant le cycle d'activation de l'app ou de Space en cours, un déplacement ou redimensionnement réel doit laisser la fenêtre là où vous l'avez placée. Réactiver l'app ou changer de Space lance un nouveau cycle de disposition ; Plumb peut alors la recentrer ou la replacer en mosaïque.
 
 </details>
 

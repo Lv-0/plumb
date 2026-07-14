@@ -42,6 +42,17 @@ func selectByCenterEmptyScreensReturnsNil() {
 }
 
 @Test
+func selectByCenterCompletelyOffscreenReturnsNil() {
+    let screens = [CGRect(x: 0, y: 0, width: 1440, height: 900),
+                   CGRect(x: 1440, y: 0, width: 1920, height: 1080)]
+    let idx = ScreenSelection.screenIndex(
+        forCenter: CGPoint(x: 10_000, y: 10_000),
+        inScreens: screens
+    )
+    #expect(idx == nil)
+}
+
+@Test
 func insetsFromVisibleFrameComputesPerEdgeInsets() {
     let frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
     let visible = CGRect(x: 0, y: 75, width: 1440, height: 800)

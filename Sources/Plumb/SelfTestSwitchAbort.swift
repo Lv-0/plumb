@@ -123,8 +123,14 @@ final class SelfTestSwitchAbortDelegate: NSObject, NSApplicationDelegate {
         let vf = (NSScreen.main ?? NSScreen.screens.first!).visibleFrame
         let beforeDist = distanceFromCenter(before, screenCenter: vf)
         do {
-            try service.centerWindowElementAnimated(window, pid: target.processIdentifier, appElement: AXUIElementCreateApplication(target.processIdentifier)) { [weak self] in
+            try service.centerWindowElementAnimated(window, pid: target.processIdentifier, appElement: AXUIElementCreateApplication(target.processIdentifier)) { [weak self] outcome in
                 guard let self else { return }
+                guard outcome == .finished else {
+                    self.failed += 1
+                    Self.log("ABORT-TEST: attempt \(self.attempts) ended with \(outcome)")
+                    self.testNext()
+                    return
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     let after = self.readFrame()
                     let afterDist = self.distanceFromCenter(after, screenCenter: vf)

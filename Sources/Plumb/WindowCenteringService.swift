@@ -13,7 +13,7 @@ import ApplicationServices
 //       centerWindowElement(_:)          —— 瞬时居中（无动画，仅写一次）。
 //       centerWindowElementAnimated(_:)  —— 弹簧动画居中（手动"立即居中"使用）。
 //       tileWindowElement(_:)            —— 瞬时平铺（先设尺寸再定位，逐空间兜底）。
-//       tileWindowElementAnimated(_:)    —— 两阶段动画平铺：先居中、再从中心对称扩大。
+//       tileWindowElementAnimated(_:)    —— 两阶段动画平铺：先移到左上锚点、再保持锚点扩大。
 //
 // 坐标空间问题（本项目最棘手的复杂度）：
 //   macOS 各 app 报告窗口位置时使用的坐标系不统一，单个 AXPosition 值可能落在
@@ -25,7 +25,7 @@ import ApplicationServices
 //   - 全屏窗口一律跳过（AXFullScreen 属性 + 几何比对双判定）。
 //   - 动画期间检测"用户拖动"：连续 jumpAbortConsecutiveTicks 帧偏离写入位置才中止，
 //     以过滤 macOS 激活动画造成的瞬时弹动（见 WindowAnimator）。
-//   - 切换 app 时 activeAnimationKey 锁与所有定时器都被 abortActiveAnimations() 清空。
+//   - 切换 app 时全局动画租约与所有定时器都被 abortActiveAnimations() 清空。
 //
 // 与 WindowEventObserver 的边界：
 //   Observer 决定"何时、对哪个窗口"；本服务决定"如何算坐标、如何写 AX"。
@@ -83,6 +83,134 @@ enum ResizeOutcome {
     var didResize: Bool { self != .failed }
 }
 
+/// Whether an animated layout request actually acquired the global animation slot.
+///
+/// Callers use this result to distinguish real work from a busy/no-op request. A
+/// busy request must not consume retry budget or be marked as completed.
+enum WindowAnimationStartResult: Equatable {
+    case started
+    /// The request completed before returning. `didWriteGeometry` separates a
+    /// true no-op (already at target) from the synchronous fallback path, which
+    /// really writes AX geometry and can therefore emit delayed move events.
+    case completedSynchronously(didWriteGeometry: Bool)
+    case busy
+
+    var isCompletedSynchronously: Bool {
+        if case .completedSynchronously = self { return true }
+        return false
+    }
+
+    var synchronousWriteOccurred: Bool {
+        if case let .completedSynchronously(didWriteGeometry) = self {
+            return didWriteGeometry
+        }
+        return false
+    }
+}
+
+/// Pure policy for the hand-off between the timer-driven move (Phase A) and the
+/// service-owned resize sequence (Phase B). Only a genuinely finished move may
+/// advance; write failures and user interruption are terminal for this request.
+enum TilePhaseAOutcomePolicy {
+    static func shouldEnterPhaseB(after outcome: WindowAnimator.Outcome) -> Bool {
+        outcome == .finished
+    }
+}
+
+/// Small PID-scoped cache primitive. Keeping invalidation in the value type makes
+/// PID reuse and application-termination cleanup independently testable.
+struct ProcessScopedCache<Value> {
+    private var values: [pid_t: Value] = [:]
+
+    subscript(pid: pid_t) -> Value? {
+        get { values[pid] }
+        set { values[pid] = newValue }
+    }
+
+    @discardableResult
+    mutating func removeValue(for pid: pid_t) -> Value? {
+        values.removeValue(forKey: pid)
+    }
+
+    mutating func removeAll() {
+        values.removeAll()
+    }
+
+    var count: Int { values.count }
+}
+
+/// Pure global single-flight gate. A lease, rather than a bare window key, owns
+/// the slot so a delayed completion from an aborted request cannot release a
+/// newer request for the same window key.
+struct WindowAnimationSlot {
+    struct Lease: Equatable {
+        let key: String
+        fileprivate let generation: UInt64
+    }
+
+    private(set) var activeLease: Lease?
+    private var nextGeneration: UInt64 = 0
+
+    var activeKey: String? { activeLease?.key }
+
+    mutating func acquire(key: String) -> Lease? {
+        guard activeLease == nil else { return nil }
+        nextGeneration &+= 1
+        let lease = Lease(key: key, generation: nextGeneration)
+        activeLease = lease
+        return lease
+    }
+
+    @discardableResult
+    mutating func release(_ lease: Lease) -> Bool {
+        guard activeLease == lease else { return false }
+        activeLease = nil
+        return true
+    }
+
+    mutating func cancel() {
+        activeLease = nil
+    }
+}
+
+/// Pure rectangle-to-screen overlap selection used by the CG window-bounds path.
+/// Keeping this independent of `NSScreen` makes the zero-overlap contract deterministic
+/// and unit-testable without a particular physical display arrangement.
+enum WindowScreenOverlapSelection {
+    struct Match: Equatable {
+        let index: Int
+        let area: CGFloat
+    }
+
+    static func bestMatch(
+        for rect: CGRect,
+        in screenFrames: [CGRect],
+        tieTolerance: CGFloat = 0.5
+    ) -> Match? {
+        guard !rect.isNull, !rect.isEmpty, !screenFrames.isEmpty else { return nil }
+
+        let overlaps = screenFrames.map { intersectionArea(rect, $0) }
+        guard let bestArea = overlaps.max(), bestArea > 0 else { return nil }
+
+        let tolerance = max(0, tieTolerance)
+        let candidates = overlaps.indices.filter {
+            overlaps[$0] > 0 && abs(overlaps[$0] - bestArea) <= tolerance
+        }
+        guard let fallback = candidates.first else { return nil }
+
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let chosen = candidates.first(where: { screenFrames[$0].contains(center) }) ?? fallback
+        return Match(index: chosen, area: overlaps[chosen])
+    }
+
+    private static func intersectionArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        guard !rhs.isNull, !rhs.isEmpty else { return 0 }
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+        return intersection.width * intersection.height
+    }
+}
+
 @MainActor
 final class WindowCenteringService {
     private enum RawSpace {
@@ -117,8 +245,8 @@ final class WindowCenteringService {
 
     // When a window is mostly off-screen, overlap-based inference becomes ambiguous.
     // Cache the last reliable coordinate system per PID to keep behavior stable.
-    private var cachedSpaceByPID: [pid_t: RawSpace] = [:]
-    private var cachedDisplayByPID: [pid_t: CGDirectDisplayID] = [:]
+    private var cachedSpaceByPID = ProcessScopedCache<RawSpace>()
+    private var cachedDisplayByPID = ProcessScopedCache<CGDirectDisplayID>()
 
     // MARK: - Phase-B 平铺动画时序参数
     //
@@ -202,8 +330,9 @@ final class WindowCenteringService {
     /// （终端按字符网格），走 top-left 锚定接受实际尺寸（与无 settle 的兜底语义一致）。
     private static let settleMaxRounds: Int = 5
 
-    /// 当前进行中的动画 key（防止同一窗口叠加动画 / 重试重叠）。
-    private var activeAnimationKey: String?
+    /// 全局动画租约。底层只有一个 Phase-B timer ownership channel，因此不是按窗口单飞，
+    /// 而是整个 service 同时最多一个动画请求。
+    private var animationSlot = WindowAnimationSlot()
 
     /// 进行中的动画定时器句柄（Phase-A 由 WindowAnimator 返回；Phase-B 平铺推进由本类持有）。
     /// 切换 app 时通过 `abortActiveAnimations()` 全部取消，避免 zombie 定时器在后台继续
@@ -213,12 +342,12 @@ final class WindowCenteringService {
     private var activeTileTimer: DispatchSourceTimer?
 
     /// 是否有任意窗口动画正在进行中（供观察者决定是否需要重试）。
-    var isAnyAnimationInProgress: Bool { activeAnimationKey != nil }
+    var isAnyAnimationInProgress: Bool { animationSlot.activeLease != nil }
 
     /// 切换 app / 手动中止时调用：立即停止所有进行中的动画，窗口停在最后一帧已写入的位置
     ///（不回弹、不再写）。消除 zombie 定时器在非前台时继续移动窗口的缺陷。
     func abortActiveAnimations() {
-        let hadActive = activeAnimationKey != nil || !activeAnimatorTimers.isEmpty || activeTileTimer != nil
+        let hadActive = animationSlot.activeLease != nil || !activeAnimatorTimers.isEmpty || activeTileTimer != nil
         activeTileTimer?.cancel()
         activeTileTimer = nil
         for timer in activeAnimatorTimers {
@@ -226,10 +355,27 @@ final class WindowCenteringService {
         }
         activeAnimatorTimers.removeAll()
         // 清空锁，确保后续动画能正常启动（被 cancel 的定时器不会触发其 completion，故主动清空）。
-        activeAnimationKey = nil
+        animationSlot.cancel()
         if hadActive {
             DiagnosticLog.debug("abortActiveAnimations: stopped all in-flight animations")
         }
+    }
+
+    /// Invalidates coordinate-space evidence owned by a process. Call this when an
+    /// application terminates so a future process that reuses the same PID cannot
+    /// inherit stale display/coordinate-space decisions.
+    func invalidateCachedWindowContext(for pid: pid_t) {
+        cachedSpaceByPID.removeValue(for: pid)
+        cachedDisplayByPID.removeValue(for: pid)
+        DiagnosticLog.debug("window-context-cache: invalidated pid=\(pid)")
+    }
+
+    /// Clears all process-derived coordinate-space evidence. This is intended for
+    /// service teardown or a complete display-topology reset.
+    func invalidateAllCachedWindowContexts() {
+        cachedSpaceByPID.removeAll()
+        cachedDisplayByPID.removeAll()
+        DiagnosticLog.debug("window-context-cache: invalidated all")
     }
 
     nonisolated static func shouldUseRobustPhaseB(startSize: CGSize, endSize: CGSize) -> Bool {
@@ -344,12 +490,13 @@ final class WindowCenteringService {
 
     /// 带动画的居中：与 `centerWindowElement` 使用相同的坐标空间探测与目标解算，
     /// 然后用 `WindowAnimator` 把窗口从当前位置丝滑滑到居中位置（仅移动，不改尺寸）。
+    @discardableResult
     func centerWindowElementAnimated(
         _ windowElement: AXUIElement,
         pid: pid_t? = nil,
         appElement: AXUIElement? = nil,
-        completion: (() -> Void)? = nil
-    ) throws {
+        completion: WindowAnimator.Completion? = nil
+    ) throws -> WindowAnimationStartResult {
         if let appElement, isApplicationInFullscreen(appElement) {
             throw WindowCenteringError.fullscreenWindow
         }
@@ -360,8 +507,8 @@ final class WindowCenteringService {
         guard let target = resolveCenterTarget(windowElement: windowElement, pid: pid) else {
             // 解算失败：退回非动画路径（保持原有错误语义）。
             try centerWindowElement(windowElement, pid: pid, appElement: appElement)
-            completion?()
-            return
+            completion?(.finished)
+            return .completedSynchronously(didWriteGeometry: true)
         }
 
         let context = target.context
@@ -379,19 +526,19 @@ final class WindowCenteringService {
 
         // 已在目标位置：直接返回。
         if abs(startOrigin.x - endOrigin.x) < 1, abs(startOrigin.y - endOrigin.y) < 1 {
-            completion?()
-            return
+            completion?(.finished)
+            return .completedSynchronously(didWriteGeometry: false)
         }
 
         let animKey = animationKey(for: windowElement, pid: pid, kind: "center")
-        // 重叠保护：若该窗口已有进行中的居中动画，则跳过，避免多个定时器并发写 AXPosition。
+        // 全局单飞：底层 Phase-B 仍只有一个 timer ownership channel，任何不同窗口/不同 kind
+        // 的并发动画都会覆盖句柄并使 abort 失效。已有动画时显式返回 busy，由上层稍后重试。
         // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。调用方（如平铺完成回调里的
         // markCentered + processedPIDs.insert）会把假完成当作真完成，提前锁死在错误几何上。
-        if activeAnimationKey == animKey {
-            DiagnosticLog.debug("center-animator: already animating, skip (no completion)")
-            return
+        guard let animationLease = animationSlot.acquire(key: animKey) else {
+            DiagnosticLog.debug("center-animator: busy active=\(animationSlot.activeKey ?? "?") skip requested=\(animKey) (no completion)")
+            return .busy
         }
-        activeAnimationKey = animKey
 
         // 用 box 持有定时器引用：completion 闭包需要引用它，但它本身是 animate 的返回值，
         // 不能在声明前被同一作用域的闭包捕获。声明在前、赋值在后即可。
@@ -402,6 +549,7 @@ final class WindowCenteringService {
             easing: WindowAnimator.spring,
             writer: { [weak self] frame in
                 guard let self else { return false }
+                guard self.animationSlot.activeLease == animationLease else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
                     return true
                 }
@@ -415,21 +563,28 @@ final class WindowCenteringService {
                 else { return nil }
                 return CGRect(origin: p, size: s)
             },
-            completion: { [weak self] in
-                if self?.activeAnimationKey == animKey {
-                    self?.activeAnimationKey = nil
-                }
-                // 正常完成后从追踪列表移除（已 cancel，保留也无害，但避免堆积）。
+            completion: { [weak self] outcome in
+                let completedCurrentLease = self?.animationSlot.release(animationLease) ?? false
+                // 任一驱动终态都从追踪列表移除（timer 已 cancel，避免句柄堆积）。
                 if let timer = animatorTimerBox {
                     self?.activeAnimatorTimers.removeAll { $0 === timer }
                 }
-                DiagnosticLog.debug("center-animator: finished pid=\(pid.map(String.init) ?? "?")")
-                completion?()
+                guard completedCurrentLease else {
+                    DiagnosticLog.debug("center-animator: ignored stale completion pid=\(pid.map(String.init) ?? "?")")
+                    return
+                }
+                if outcome == .finished {
+                    DiagnosticLog.debug("center-animator: finished pid=\(pid.map(String.init) ?? "?")")
+                } else {
+                    DiagnosticLog.debug("center-animator: stopped outcome=\(outcome) pid=\(pid.map(String.init) ?? "?")")
+                }
+                completion?(outcome)
             }
         )
         if let animatorTimer = animatorTimerBox {
             activeAnimatorTimers.append(animatorTimer)
         }
+        return .started
     }
 
     func tileWindowElement(_ windowElement: AXUIElement, pid: pid_t? = nil, appElement: AXUIElement? = nil, insets: TileInsets) throws {
@@ -494,8 +649,9 @@ final class WindowCenteringService {
                 primaryTopY: primaryTopY
             )
             if setPointAttribute(kAXPositionAttribute as CFString, value: candidateOrigin, on: windowElement),
-               tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
+               tileReachedTarget(windowElement, pid: pid, context: context, space: space, primaryTopY: primaryTopY, targetFrame: targetFrame)
             {
+                rememberResolvedContext(pid: pid, screen: context.screen, space: space)
                 return
             }
         }
@@ -511,8 +667,9 @@ final class WindowCenteringService {
             )
             let frameRect = CGRect(origin: candidateOrigin, size: targetFrame.size)
             if setRectAttribute("AXFrame" as CFString, value: frameRect, on: windowElement),
-               tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame)
+               tileReachedTarget(windowElement, pid: pid, context: context, space: space, primaryTopY: primaryTopY, targetFrame: targetFrame)
             {
+                rememberResolvedContext(pid: pid, screen: context.screen, space: space)
                 return
             }
         }
@@ -521,16 +678,17 @@ final class WindowCenteringService {
     }
 
     /// 带动画的两阶段平铺：
-    ///   阶段 A — 在保持当前尺寸的前提下，把窗口平滑移到居中位置；
-    ///   阶段 B — 从当前尺寸平滑扩大到平铺尺寸，并每帧重新居中（从中心向外对称生长）。
-    /// 若窗口不可调整大小，则跳过阶段 B，仅完成居中。
+    ///   阶段 A — 在保持当前尺寸的前提下，把窗口平滑移到平铺目标的左上锚点；
+    ///   阶段 B — 保持左上锚点，从当前尺寸平滑扩大到平铺尺寸。
+    /// 若窗口不可调整大小，则跳过阶段 B，仅完成左上锚点移动。
+    @discardableResult
     func tileWindowElementAnimated(
         _ windowElement: AXUIElement,
         pid: pid_t? = nil,
         appElement: AXUIElement? = nil,
         insets: TileInsets,
-        completion: (() -> Void)? = nil
-    ) throws {
+        completion: WindowAnimator.Completion? = nil
+    ) throws -> WindowAnimationStartResult {
         if let appElement, isApplicationInFullscreen(appElement) {
             throw WindowCenteringError.fullscreenWindow
         }
@@ -571,18 +729,34 @@ final class WindowCenteringService {
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
         DiagnosticLog.debug("tile-animator: detect pid=\(pid.map(String.init) ?? "?") rawPos=\(currentPosition) size=\(windowSize) visibleFrame=\(visibleFrame) space=\(context.space) targetFrame=\(targetFrame)")
-        // 防止同一窗口叠加动画 / 重试重叠。
+        // 全局单飞：Phase-B 只有一个 timer ownership channel。任何已有动画（即使是不同窗口
+        // 或 center/tile 不同 kind）都必须返回 busy，不能覆盖 singleton state。
         let animKey = animationKey(for: windowElement, pid: pid, kind: "tile")
-        if activeAnimationKey == animKey {
-            // 已有该窗口的平铺动画在进行中：直接返回，避免重叠。
+        guard let animationLease = animationSlot.acquire(key: animKey) else {
             // ⚠️ 不得调用 completion：这是「跳过未执行」而非「真完成」。旧实现调用 completion
             // 会触发调用方的 markCentered + processedPIDs.insert + startTileStabilizationRetries，
             // 把「跳过的这次」当作真完成锁死，并启动新的稳定重试 → 假完成 + 真重试叠加，
             // 是「反复平铺 / 死循环」的根因之一。调用方对跳过一律 no-op。
-            DiagnosticLog.debug("tile-animator: already animating pid=\(pid.map(String.init) ?? "?"), skip (no completion)")
-            return
+            DiagnosticLog.debug("tile-animator: busy active=\(animationSlot.activeKey ?? "?") skip requested=\(animKey) (no completion)")
+            return .busy
         }
-        activeAnimationKey = animKey
+
+        // 已处于最终目标（或明确接受的锚定 fallback）时无需占用动画槽。
+        if tileReachedTarget(
+            windowElement,
+            pid: pid,
+            context: context,
+            primaryTopY: primaryTopY,
+            targetFrame: targetFrame
+        ) {
+            _ = animationSlot.release(animationLease)
+            completion?(.finished)
+            return .completedSynchronously(didWriteGeometry: false)
+        }
+
+        let isAnimationLeaseActive: () -> Bool = { [weak self] in
+            self?.animationSlot.activeLease == animationLease
+        }
 
         let reader: () -> CGRect? = { [weak self] in
             guard let self else { return nil }
@@ -594,11 +768,10 @@ final class WindowCenteringService {
 
         let finishActive = { [weak self] in
             guard let self else { return }
-            if self.activeAnimationKey == animKey {
-                self.activeAnimationKey = nil
+            if self.animationSlot.release(animationLease) {
+                // 只允许当前 slot owner 清除 timer；过期 continuation 不得破坏后续会话。
+                self.activeTileTimer = nil
             }
-            // 正常完成后清空 Phase-B 定时器追踪（已 cancel）。
-            self.activeTileTimer = nil
         }
 
         // === 阶段 A：以当前尺寸滑到平铺目标原点（左上角锚定，仅移动） ===
@@ -633,16 +806,20 @@ final class WindowCenteringService {
         // 若既已在原点又不可调整大小，则无需动画。
         if alreadyAtTileOrigin, !canResize {
             finishActive()
-            completion?()
-            return
+            completion?(.finished)
+            return .completedSynchronously(didWriteGeometry: false)
         }
 
         let runPhaseB: () -> Void = { [weak self] in
             guard let self else { return }
+            guard isAnimationLeaseActive() else {
+                DiagnosticLog.debug("tile-animator: ignored stale Phase-B handoff pid=\(pid.map(String.init) ?? "?")")
+                return
+            }
             guard canResize else {
                 // 不可调整大小：仅居中即可，阶段 A 已处理。
                 finishActive()
-                completion?()
+                completion?(.finished)
                 return
             }
 
@@ -673,6 +850,7 @@ final class WindowCenteringService {
                     primaryTopY: primaryTopY,
                     pid: pid,
                     animKey: animKey,
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -691,6 +869,7 @@ final class WindowCenteringService {
                 primaryTopY: primaryTopY,
                 pid: pid,
                 animKey: animKey,
+                isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
                 completion: completion
             )
@@ -698,7 +877,7 @@ final class WindowCenteringService {
 
         if alreadyAtTileOrigin {
             runPhaseB()
-            return
+            return .started
         }
 
         // 执行阶段 A：以当前尺寸滑到平铺目标原点（左上角锚定），完成后进入阶段 B 从该锚点放大。
@@ -708,23 +887,57 @@ final class WindowCenteringService {
             to: CGRect(origin: tileOriginAXForCurrentSize, size: windowSize),
             writer: { [weak self] frame in
                 guard let self else { return false }
+                guard self.animationSlot.activeLease == animationLease else { return false }
                 if self.setPointAttribute(kAXPositionAttribute as CFString, value: frame.origin, on: windowElement) {
                     return true
                 }
                 return self.setRectAttribute("AXFrame" as CFString, value: frame, on: windowElement)
             },
             reader: reader,
-            completion: { [weak self] in
-                // Phase-A 正常完成：从追踪列表移除（已 cancel），随后进入 Phase-B。
+            completion: { [weak self] outcome in
+                // Phase-A 任一驱动终态都先移除 timer；只有 `.finished` 才进入 Phase-B。
                 if let timer = phaseATimerBox {
                     self?.activeAnimatorTimers.removeAll { $0 === timer }
                 }
-                DiagnosticLog.debug("tile-animator: phase A done pid=\(pid.map(String.init) ?? "?")")
-                runPhaseB()
+                guard isAnimationLeaseActive() else {
+                    DiagnosticLog.debug("tile-animator: ignored stale Phase-A completion pid=\(pid.map(String.init) ?? "?")")
+                    return
+                }
+                if TilePhaseAOutcomePolicy.shouldEnterPhaseB(after: outcome) {
+                    DiagnosticLog.debug("tile-animator: phase A done pid=\(pid.map(String.init) ?? "?")")
+                    runPhaseB()
+                } else {
+                    DiagnosticLog.debug("tile-animator: phase A stopped outcome=\(outcome) pid=\(pid.map(String.init) ?? "?")")
+                    finishActive()
+                    completion?(outcome)
+                }
             }
         )
         if let phaseATimer = phaseATimerBox {
             activeAnimatorTimers.append(phaseATimer)
+        }
+        return .started
+    }
+
+    /// Compatibility bridge for existing success-only call sites while they migrate to the typed
+    /// completion overload above. Failure/interruption outcomes deliberately do not invoke the
+    /// legacy callback, so they can never be mistaken for a completed layout.
+    @discardableResult
+    func tileWindowElementAnimated(
+        _ windowElement: AXUIElement,
+        pid: pid_t? = nil,
+        appElement: AXUIElement? = nil,
+        insets: TileInsets,
+        completion: @escaping () -> Void
+    ) throws -> WindowAnimationStartResult {
+        try tileWindowElementAnimated(
+            windowElement,
+            pid: pid,
+            appElement: appElement,
+            insets: insets
+        ) { outcome in
+            guard outcome == .finished else { return }
+            completion()
         }
     }
 
@@ -744,9 +957,11 @@ final class WindowCenteringService {
         primaryTopY: CGFloat,
         pid: pid_t?,
         animKey: String,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         // 若起止尺寸几乎相同，无需放大，直接落地收尾。
         if abs(startSize.width - endSize.width) < 1 && abs(startSize.height - endSize.height) < 1 {
             finalizePhaseB(
@@ -760,6 +975,7 @@ final class WindowCenteringService {
                 pid: pid,
                 animKey: animKey,
                 via: "smooth-noop",
+                isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
                 completion: completion
             )
@@ -773,12 +989,19 @@ final class WindowCenteringService {
         let startTime = DispatchTime.now()
         var bounceTicks = 0
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                timer.cancel()
+                return
+            }
+            guard isAnimationLeaseActive() else {
+                timer.cancel()
+                return
+            }
             // 前台守卫：若该 pid 已不是前台 app，立即停止——消除 zombie 定时器移动非前台窗口。
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 timer.cancel()
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
-                if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
+                finishActive()
                 DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
                 return
             }
@@ -801,6 +1024,7 @@ final class WindowCenteringService {
                     pid: pid,
                     animKey: animKey,
                     via: "smooth",
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -843,6 +1067,7 @@ final class WindowCenteringService {
                             pid: pid,
                             animKey: animKey,
                             skipLeadIn: true,
+                            isAnimationLeaseActive: isAnimationLeaseActive,
                             finishActive: finishActive,
                             completion: completion
                         )
@@ -872,9 +1097,11 @@ final class WindowCenteringService {
         pid: pid_t?,
         animKey: String,
         skipLeadIn: Bool = false,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         let steps = Self.tilePhaseBSteps
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
@@ -882,13 +1109,20 @@ final class WindowCenteringService {
         let leadInMs = skipLeadIn ? 0 : Self.tilePhaseBLeadInMs
         timer.schedule(deadline: .now() + .milliseconds(leadInMs), repeating: .milliseconds(Self.tilePhaseBStepIntervalMs))
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                timer.cancel()
+                return
+            }
+            guard isAnimationLeaseActive() else {
+                timer.cancel()
+                return
+            }
             // 前台守卫：若该 pid 已不是前台 app，立即停止——这是消除"切走后 Safari
             // 被 zombie 定时器拉到另一屏"的关键防线（即便外部未调用 abort）。
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 timer.cancel()
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
-                if self.activeAnimationKey == animKey { self.activeAnimationKey = nil }
+                finishActive()
                 DiagnosticLog.debug("tile-animator: phase B aborted (pid=\(pid) no longer frontmost)")
                 return
             }
@@ -907,6 +1141,7 @@ final class WindowCenteringService {
                     pid: pid,
                     animKey: animKey,
                     via: "robust",
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -939,9 +1174,11 @@ final class WindowCenteringService {
         pid: pid_t?,
         animKey: String?,
         via: String,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         // 最终强制 pos+size 落到目标。
         _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
         let sizeOutcome = resizeWindowWithFallback(windowElement, newSize: endSize)
@@ -961,6 +1198,7 @@ final class WindowCenteringService {
                 animKey: animKey,
                 via: via,
                 firstOutcome: sizeOutcome,
+                isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
                 completion: completion
             )
@@ -977,6 +1215,7 @@ final class WindowCenteringService {
             pid: pid,
             via: via,
             sizeOutcome: sizeOutcome,
+            isAnimationLeaseActive: isAnimationLeaseActive,
             finishActive: finishActive,
             completion: completion
         )
@@ -998,33 +1237,31 @@ final class WindowCenteringService {
         animKey: String?,
         via: String,
         firstOutcome: ResizeOutcome,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
         var round = 0
         timer.schedule(deadline: .now() + .milliseconds(Self.settleDelayMs), repeating: .milliseconds(Self.settleDelayMs))
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            // 前台守卫（与 runPhaseBSmooth/Robust 一致）：切走即终止，用最后一轮读到的尺寸收尾。
+            guard let self else {
+                timer.cancel()
+                return
+            }
+            guard isAnimationLeaseActive() else {
+                timer.cancel()
+                return
+            }
+            // 前台守卫（与 runPhaseBSmooth/Robust 一致）：切走即终止。activation teardown
+            // 会取消上层 coordinator；这里不能继续写后台窗口，也不能伪报 `.finished`。
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 timer.cancel()
                 if self.activeTileTimer === timer { self.activeTileTimer = nil }
                 DiagnosticLog.debug("tile-animator: settle aborted (pid=\(pid) no longer frontmost)")
-                self.emitFinalAnchor(
-                    windowElement: windowElement,
-                    endSize: endSize,
-                    targetAXOrigin: targetAXOrigin,
-                    targetFrame: targetFrame,
-                    context: context,
-                    primaryTopY: primaryTopY,
-                    pid: pid,
-                    via: via,
-                    sizeOutcome: firstOutcome,
-                    finishActive: finishActive,
-                    completion: completion
-                )
+                finishActive()
                 return
             }
             round += 1
@@ -1053,6 +1290,7 @@ final class WindowCenteringService {
                     pid: pid,
                     via: reached ? "\(via)+settle" : "\(via)+settle-giveup",
                     sizeOutcome: outcome,
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -1084,9 +1322,11 @@ final class WindowCenteringService {
         pid: pid_t?,
         via: String,
         sizeOutcome: ResizeOutcome,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         let actualSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         let actualPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
         // 尺寸偏差（app 拒绝缩放 / Numbers 载入忙碌期竞态 / Pages layout 滞后）。
@@ -1110,6 +1350,7 @@ final class WindowCenteringService {
                 via: via,
                 sizeOutcome: sizeOutcome,
                 attemptIndex: 0,
+                isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
                 completion: completion
             )
@@ -1137,6 +1378,7 @@ final class WindowCenteringService {
             pid: pid,
             via: via,
             sizeOutcome: sizeOutcome,
+            isAnimationLeaseActive: isAnimationLeaseActive,
             finishActive: finishActive,
             completion: completion
         )
@@ -1159,9 +1401,11 @@ final class WindowCenteringService {
         via: String,
         sizeOutcome: ResizeOutcome,
         attemptIndex: Int,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else { return }
         let backoffsMs: [Int] = [250, 500, 1000]
         let isFinalAttempt = attemptIndex >= backoffsMs.count - 1
         let delayMs = backoffsMs[min(attemptIndex, backoffsMs.count - 1)]
@@ -1172,8 +1416,13 @@ final class WindowCenteringService {
         timer.schedule(deadline: .now() + .milliseconds(delayMs))
         timer.setEventHandler { [weak self] in
             guard let self else {
-                finishActive()
-                completion?()
+                // Service teardown owns cancellation. Object disappearance is not a
+                // successful geometry terminal and must never be reported as one.
+                timer.cancel()
+                return
+            }
+            guard isAnimationLeaseActive() else {
+                timer.cancel()
                 return
             }
             if self.activeTileTimer === timer { self.activeTileTimer = nil }
@@ -1181,18 +1430,7 @@ final class WindowCenteringService {
             // 前台守卫：切走即收尾退出（不写后台窗口），与 Phase-B settle/smooth/robust 一致。
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 DiagnosticLog.debug("tile-animator: precise-rewrite aborted (pid=\(pid) no longer frontmost)")
-                self.finishEmitFinalAnchor(
-                    windowElement: windowElement,
-                    targetFrame: targetFrame,
-                    targetAXOrigin: targetAXOrigin,
-                    context: context,
-                    primaryTopY: primaryTopY,
-                    pid: pid,
-                    via: "\(via)+precise-abort",
-                    sizeOutcome: sizeOutcome,
-                    finishActive: finishActive,
-                    completion: completion
-                )
+                finishActive()
                 return
             }
 
@@ -1231,6 +1469,7 @@ final class WindowCenteringService {
                     pid: pid,
                     via: satisfied ? "\(via)+precise" : "\(via)+precise-giveup",
                     sizeOutcome: sizeOutcome,
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -1246,6 +1485,7 @@ final class WindowCenteringService {
                     via: via,
                     sizeOutcome: sizeOutcome,
                     attemptIndex: attemptIndex + 1,
+                    isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
                 )
@@ -1255,7 +1495,8 @@ final class WindowCenteringService {
     }
 
     /// emitFinalAnchor 的统一收尾：读最终 frame，打取证日志（含 finalFrame vs target + satisfied），
-    /// 清动画锁、回调 completion。所有分支（posOnly / precise-rewrite / abort）都经此收尾，
+    /// 清动画锁、回调 completion。成功执行链（posOnly / precise-rewrite）都经此收尾，
+    /// lifecycle abort 不进入此方法，也不产生伪 `.finished`，
     /// 保证 phase B done 日志行格式一致、四向边距可取证。
     private func finishEmitFinalAnchor(
         windowElement: AXUIElement,
@@ -1266,16 +1507,21 @@ final class WindowCenteringService {
         pid: pid_t?,
         via: String,
         sizeOutcome: ResizeOutcome,
+        isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
-        completion: (() -> Void)?
+        completion: WindowAnimator.Completion?
     ) {
+        guard isAnimationLeaseActive() else {
+            DiagnosticLog.debug("tile-animator: ignored stale finalization pid=\(pid.map(String.init) ?? "?")")
+            return
+        }
         let postSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
         let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
         let finalFrame = currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY)
         let satisfied = finalFrame.map { frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
         DiagnosticLog.debug("tile-animator: phase B done (via=\(via)) pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil") finalFrame=\(finalFrame.map { String(describing: $0) } ?? "nil") satisfied=\(satisfied)")
         finishActive()
-        completion?()
+        completion?(.finished)
     }
 
     private func currentGlobalFrame(
@@ -1502,6 +1748,23 @@ final class WindowCenteringService {
     /// 读取失败或无法确定坐标空间时返回 nil（保守地视为「不在位」）。
     func centeredTargetAXOrigin(for windowElement: AXUIElement, pid: pid_t?) -> CGPoint? {
         resolveCenterTarget(windowElement: windowElement, pid: pid)?.targetAXOrigin
+    }
+
+    /// Read back the current AX origin and verify that a completed center animation really reached
+    /// the same target the service would choose now. Setter success alone is not a completion signal:
+    /// some applications accept the write and immediately restore their own frame.
+    func isWindowAtCenteredTarget(
+        _ windowElement: AXUIElement,
+        pid: pid_t?,
+        tolerance: CGFloat = 3
+    ) -> Bool {
+        guard
+            let current = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
+            let target = resolveCenterTarget(windowElement: windowElement, pid: pid)?.targetAXOrigin
+        else {
+            return false
+        }
+        return abs(current.x - target.x) <= tolerance && abs(current.y - target.y) <= tolerance
     }
 
     /// 是否可调整窗口大小。
@@ -1944,33 +2207,21 @@ final class WindowCenteringService {
     }
 
     private func pickScreenForCGRect(_ cgRect: CGRect) -> (screen: NSScreen, area: CGFloat)? {
-        let screens = NSScreen.screens
-        guard !screens.isEmpty else { return nil }
-
-        var best: (screen: NSScreen, area: CGFloat)?
-        var candidates: [NSScreen] = []
-
-        for screen in screens {
-            guard let id = displayID(for: screen) else { continue }
-            let cgDisplay = CGDisplayBounds(id)
-            let area = cgRect.intersection(cgDisplay).area
-            if let best, abs(area - best.area) <= 0.5 {
-                candidates.append(screen)
-            } else if best == nil || area > best!.area + 0.5 {
-                best = (screen, area)
-                candidates = [screen]
-            }
+        let screensAndFrames = NSScreen.screens.compactMap { screen -> (NSScreen, CGRect)? in
+            guard let id = displayID(for: screen) else { return nil }
+            return (screen, CGDisplayBounds(id))
         }
-        guard let best else { return nil }
-        if candidates.count == 1 {
-            return best
+        guard
+            let match = WindowScreenOverlapSelection.bestMatch(
+                for: cgRect,
+                in: screensAndFrames.map(\.1)
+            ),
+            screensAndFrames.indices.contains(match.index)
+        else {
+            // Zero-overlap evidence is not a screen selection signal.
+            return nil
         }
-        let center = CGPoint(x: cgRect.midX, y: cgRect.midY)
-        let chosen = candidates.first(where: {
-            guard let id = displayID(for: $0) else { return false }
-            return CGDisplayBounds(id).contains(center)
-        }) ?? best.screen
-        return (chosen, best.area)
+        return (screensAndFrames[match.index].0, match.area)
     }
 
     private func cocoaRectFromCGWindowBounds(_ cgRect: CGRect, screen: NSScreen, primaryTopY: CGFloat) -> CGRect {
@@ -2080,6 +2331,7 @@ final class WindowCenteringService {
         _ windowElement: AXUIElement,
         pid: pid_t?,
         context: WindowContext,
+        space: RawSpace? = nil,
         primaryTopY: CGFloat,
         targetFrame: CGRect
     ) -> Bool {
@@ -2109,7 +2361,7 @@ final class WindowCenteringService {
         }
 
         let currentFrame = rawToGlobalRect(
-            space: context.space,
+            space: space ?? context.space,
             screenFrame: context.screen.frame,
             rawPosition: rawPosition,
             windowSize: rawSize,
@@ -2177,6 +2429,17 @@ final class WindowCenteringService {
 
     private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
         screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+    }
+
+    /// Records a coordinate space only after a write was read back successfully.
+    /// This lets the synchronous fallback loop teach subsequent operations which
+    /// candidate actually matched the application's AX convention.
+    private func rememberResolvedContext(pid: pid_t?, screen: NSScreen, space: RawSpace) {
+        guard let pid else { return }
+        cachedSpaceByPID[pid] = space
+        if let displayID = displayID(for: screen) {
+            cachedDisplayByPID[pid] = displayID
+        }
     }
 
     private func primaryScreenTopY() -> CGFloat {

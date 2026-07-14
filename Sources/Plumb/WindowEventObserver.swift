@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - TransientDetector
@@ -47,17 +48,45 @@ enum TransientDetector {
 
 @MainActor
 final class WindowEventObserver {
+    private final class AnimationStartFlag {
+        var didStart = false
+    }
+
+    private struct TileOperationPayload {
+        let id: LayoutOperationID
+        let pid: pid_t
+        let appElement: AXUIElement
+        let windowElement: AXUIElement
+        let insets: TileInsets
+        let bundleIdentifier: String?
+    }
+
     private let service: WindowCenteringService
     private let tilingSettingsStore: AppTilingSettingsStore
     private let dmgMonitor: DmgMountMonitor?
 
     private var observer: AXObserver?
     private var observedPID: pid_t?
+    private var observedLaunchDate: Date?
+    private var observedProcessIncarnation: ProcessIncarnation?
+    /// PID is not a sufficient async identity: it can be reused and the same
+    /// app can begin a fresh activation/Space session. Every scheduled callback
+    /// captures one generation token and must still own the current activation
+    /// before it may read or write geometry.
+    private var activationTracker = LayoutActivationTracker()
+    private var nextLayoutOperationSequence: UInt64 = 0
+    private var nextContinuationSequence: UInt64 = 0
+    /// Owns pending tile work for the current activation. The service still
+    /// provides the global geometry-writer slot; this coordinator prevents a
+    /// multi-window enumeration from silently losing requests to `.busy` and
+    /// gives every completion an exact operation identity.
+    private let tileCoordinator = LayoutSessionCoordinator<TileOperationPayload>()
     /// observer 通知注册是否失败（AXError.cannotComplete，常见于 Electron 应用冷启动时 AX 未就绪）。
     /// 为 true 时，attachToFrontmostApp 的 `observedPID == pid` 早退守卫放行，允许重连。
     private var observerRegistrationFailed: Bool = false
     /// 注册失败后的重连重试定时器：周期性销毁/重建 observer 并重新注册通知，直到成功或 app 失焦。
     private var reattachTimer: DispatchSourceTimer?
+    private var reattachTimerOwnership = OwnedOperationState<LayoutContinuationLease>()
     /// 已完成居中/平铺的窗口 key（向后兼容 / 防抖）。
     private var centeredWindowKeys: [String] = []
     private var centeredWindowKeySet: Set<String> = []
@@ -69,7 +98,8 @@ final class WindowEventObserver {
     /// 直到切换走再回来（attachToFrontmostApp 会清缓存）。
     private var processedPIDs: Set<pid_t> = []
     /// 「手动排版」窗口集合：用户拖动(moved)或缩放(resized)过的窗口进入此集合，不再被自动居中/平铺，
-    /// 直到下一次切 App / 切 Space 时才重新按规则排版。键格式与 centered 缓存一致："pid:windowNumber"。
+    /// 直到下一次切 App / 切 Space 时才重新按规则排版。键同时包含 PID、可用的 window number
+    /// 与 AX element hash，避免窗口号复用继承旧状态。
     /// 新需求语义：任何手动移动/缩放都**不**立即吸附——被标记的窗口保持用户摆放的位置/尺寸，
     /// 由 handle() 主路径的 manualWindowKeys 守卫拦截；只有切 App（attachToFrontmostApp）或
     /// 切 Space（recenterObservedApp）时清掉该 PID 的标记后，窗口才会被重新处理。
@@ -82,9 +112,9 @@ final class WindowEventObserver {
     /// Plumb 自己刚完成布局后的短暂宽限窗口。部分 app 会在 `activeAnimationKey` 清掉后才投递
     /// 由我们刚写入 AXPosition/AXSize 触发的迟到 move/resize 通知；这些通知不能被当作用户手动操作。
     private var selfLayoutGraceUntil: [String: Date] = [:]
-    /// 每窗口平铺会话预算。key 复用 `key(pid:window:)`（`pid:windowNumber`）。
+    /// 每窗口平铺会话预算。key 复用 `key(pid:window:)`（PID + window number + AX hash）。
     ///
-    /// 每次真正启动 `tileWindowElementAnimated`（含 stabilization 重触发）计数 +1；达到上限后
+    /// 每次真正启动 `tileWindowElementAnimated`，以及同步返回但仍未满足目标的逻辑尝试计数 +1；达到上限后
     /// 接受当前 frame（markCentered + processedPIDs.insert），保证任何几何结局下用户最多看到
     /// `maxTileSessionAttempts` 次动画。这是「反复平铺 / 死循环」的最终兜底：即使 app 持续拒绝
     /// 目标尺寸、即使完成谓词因边界容差反复拒绝，预算耗尽也会强制锁定，不再无限重试。
@@ -95,7 +125,9 @@ final class WindowEventObserver {
     /// 每窗口平铺会话预算上限。3 次 = 首铺 + 最多 2 次稳定重试，覆盖大多数 app 的 layout 追平。
     private static let maxTileSessionAttempts: Int = 3
     private var initialCenterTimer: DispatchSourceTimer?
+    private var initialCenterTimerOwnership = OwnedOperationState<LayoutContinuationLease>()
     private var tileStabilizeTimer: DispatchSourceTimer?
+    private var tileStabilizeTimerOwnership = OwnedOperationState<LayoutContinuationLease>()
     /// 阶段 3.3：自布局宽限。默认 1.0s 太短——Numbers 等文档 app 会在 `activeAnimationKey` 清掉
     /// 之后仍迟到地自 resize（加载完成后一次性自设 frame），把窗口误标「手动」冻住。
     /// 改为：平铺会话进行中（动画/稳定重试期间）+ 会话结束后再延伸 `postSessionGraceInterval`
@@ -107,13 +139,10 @@ final class WindowEventObserver {
     /// 慢载入的迟到自 resize（加载完成后一次性自设 frame），可能把坏形态误标 manual 永久冻结。
     /// 对 document-chooser app 延长到 4.0s 覆盖其迟到自 resize。非 document-chooser app 仍用 1.8s。
     private static let documentChooserPostSessionGraceInterval: TimeInterval = 4.0
-    /// 阶段 3.1：document-chooser 稳定门进行中的 PID 集合。用于抑制 `startInitialCenteringRetries`
-    /// 在采样等待期间重复进入 `applyLayout`（否则每次重试都会启动一个新的采样循环）。
-    /// 清理时机同 `processedPIDs`（attach 重激活、appDidTerminate、Space 切换、stop）。
-    private var documentStableGatePIDs: Set<pid_t> = []
-    /// 阶段 3.1 稳定门 + 阶段 3.2 完成后单次校正共用的可取消定时器（受 `abortActiveAnimations`
-    /// 之外的前台守卫保护，按 PID 在生命周期点清空）。
-    private var documentStableTimer: DispatchSourceTimer?
+    /// 阶段 3.1 的稳定门按窗口拥有。一个文档 App 可同时创建多个未保存文档；若按 PID
+    /// 共用单槽，先稳定的窗口会让同 PID 的其它窗口绕过自己的稳定检查。
+    private var documentStableTimers: [String: DispatchSourceTimer] = [:]
+    private var documentStableTimerOwnership = MultiOwnedOperationState<String, LayoutContinuationLease>()
     private static let documentStableSampleIntervalMs: Int = 400
     private static let documentStableMaxSamples: Int = 6     // 400ms × 6 ≈ 2.4s
     private static let documentStableTolerancePx: CGFloat = 2
@@ -121,12 +150,172 @@ final class WindowEventObserver {
     /// 延迟 ~500ms 按「先 size 后 position」重写一次精确目标，再走判定与预算锁定，替代加载中
     /// 的多轮拉锯。一次性、可取消、带前台守卫；每个窗口至多一次（受 `tileSessionAttempts` 预算保护）。
     private var postCompletionCorrectionTimer: DispatchSourceTimer?
+    private var postCompletionCorrectionTimerOwnership = OwnedOperationState<LayoutContinuationLease>()
     private static let postCompletionCorrectionDelayMs: Int = 500
 
     init(service: WindowCenteringService, tilingSettingsStore: AppTilingSettingsStore, dmgMonitor: DmgMountMonitor? = nil) {
         self.service = service
         self.tilingSettingsStore = tilingSettingsStore
         self.dmgMonitor = dmgMonitor
+    }
+
+    private func currentActivationToken(for pid: pid_t) -> LayoutActivationToken? {
+        guard let token = activationTracker.currentToken, token.pid == pid else { return nil }
+        return token
+    }
+
+    private func ownsCurrentActivation(_ token: LayoutActivationToken, pid: pid_t) -> Bool {
+        token.pid == pid && activationTracker.isCurrent(token) && observedPID == pid
+    }
+
+    /// A PID can be recycled before a delayed workspace notification is
+    /// delivered. `proc_pidinfo` gives us the process start timestamp, which is
+    /// a non-optional incarnation identity while the process is alive.
+    private static func processIncarnation(for pid: pid_t) -> ProcessIncarnation? {
+        var info = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let readSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expectedSize)
+        guard readSize == expectedSize else { return nil }
+        return ProcessIncarnation(
+            startSeconds: info.pbi_start_tvsec,
+            startMicroseconds: info.pbi_start_tvusec
+        )
+    }
+
+    private func isObservingSameProcess(
+        _ app: NSRunningApplication,
+        incarnation: ProcessIncarnation? = nil
+    ) -> Bool {
+        let currentIncarnation = incarnation ?? Self.processIncarnation(for: app.processIdentifier)
+        let fallbackLaunchDatesMatch: Bool?
+        if let observedLaunchDate, let launchDate = app.launchDate {
+            fallbackLaunchDatesMatch = observedLaunchDate == launchDate
+        } else {
+            fallbackLaunchDatesMatch = nil
+        }
+        return ProcessIdentityPolicy.isSameProcess(
+            pidMatches: observedPID == app.processIdentifier,
+            observedIncarnation: observedProcessIncarnation,
+            currentIncarnation: currentIncarnation,
+            fallbackLaunchDatesMatch: fallbackLaunchDatesMatch
+        )
+    }
+
+    private func operationWindowKey(pid: pid_t, window: AXUIElement) -> String {
+        let stablePart = windowNumber(of: window).map(String.init) ?? "unknown"
+        return "\(pid):\(stablePart):ax:\(CFHash(window))"
+    }
+
+    private func tileOperationID(
+        token: LayoutActivationToken,
+        pid: pid_t,
+        window: AXUIElement
+    ) -> LayoutOperationID {
+        let windowKey = operationWindowKey(pid: pid, window: window)
+        let existing = ([tileCoordinator.activeID].compactMap { $0 } + tileCoordinator.queuedIDs)
+            .first { $0.token == token && $0.windowKey == windowKey && $0.kind == .tile }
+        if let existing { return existing }
+
+        precondition(nextLayoutOperationSequence < .max, "layout operation sequence exhausted")
+        nextLayoutOperationSequence += 1
+        return LayoutOperationID(
+            token: token,
+            windowKey: windowKey,
+            kind: .tile,
+            sequence: nextLayoutOperationSequence
+        )
+    }
+
+    private func makeContinuationLease(
+        token: LayoutActivationToken,
+        operationID: LayoutOperationID? = nil,
+        windowKey: String? = nil
+    ) -> LayoutContinuationLease {
+        precondition(nextContinuationSequence < .max, "continuation sequence exhausted")
+        nextContinuationSequence += 1
+        return LayoutContinuationLease(
+            token: token,
+            sequence: nextContinuationSequence,
+            operationID: operationID,
+            windowKey: windowKey
+        )
+    }
+
+    private func cancelInitialCenterTimer(ownedBy lease: LayoutContinuationLease? = nil) {
+        if let lease {
+            guard initialCenterTimerOwnership.end(ifOwnedBy: lease) else { return }
+        } else {
+            initialCenterTimerOwnership.reset()
+        }
+        initialCenterTimer?.cancel()
+        initialCenterTimer = nil
+    }
+
+    private func cancelReattachTimer(ownedBy lease: LayoutContinuationLease? = nil) {
+        if let lease {
+            guard reattachTimerOwnership.end(ifOwnedBy: lease) else { return }
+        } else {
+            reattachTimerOwnership.reset()
+        }
+        reattachTimer?.cancel()
+        reattachTimer = nil
+    }
+
+    private func cancelTileStabilizeTimer(ownedBy lease: LayoutContinuationLease? = nil) {
+        if let lease {
+            guard tileStabilizeTimerOwnership.end(ifOwnedBy: lease) else { return }
+        } else {
+            tileStabilizeTimerOwnership.reset()
+        }
+        tileStabilizeTimer?.cancel()
+        tileStabilizeTimer = nil
+    }
+
+    private func cancelPostCompletionCorrectionTimer(ownedBy lease: LayoutContinuationLease? = nil) {
+        if let lease {
+            guard postCompletionCorrectionTimerOwnership.end(ifOwnedBy: lease) else { return }
+        } else {
+            postCompletionCorrectionTimerOwnership.reset()
+        }
+        postCompletionCorrectionTimer?.cancel()
+        postCompletionCorrectionTimer = nil
+    }
+
+    private func ownsCurrentTileOperation(_ payload: TileOperationPayload) -> Bool {
+        guard tileCoordinator.activeID == payload.id else { return false }
+        guard ownsCurrentActivation(payload.id.token, pid: payload.pid) else { return false }
+        guard Self.sourcePID(of: payload.windowElement) == payload.pid else { return false }
+        return operationWindowKey(pid: payload.pid, window: payload.windowElement) == payload.id.windowKey
+    }
+
+    /// AX callbacks may already be queued when an observer is replaced. The
+    /// callback's source observer is therefore part of event identity; a PID
+    /// check alone cannot reject a stale callback after PID reuse/reactivation.
+    private func handleAXCallback(
+        sourceObserver: AXObserver,
+        notification: String,
+        element: AXUIElement,
+        sourcePID: pid_t
+    ) {
+        guard let observer, CFEqual(observer, sourceObserver) else {
+            DiagnosticLog.debug("ax-callback: stale observer source pid=\(sourcePID), drop")
+            return
+        }
+        guard currentActivationToken(for: sourcePID) != nil else {
+            DiagnosticLog.debug("ax-callback: stale activation source pid=\(sourcePID), drop")
+            return
+        }
+        handle(notification: notification, element: element, forcedPID: sourcePID)
+    }
+
+    /// 从 AX 通知携带的 element 读取真实源 PID。
+    ///
+    /// 不能在回调排队后再用 `frontmostApplication` 推断 PID：切 App 时旧 observer 的通知可能已经
+    /// 入队，执行时前台 PID 已变化。读取失败时宁可丢弃该事件，也不把旧 element 绑定到新 PID。
+    nonisolated private static func sourcePID(of element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
+        return pid
     }
 
     func start() {
@@ -170,30 +359,29 @@ final class WindowEventObserver {
     }
 
     func stop() {
-        initialCenterTimer?.cancel()
-        initialCenterTimer = nil
-        tileStabilizeTimer?.cancel()
-        tileStabilizeTimer = nil
-        reattachTimer?.cancel()
-        reattachTimer = nil
+        cancelInitialCenterTimer()
+        cancelTileStabilizeTimer()
+        cancelReattachTimer()
         observerRegistrationFailed = false
         service.abortActiveAnimations()
+        service.invalidateAllCachedWindowContexts()
+        tileCoordinator.cancelAll()
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
         observer = nil
         observedPID = nil
+        observedLaunchDate = nil
+        observedProcessIncarnation = nil
+        activationTracker.invalidate()
         centeredWindowKeys.removeAll()
         centeredWindowKeySet.removeAll()
         processedPIDs.removeAll()
         manualWindowKeys.removeAll()
         selfLayoutGraceUntil.removeAll()
         tileSessionAttempts.removeAll()
-        documentStableGatePIDs.removeAll()
-        documentStableTimer?.cancel()
-        documentStableTimer = nil
-        postCompletionCorrectionTimer?.cancel()
-        postCompletionCorrectionTimer = nil
+        cancelAllDocumentStableGates()
+        cancelPostCompletionCorrectionTimer()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -222,42 +410,22 @@ final class WindowEventObserver {
         }
 
         // 2) 扫描当前屏可见的后台标准窗口，逐个居中。
-        recenterVisibleBackgroundWindows(excluding: frontmost.processIdentifier)
+        guard let spaceToken = currentActivationToken(for: frontmost.processIdentifier) else { return }
+        recenterVisibleBackgroundWindows(
+            excluding: frontmost.processIdentifier,
+            spaceToken: spaceToken
+        )
     }
 
     /// 对当前已观察的前台 app 重新居中：中止动画 → 清居中缓存与 PID 标记 → 重启重试。
     /// 绕过 `attachToFrontmostApp` 的 `observedPID == pid` 早退守卫（切 Space 时前台不变，
     /// 守卫会挡住，缓存不会清理）。observer 仍绑定当前 PID，无需重建。
     private func recenterObservedApp(pid: pid_t) {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return }
-        DiagnosticLog.debug("spaceDidChange: pid=\(pid) bundle=\(app.bundleIdentifier ?? "?") — recenter frontmost")
-
-        service.abortActiveAnimations()
-        initialCenterTimer?.cancel()
-        initialCenterTimer = nil
-
-        let prefix = "\(pid):"
-        let removedCount = centeredWindowKeySet.filter { $0.hasPrefix(prefix) }.count
-        if removedCount > 0 {
-            DiagnosticLog.debug("spaceDidChange: cleared \(removedCount) cache entries for pid=\(pid)")
-            centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
-            centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
-        }
-        // 切 Space 清除该 PID 的「手动排版」标记：新需求要求用户手动移动/缩放的窗口在切 Space 时
-        // 重新按规则排版（与切 App 同语义）。只有清掉 manualWindowKeys，后续 handle() / retry 才能
-        // 重新处理这些窗口。
-        let manualCleared = manualWindowKeys.filter { $0.hasPrefix(prefix) }.count
-        if manualCleared > 0 {
-            DiagnosticLog.debug("spaceDidChange: cleared \(manualCleared) manual-layout window(s) for pid=\(pid)")
-            manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
-        }
-        selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(prefix) }
-        tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(prefix) }
-        processedPIDs.remove(pid)
-        endDocumentStableGate(pid: pid)
-
-        let appElement = AXUIElementCreateApplication(pid)
-        startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+        // A Space transition starts a new activation generation. Rebind the AX
+        // observer as well, so queued callbacks from the old Space carry a stale
+        // sourceObserver identity and cannot be accepted under the new token.
+        attachToFrontmostApp(forceRebind: true)
     }
 
     /// 居中当前屏上可见的、非前台 app 的标准窗口（切回桌面场景）。
@@ -267,7 +435,11 @@ final class WindowEventObserver {
     /// `CGWindowList` 枚举屏上标准窗口（layer==0），筛出当前屏可见、非前台、符合 shouldCenter
     /// 白名单（且非 Atlas 排除项）的，用 `centerWindowElementAnimated` 直接居中。
     /// 副作用控制：仅当前屏、仅标准窗口、同一 app 只动一个主窗口。
-    private func recenterVisibleBackgroundWindows(excluding frontmostPID: pid_t) {
+    private func recenterVisibleBackgroundWindows(
+        excluding frontmostPID: pid_t,
+        spaceToken: LayoutActivationToken
+    ) {
+        guard ownsCurrentActivation(spaceToken, pid: frontmostPID) else { return }
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return
         }
@@ -278,6 +450,7 @@ final class WindowEventObserver {
         let settings = tilingSettingsStore.load()
 
         for info in list {
+            guard ownsCurrentActivation(spaceToken, pid: frontmostPID) else { return }
             guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int else { continue }
             let pid = pid_t(ownerPID)
             if pid == frontmostPID { continue }            // 跳过前台 app
@@ -303,15 +476,84 @@ final class WindowEventObserver {
             if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleID) {
                 seenPIDs.insert(pid); continue
             }
+            if hasCentered(windowElement: windowElement, pid: pid) {
+                seenPIDs.insert(pid)
+                continue
+            }
+            if let cacheKey = key(pid: pid, window: windowElement), manualWindowKeys.contains(cacheKey) {
+                seenPIDs.insert(pid)
+                continue
+            }
+            if isJournalBundle(bundleID), isJournalSettingsWindow(windowElement) {
+                seenPIDs.insert(pid)
+                continue
+            }
             do {
-                try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                markCentered(windowElement: windowElement, pid: pid)
-                DiagnosticLog.debug("spaceDidChange: centered background window pid=\(pid) bundle=\(bundleID ?? "?")")
+                let startFlag = AnimationStartFlag()
+                let startResult = try service.centerWindowElementAnimated(
+                    windowElement,
+                    pid: pid,
+                    appElement: appElement
+                ) { [weak self] outcome in
+                    guard let self else { return }
+                    guard self.ownsCurrentActivation(spaceToken, pid: frontmostPID) else { return }
+                    if outcome == .userInterrupted {
+                        if let cacheKey = self.key(pid: pid, window: windowElement) {
+                            self.manualWindowKeys.insert(cacheKey)
+                        }
+                        DiagnosticLog.debug("spaceDidChange: background center interrupted by user pid=\(pid)")
+                        return
+                    }
+                    guard outcome == .finished else { return }
+                    if startFlag.didStart {
+                        self.recordSelfLayoutGrace(
+                            windowElement: windowElement,
+                            pid: pid,
+                            reason: "background center animation completion"
+                        )
+                    }
+                    guard self.service.isWindowAtCenteredTarget(windowElement, pid: pid) else {
+                        DiagnosticLog.debug("spaceDidChange: background center readback missed target pid=\(pid)")
+                        return
+                    }
+                    self.markCentered(windowElement: windowElement, pid: pid)
+                    DiagnosticLog.debug("spaceDidChange: centered background window pid=\(pid) bundle=\(bundleID ?? "?")")
+                    // The service intentionally owns one global geometry writer.
+                    // Continue the background pass only after this exact write
+                    // finished so later apps are serialized instead of dropped
+                    // as `.busy`.
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self,
+                              self.ownsCurrentActivation(spaceToken, pid: frontmostPID),
+                              NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmostPID
+                        else {
+                            return
+                        }
+                        self.recenterVisibleBackgroundWindows(
+                            excluding: frontmostPID,
+                            spaceToken: spaceToken
+                        )
+                    }
+                }
+                if startResult == .started {
+                    startFlag.didStart = true
+                }
+                recordSynchronousCenterWriteGraceIfNeeded(
+                    startResult,
+                    windowElement: windowElement,
+                    pid: pid,
+                    reason: "background center synchronous fallback"
+                )
+                switch startResult {
+                case .started, .completedSynchronously:
+                    seenPIDs.insert(pid)
+                case .busy:
+                    DiagnosticLog.debug("spaceDidChange: background center busy pid=\(pid), leave pending")
+                }
             } catch {
                 // 全屏/读取失败等静默跳过（与 handle 的错误语义一致）。
                 DiagnosticLog.debug("spaceDidChange: background center failed pid=\(pid) error=\(error)")
             }
-            seenPIDs.insert(pid)
         }
     }
 
@@ -321,7 +563,10 @@ final class WindowEventObserver {
     func refreshAfterPossibleTrustChange() {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else { return }
         // If we already have an observer bound to the current frontmost app, nothing to do.
-        if let observedPID, observedPID == NSWorkspace.shared.frontmostApplication?.processIdentifier, observer != nil {
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           observer != nil,
+           isObservingSameProcess(frontmost)
+        {
             return
         }
         attachToFrontmostApp()
@@ -337,21 +582,47 @@ final class WindowEventObserver {
             return
         }
         let pid = app.processIdentifier
+        let staleByLaunchDate = observedPID == pid && {
+            guard let observedLaunchDate, let terminatedLaunchDate = app.launchDate else { return false }
+            return observedLaunchDate != terminatedLaunchDate
+        }()
+        // `launchDate` is optional. When either side is nil, a delayed terminate
+        // notification for an old process can still arrive after macOS has
+        // recycled the PID. A live replacement under the same PID is independent
+        // evidence that this notification must not tear down the current session.
+        let liveAppForPID = NSRunningApplication(processIdentifier: pid)
+        let shouldIgnoreTermination = TerminationNotificationPolicy.shouldIgnore(
+            observedPIDMatches: observedPID == pid,
+            launchDatesMismatch: staleByLaunchDate,
+            terminatedAppReportsTerminated: app.isTerminated,
+            liveAppIsRunning: liveAppForPID?.isTerminated == false
+        )
+        if shouldIgnoreTermination {
+            DiagnosticLog.debug("terminate: stale PID-reuse notification pid=\(pid), ignore")
+            return
+        }
+        service.invalidateCachedWindowContext(for: pid)
         // If the terminated app is the one we were observing, drop the observer too so a stale
         // source does not fire for a recycled PID.
         if observedPID == pid {
-            initialCenterTimer?.cancel()
-            initialCenterTimer = nil
-            tileStabilizeTimer?.cancel()
-            tileStabilizeTimer = nil
+            cancelInitialCenterTimer()
+            cancelTileStabilizeTimer()
+            cancelReattachTimer()
+            cancelPostCompletionCorrectionTimer()
             // 被观察的 app 退出时，其进行中的平铺/居中动画也必须停止，否则 Phase-B 定时器
             // 会在已退出的 pid 上继续尝试写 AX（必然失败，但仍占用 activeAnimationKey 锁）。
             service.abortActiveAnimations()
+            tileCoordinator.cancelAll()
             if let observer {
                 CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
             }
             observer = nil
             observedPID = nil
+            observedLaunchDate = nil
+            observedProcessIncarnation = nil
+            if let token = activationTracker.currentToken, token.pid == pid {
+                _ = activationTracker.invalidate(token)
+            }
         }
 
         let prefix = "\(pid):"
@@ -364,7 +635,7 @@ final class WindowEventObserver {
         endDocumentStableGate(pid: pid)
     }
 
-    private func attachToFrontmostApp() {
+    private func attachToFrontmostApp(forceRebind: Bool = false) {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else {
             DiagnosticLog.debug("attach: accessibility NOT trusted — skipping")
             return
@@ -374,40 +645,49 @@ final class WindowEventObserver {
             return
         }
 
-        if observedPID == app.processIdentifier, !observerRegistrationFailed {
+        let appIncarnation = Self.processIncarnation(for: app.processIdentifier)
+        let isSameProcess = isObservingSameProcess(app, incarnation: appIncarnation)
+        if isSameProcess, !observerRegistrationFailed, !forceRebind {
             DiagnosticLog.debug("attach: already observing pid=\(app.processIdentifier) (\(app.bundleIdentifier ?? "?"))")
             return
         }
-        if observedPID == app.processIdentifier, observerRegistrationFailed {
+        if isSameProcess, observerRegistrationFailed {
             // observer 注册曾失败（Electron 冷启动 AX 未就绪）：放行，触发重连流程。
             DiagnosticLog.debug("attach: reattaching pid=\(app.processIdentifier) (previous registration failed)")
         }
 
         DiagnosticLog.debug("attach: switching to pid=\(app.processIdentifier) bundle=\(app.bundleIdentifier ?? "?")")
 
+        if observedPID == app.processIdentifier, !isSameProcess {
+            // Same numeric PID, different process lifetime: never inherit the
+            // previous process's coordinate-space/display evidence.
+            service.invalidateCachedWindowContext(for: app.processIdentifier)
+            DiagnosticLog.debug("attach: detected recycled pid=\(app.processIdentifier), forcing full rebind")
+        }
+
         // 切换到新 app 前：立即中止上一个 app 进行中的平铺/居中动画，窗口停在最后一帧
         //（不回弹、不再写）。这消除"平铺动画进行中切走 → zombie Phase-B 定时器在后台继续
         // 移动已非前台 app 的窗口 → 切回来时它跳到另一个屏幕"的根因。
         service.abortActiveAnimations()
+        tileCoordinator.cancelAll()
+        activationTracker.invalidate()
 
-        initialCenterTimer?.cancel()
-        initialCenterTimer = nil
-        reattachTimer?.cancel()
-        reattachTimer = nil
+        cancelInitialCenterTimer()
+        cancelReattachTimer()
+        cancelTileStabilizeTimer()
         // 同步取消上一个 app 的 document-stable-gate 采样定时器（阶段 3.1），避免切走后 zombie
         // 定时器在后台继续对非前台 app 的窗口采样/平铺。
-        documentStableTimer?.cancel()
-        documentStableTimer = nil
-        documentStableGatePIDs.removeAll()
+        cancelAllDocumentStableGates()
         // 同步取消阶段 3.2 的完成后校正定时器（同属 per-app 生命周期）。
-        postCompletionCorrectionTimer?.cancel()
-        postCompletionCorrectionTimer = nil
+        cancelPostCompletionCorrectionTimer()
         observerRegistrationFailed = false
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
         observer = nil
         observedPID = nil
+        observedLaunchDate = nil
+        observedProcessIncarnation = nil
 
         let pid = app.processIdentifier
 
@@ -439,27 +719,47 @@ final class WindowEventObserver {
         }
         selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(reactivatedPrefix) }
         tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(reactivatedPrefix) }
+        // Establish the activation before creating the observer. If creation
+        // fails, initial AX polling and the bounded reattach loop still have a
+        // valid owner and can recover without requiring another app switch.
+        observedPID = pid
+        observedLaunchDate = app.launchDate
+        observedProcessIncarnation = appIncarnation
+        _ = activationTracker.activate(pid: pid)
+        let appElement = AXUIElementCreateApplication(pid)
+
         var newObserver: AXObserver?
-        let result = AXObserverCreate(pid, { _, element, notification, refcon in
+        let result = AXObserverCreate(pid, { sourceObserver, element, notification, refcon in
             guard let refcon else { return }
+            guard let sourcePID = WindowEventObserver.sourcePID(of: element) else { return }
             let unmanaged = Unmanaged<WindowEventObserver>.fromOpaque(refcon)
             let obj = unmanaged.takeUnretainedValue()
             Task { @MainActor in
-                obj.handle(notification: notification as String, element: element)
+                obj.handleAXCallback(
+                    sourceObserver: sourceObserver,
+                    notification: notification as String,
+                    element: element,
+                    sourcePID: sourcePID
+                )
             }
         }, &newObserver)
 
         guard result == .success, let newObserver else {
             DiagnosticLog.debug("attach: AXObserverCreate failed result=\(result.rawValue)")
+            observerRegistrationFailed = true
+            startReattachLoop(pid: pid, appElement: appElement, bundleIdentifier: app.bundleIdentifier)
+            startInitialCenteringRetries(
+                pid: pid,
+                appElement: appElement,
+                bundleIdentifier: app.bundleIdentifier
+            )
             return
         }
 
         observer = newObserver
-        observedPID = pid
 
         CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(newObserver), .defaultMode)
 
-        let appElement = AXUIElementCreateApplication(pid)
         let registrationSucceeded = registerNotifications(on: newObserver, appElement: appElement, pid: pid)
 
         // 注册失败（Electron 冷启动 AX 未就绪，AXError.cannotComplete）：启动重连循环，
@@ -508,52 +808,66 @@ final class WindowEventObserver {
     /// 注册失败后的重连循环：每 500ms 重建 observer 并重新注册通知，直到成功或 app 失焦。
     /// 直接消除「observer 注册失败后永不重连」导致 Electron 应用窗口创建后无通知、不平铺的死路。
     private func startReattachLoop(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
-        reattachTimer?.cancel()
+        guard let activationToken = currentActivationToken(for: pid) else { return }
+        cancelReattachTimer()
+        let lease = makeContinuationLease(token: activationToken)
+        _ = reattachTimerOwnership.begin(owner: lease)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         var attempts = 0
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             attempts += 1
+            guard self.reattachTimerOwnership.owner == lease else { return }
 
             // 前台守卫：app 已不是前台则停止重连。
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                self.reattachTimer?.cancel()
-                self.reattachTimer = nil
+            if !self.ownsCurrentActivation(activationToken, pid: pid) ||
+                NSWorkspace.shared.frontmostApplication?.processIdentifier != pid
+            {
+                self.cancelReattachTimer(ownedBy: lease)
                 DiagnosticLog.debug("reattach: stopped (pid=\(pid) no longer frontmost) attempts=\(attempts)")
                 return
             }
 
-            // 重建 observer 并重新注册。
-            if let oldObserver = self.observer {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(oldObserver), .defaultMode)
-            }
-            self.observer = nil
-            self.observedPID = nil
-
+            // Build and register the replacement before touching the current
+            // observer. A failed AXObserverCreate/registration must leave the
+            // activation identity and polling fallback intact.
             var newObserver: AXObserver?
-            let result = AXObserverCreate(pid, { _, element, notification, refcon in
+            let result = AXObserverCreate(pid, { sourceObserver, element, notification, refcon in
                 guard let refcon else { return }
+                guard let sourcePID = WindowEventObserver.sourcePID(of: element) else { return }
                 let unmanaged = Unmanaged<WindowEventObserver>.fromOpaque(refcon)
                 let obj = unmanaged.takeUnretainedValue()
                 Task { @MainActor in
-                    obj.handle(notification: notification as String, element: element)
+                    obj.handleAXCallback(
+                        sourceObserver: sourceObserver,
+                        notification: notification as String,
+                        element: element,
+                        sourcePID: sourcePID
+                    )
                 }
             }, &newObserver)
 
             guard result == .success, let newObserver else {
                 DiagnosticLog.debug("reattach: AXObserverCreate failed attempts=\(attempts) result=\(result.rawValue)")
+                if attempts >= 15 {
+                    self.cancelReattachTimer(ownedBy: lease)
+                    DiagnosticLog.debug("reattach: gave up after \(attempts) attempts pid=\(pid), relying on poll path")
+                }
                 return
             }
-            self.observer = newObserver
-            self.observedPID = pid
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(newObserver), .defaultMode)
-
             let success = self.registerNotifications(on: newObserver, appElement: appElement, pid: pid)
             if success {
+                if let oldObserver = self.observer {
+                    CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(oldObserver), .defaultMode)
+                }
+                self.observer = newObserver
+                self.observedPID = pid
+                self.observedLaunchDate = NSRunningApplication(processIdentifier: pid)?.launchDate
+                self.observedProcessIncarnation = Self.processIncarnation(for: pid)
+                CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(newObserver), .defaultMode)
                 self.observerRegistrationFailed = false
-                self.reattachTimer?.cancel()
-                self.reattachTimer = nil
+                self.cancelReattachTimer(ownedBy: lease)
                 DiagnosticLog.debug("reattach: succeeded pid=\(pid) attempts=\(attempts)")
                 // 重连成功后重置 initial retry，立即开始处理（窗口可能已就绪）。
                 self.startInitialCenteringRetries(pid: pid, appElement: appElement, bundleIdentifier: bundleIdentifier)
@@ -562,8 +876,7 @@ final class WindowEventObserver {
 
             // 重连上限（15 次 × 500ms ≈ 7.5s），避免无限重试；超时后依赖轮询路径兜底。
             if attempts >= 15 {
-                self.reattachTimer?.cancel()
-                self.reattachTimer = nil
+                self.cancelReattachTimer(ownedBy: lease)
                 DiagnosticLog.debug("reattach: gave up after \(attempts) attempts pid=\(pid), relying on poll path")
             }
         }
@@ -572,12 +885,12 @@ final class WindowEventObserver {
     }
 
     @discardableResult
-    private func handle(notification: String, element: AXUIElement, forcedPID: pid_t? = nil) -> Bool {
+    private func handle(notification: String, element: AXUIElement, forcedPID: pid_t? = nil) -> HandleOutcome {
         // For focused-window-changed, element is usually the app; for window-created it can be the window.
         // We always process the current focused window once per strategy.
         guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
             DiagnosticLog.debug("handle[\(notification)]: no frontmost app")
-            return false
+            return .ignored
         }
 
         let pid: pid_t
@@ -590,7 +903,7 @@ final class WindowEventObserver {
         // Only act on the frontmost app to avoid moving background windows.
         guard frontmostApp.processIdentifier == pid else {
             DiagnosticLog.debug("handle[\(notification)]: frontmost \(frontmostApp.processIdentifier) != pid \(pid), skip")
-            return false
+            return .ignored
         }
 
         // 跳过 Plumb 自身：设置窗口由 SettingsWindowController.showWindow 的 completionHandler 精确居中
@@ -599,33 +912,35 @@ final class WindowEventObserver {
         // 纯早退：不 markCentered、不锁 processedPIDs，不影响其他 app。
         if pid == ProcessInfo.processInfo.processIdentifier {
             DiagnosticLog.debug("handle[\(notification)]: own PID \(pid) — settings window centered by showWindow, skip")
-            return false
+            return .ignored
         }
 
         // Reject stale notifications delivered from a previously-observed app after the observer has
         // already been rebound to a different app.
         if let observedPID, observedPID != pid {
             DiagnosticLog.debug("handle[\(notification)]: stale — observedPID=\(observedPID) pid=\(pid), skip")
-            return false
+            return .ignored
         }
 
         // resize 事件走独立旁路：必须在下方 processedPIDs 守卫之前分流，否则一个已平铺的窗口
         //（PID 已被锁）在用户缩放后，事件会被 PID 锁直接 short-circuit，到不了「标记手动」旁路。
         // handleResize 内部自带 frontmost / stale / 真实窗口 / 自身动画守卫，仅标记 manualWindowKeys。
         if notification == (kAXResizedNotification as String) {
-            return handleResize(element: element, forcedPID: forcedPID)
+            _ = handleResize(element: element, forcedPID: pid)
+            return .ignored
         }
 
         // moved 事件走独立旁路（与 resize 同构）：用户拖动 → 标记该窗口为「手动」，不再立即吸附。
         // 必须在 processedPIDs 锁之前分流，否则已平铺窗口（PID 已锁）的 moved 永远到不了旁路。
         if notification == (kAXMovedNotification as String) {
-            return handleMove(element: element, forcedPID: forcedPID)
+            _ = handleMove(element: element, forcedPID: pid)
+            return .ignored
         }
 
         let appElement = AXUIElementCreateApplication(pid)
         guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: element) else {
             DiagnosticLog.debug("handle[\(notification)]: no centerable candidate window")
-            return false
+            return .retry
         }
         let bundleIdentifier = frontmostApp.bundleIdentifier
 
@@ -641,7 +956,7 @@ final class WindowEventObserver {
                 DiagnosticLog.debug("handle[\(notification)]: PID \(pid) already processed, but new document window should tile")
             } else {
                 DiagnosticLog.debug("handle[\(notification)]: PID \(pid) already processed this cycle, skip (suppress secondary window)")
-                return false
+                return .completed
             }
         }
 
@@ -653,7 +968,7 @@ final class WindowEventObserver {
         // 时重新排版」新需求的实现位置。
         if let key = key(pid: pid, window: windowElement), manualWindowKeys.contains(key) {
             DiagnosticLog.debug("handle[\(notification)]: manual window — keep manual, skip pid=\(pid) key=\(key)")
-            return false
+            return .ignored
         }
 
         // ChatGPT Atlas（com.openai.atlas）特例：仅其「设置窗口」被自动居中/平铺后会反复跳动
@@ -667,7 +982,7 @@ final class WindowEventObserver {
            isAtlasSettingsWindow(windowElement)
         {
             DiagnosticLog.debug("handle[\(notification)]: ChatGPT Atlas settings window — skip (jitter fix) pid=\(pid)")
-            return false
+            return .ignored
         }
 
         // 手记（Journal）设置窗口特例：设置窗口与主窗口 subrole/AXIdentifier/kAXMainWindow 三项硬特征
@@ -677,7 +992,7 @@ final class WindowEventObserver {
            isJournalSettingsWindow(windowElement)
         {
             DiagnosticLog.debug("handle[\(notification)]: Journal settings window — skip (no center, no tile) pid=\(pid)")
-            return false
+            return .ignored
         }
 
         // 所有 App 通用：二级窗口屏蔽。任何 App 的二级窗口（设置/下载/弹窗/Get Info/扩展页 等）
@@ -696,16 +1011,17 @@ final class WindowEventObserver {
         if isSecondaryWindowOfApp(windowElement, appElement: appElement, bundleIdentifier: bundleIdentifier)
         {
             DiagnosticLog.debug("handle[\(notification)]: secondary window — skip (no tile, no center) pid=\(pid)")
-            return false
+            return .ignored
         }
 
-        return applyLayout(
+        let didComplete = applyLayout(
             notification: notification,
             windowElement: windowElement,
             pid: pid,
             appElement: appElement,
             bundleIdentifier: bundleIdentifier
         )
+        return didComplete ? .completed : .retry
     }
 
     /// 排版决策（平铺 / 居中）的可复用入口。
@@ -723,6 +1039,10 @@ final class WindowEventObserver {
         appElement: AXUIElement,
         bundleIdentifier: String?
     ) -> Bool {
+        guard let activationToken = currentActivationToken(for: pid) else {
+            DiagnosticLog.debug("handle[\(notification)]: no current activation for pid=\(pid), skip")
+            return false
+        }
         let tilingSettings = tilingSettingsStore.load()
         // 运行时排版决策（互斥）：平铺优先于居中。一个 App 在同一激活周期内只会被自动
         // 「平铺」或「居中」之一——不再有「先平铺再居中」（centerAfterTile）。
@@ -742,14 +1062,9 @@ final class WindowEventObserver {
                 return false
             }
 
-            // 单飞：当前已有任何动画在进行中（平铺或居中）→ 直接返回，不启动新动画。
-            // 目的：消灭 .document / .undetermined 分类摆动导致的 center/tile 并发对抗——
-            // 一个动画还没完成时若再次进入本分支，旧实现会并发发起第二个动画，两个写入流
-            // 互相覆盖是「窗口被来回拉扯」的另一根因。return false 让重试/事件循环稍后再来。
-            if service.isAnyAnimationInProgress {
-                DiagnosticLog.debug("handle[\(notification)]: animation in progress — defer tiling pid=\(pid)")
-                return false
-            }
+            // Tile submissions are coordinated explicitly below. Do not drop a
+            // newly-created document merely because another window is animating;
+            // it must enter the FIFO and wait for the global writer slot.
 
             // 浏览器/访达二级窗口屏蔽：已在 handle() 主路径 if shouldTile 分流前统一拦截（同时保护居中+平铺），
             // 此处不再重复检查。
@@ -765,7 +1080,7 @@ final class WindowEventObserver {
             //   - .document（无 kAXDocument 但子树含文档内容 role，如新建未保存文档）
             //     → 跳过本分支，落到下方平铺（这正是 bbfdd1c 想要、又不破坏选择器的行为）。
             //   - .undetermined（子树未就绪，Office 启动期 0.45s 空壳）→ 只居中，不锁、不 markCentered，
-            //     return true 但【不终止重试】。这是修复「Excel/Word 文件列表被平铺」的根因：
+            //     返回 retry，让 initial retry 继续。这是修复「Excel/Word 文件列表被平铺」的根因：
             //     运行时日志确证 Office 在 0.45s 时子树还没构建出 AXCollectionList，旧实现把它当
             //     「非选择器」→ 平铺 + processedPIDs.insert 锁死，导致即使几秒后子树就绪也永不再评估。
             //     改为只居中、不锁，让 startInitialCenteringRetries 继续重试，直到子树能明确判定
@@ -793,22 +1108,80 @@ final class WindowEventObserver {
             {
                 switch classifyDocumentAppWindow(windowElement) {
                 case .gallery:
+                    guard tileCoordinator.activeID == nil else {
+                        DiagnosticLog.debug("handle[\(notification)]: active tile session — defer gallery center pid=\(pid)")
+                        return false
+                    }
                     DiagnosticLog.debug("handle[\(notification)]: gallery window — center only, keep PID unlocked, not marked pid=\(pid)")
                     do {
-                        try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                        return true   // 重试会继续；gallery 不会变成文档，但保持不锁语义一致。
+                        let startFlag = AnimationStartFlag()
+                        let startResult = try service.centerWindowElementAnimated(
+                            windowElement,
+                            pid: pid,
+                            appElement: appElement
+                        ) { [weak self] outcome in
+                            self?.handleCenterOnlyCompletion(
+                                outcome,
+                                windowElement: windowElement,
+                                pid: pid,
+                                activationToken: activationToken,
+                                startFlag: startFlag
+                            )
+                        }
+                        if startResult == .started {
+                            startFlag.didStart = true
+                        }
+                        recordSynchronousCenterWriteGraceIfNeeded(
+                            startResult,
+                            windowElement: windowElement,
+                            pid: pid,
+                            reason: "gallery center synchronous fallback"
+                        )
+                        switch startResult {
+                        case .started, .completedSynchronously:
+                            return true   // gallery 已是明确终态：停止轮询，但保持不锁，等待后续文档创建通知。
+                        case .busy:
+                            DiagnosticLog.debug("handle[\(notification)]: gallery center busy pid=\(pid), retry")
+                            return false
+                        }
                     } catch {
                         DiagnosticLog.debug("handle[\(notification)]: chooser center failed pid=\(pid) error=\(error)")
                         return false
                     }
                 case .undetermined:
+                    guard tileCoordinator.activeID == nil else {
+                        DiagnosticLog.debug("handle[\(notification)]: active tile session — defer undetermined center pid=\(pid)")
+                        return false
+                    }
                     // 子树未就绪（Office 启动期空壳）：只居中、不锁、不 markCentered、继续重试。
                     // ⚠️ 不落入下方 tilePendingWindows——那会平铺并锁死 PID，造成「文件列表被平铺」
                     // 且后续真文档被永久挡住。等子树构建完成（后续重试）能明确判定后再处理。
                     DiagnosticLog.debug("handle[\(notification)]: undetermined window (subtree not ready) — center only, keep PID unlocked, retry will re-evaluate pid=\(pid)")
                     do {
-                        try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                        return true
+                        let startFlag = AnimationStartFlag()
+                        let startResult = try service.centerWindowElementAnimated(
+                            windowElement,
+                            pid: pid,
+                            appElement: appElement
+                        ) { [weak self] outcome in
+                            self?.handleCenterOnlyCompletion(
+                                outcome,
+                                windowElement: windowElement,
+                                pid: pid,
+                                activationToken: activationToken,
+                                startFlag: startFlag
+                            )
+                        }
+                        if startResult == .started {
+                            startFlag.didStart = true
+                        }
+                        recordSynchronousCenterWriteGraceIfNeeded(
+                            startResult,
+                            windowElement: windowElement,
+                            pid: pid,
+                            reason: "undetermined center synchronous fallback"
+                        )
+                        return false  // 明确请求 initial retry 继续，等待子树进入 gallery/document 终态。
                     } catch {
                         DiagnosticLog.debug("handle[\(notification)]: undetermined center failed pid=\(pid) error=\(error)")
                         return false
@@ -830,10 +1203,42 @@ final class WindowEventObserver {
                let title = windowElement.axString(kAXTitleAttribute as CFString),
                dmgMonitor.isMountedDmgVolume(title)
             {
+                guard tileCoordinator.activeID == nil else {
+                    DiagnosticLog.debug("handle[\(notification)]: active tile session — defer DMG center pid=\(pid)")
+                    return false
+                }
                 DiagnosticLog.debug("handle[\(notification)]: DMG installer window — center only, keep PID unlocked, not marked pid=\(pid) title=\(title)")
                 do {
-                    try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
-                    return true
+                    let startFlag = AnimationStartFlag()
+                    let startResult = try service.centerWindowElementAnimated(
+                        windowElement,
+                        pid: pid,
+                        appElement: appElement
+                    ) { [weak self] outcome in
+                        self?.handleCenterOnlyCompletion(
+                            outcome,
+                            windowElement: windowElement,
+                            pid: pid,
+                            activationToken: activationToken,
+                            startFlag: startFlag
+                        )
+                    }
+                    if startResult == .started {
+                        startFlag.didStart = true
+                    }
+                    recordSynchronousCenterWriteGraceIfNeeded(
+                        startResult,
+                        windowElement: windowElement,
+                        pid: pid,
+                        reason: "DMG center synchronous fallback"
+                    )
+                    switch startResult {
+                    case .started, .completedSynchronously:
+                        return true
+                    case .busy:
+                        DiagnosticLog.debug("handle[\(notification)]: DMG center busy pid=\(pid), retry")
+                        return false
+                    }
                 } catch {
                     DiagnosticLog.debug("handle[\(notification)]: DMG center failed pid=\(pid) error=\(error)")
                     return false
@@ -841,9 +1246,10 @@ final class WindowEventObserver {
             }
             // 阶段 3.1：document-chooser .document 窗口先等 frame 稳定再平铺（避免与 app 自设 frame 对抗）。
             // 稳定门异步驱动采样 + 平铺；此处 return false 让 startInitialCenteringRetries 不停，
-            // 但稳定门进行中（documentStableGatePIDs 含 pid）会在下方守卫处短路，不会重复进入。
+            // 但稳定门进行中（按 window key 跟踪）会在下方守卫处短路，不会重复进入。
             if documentStableGateActive {
-                if documentStableGatePIDs.contains(pid) {
+                let stableGateKey = operationWindowKey(pid: pid, window: windowElement)
+                if documentStableTimerOwnership.keys.contains(stableGateKey) {
                     DiagnosticLog.debug("handle[\(notification)]: document stable gate already sampling pid=\(pid) — skip re-entry")
                     return false
                 }
@@ -873,13 +1279,75 @@ final class WindowEventObserver {
             return false
         }
 
+        guard tileCoordinator.activeID == nil else {
+            DiagnosticLog.debug("handle[\(notification)]: active tile session — defer center pid=\(pid)")
+            return false
+        }
+
         if hasCentered(windowElement: windowElement, pid: pid) {
             DiagnosticLog.debug("handle[\(notification)]: already centered pid=\(pid)")
             return false
         }
 
         do {
-            try service.centerWindowElementAnimated(windowElement, pid: pid, appElement: appElement)
+            let isTransient = looksLikeTransientWindow(windowElement)
+            let startFlag = AnimationStartFlag()
+            let startResult = try service.centerWindowElementAnimated(
+                windowElement,
+                pid: pid,
+                appElement: appElement
+            ) { [weak self] outcome in
+                guard let self else { return }
+                guard self.ownsCurrentActivation(activationToken, pid: pid),
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+                else {
+                    DiagnosticLog.debug("center completion: stale/non-frontmost pid=\(pid), keep unlocked")
+                    return
+                }
+                switch outcome {
+                case .userInterrupted:
+                    self.recordManualCenterInterruption(
+                        outcome,
+                        windowElement: windowElement,
+                        pid: pid,
+                        activationToken: activationToken
+                    )
+                    return
+                case .writerFailed:
+                    DiagnosticLog.debug("center completion: writer failed pid=\(pid), keep unlocked for retry")
+                    return
+                case .finished:
+                    if startFlag.didStart {
+                        self.recordSelfLayoutGrace(
+                            windowElement: windowElement,
+                            pid: pid,
+                            reason: "center animation completion"
+                        )
+                    }
+                    break
+                }
+                if isTransient {
+                    DiagnosticLog.debug("center completion: transient window, keep PID unlocked pid=\(pid)")
+                    return
+                }
+                guard self.service.isWindowAtCenteredTarget(windowElement, pid: pid) else {
+                    DiagnosticLog.debug("center completion: AX readback missed target pid=\(pid), keep unlocked for retry")
+                    return
+                }
+                self.markCentered(windowElement: windowElement, pid: pid)
+                self.processedPIDs.insert(pid)
+                self.cancelInitialCenterTimer()
+                DiagnosticLog.debug("center completion: verified and locked pid=\(pid)")
+            }
+            if startResult == .started {
+                startFlag.didStart = true
+            }
+            recordSynchronousCenterWriteGraceIfNeeded(
+                startResult,
+                windowElement: windowElement,
+                pid: pid,
+                reason: "center synchronous fallback"
+            )
             // 瞬态窗（登录/splash/二维码/小工具窗）：居中它但【不】锁 PID、不 markCentered，
             // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被居中锁定。
             // 修复 WeChat 等「先登录窗后主窗口」app：登录窗居中即锁死 PID，导致 3.5s 后到达的
@@ -887,19 +1355,86 @@ final class WindowEventObserver {
             // 与平铺路径 didWindowActuallyTile=false（启动期小窗）/ document-chooser gallery
             // / DMG installer 分支的「不锁」不变量同构。
             // 返回 false 让 retry 循环不停（仅 handle 返回 true 才停），与平铺小窗分支 return false 一致。
-            if looksLikeTransientWindow(windowElement) {
-                DiagnosticLog.debug("handle[\(notification)]: centered transient window — keep PID unlocked for retry pid=\(pid)")
+            if isTransient {
+                DiagnosticLog.debug("handle[\(notification)]: centering transient window — keep PID unlocked for retry pid=\(pid)")
                 return false
             }
-            markCentered(windowElement: windowElement, pid: pid)
-            processedPIDs.insert(pid)   // Bug #3: 本周期内此 app 已处理，跳过后续窗口
-            DiagnosticLog.debug("handle[\(notification)]: CENTERED pid=\(pid)")
-            return true
+            // Async work is deliberately not marked complete here. The typed completion above performs
+            // readback and locking; busy/started requests keep the bounded initial retry alive.
+            return startResult.isCompletedSynchronously && hasCentered(windowElement: windowElement, pid: pid)
         } catch {
             // Skip fullscreen or any other temporary failures silently.
             DiagnosticLog.debug("handle[\(notification)]: center failed pid=\(pid) error=\(error)")
             return false
         }
+    }
+
+    /// Move/resize notifications emitted during our animation are deliberately
+    /// shielded from the manual-placement path. If the animator detects real
+    /// user drift, its typed interruption is therefore the authoritative place
+    /// to make manual placement sticky for the rest of this activation.
+    private func recordManualCenterInterruption(
+        _ outcome: WindowAnimator.Outcome,
+        windowElement: AXUIElement,
+        pid: pid_t,
+        activationToken: LayoutActivationToken
+    ) {
+        guard outcome == .userInterrupted,
+              ownsCurrentActivation(activationToken, pid: pid),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        else { return }
+        if let cacheKey = key(pid: pid, window: windowElement) {
+            manualWindowKeys.insert(cacheKey)
+        }
+        cancelInitialCenterTimer()
+        DiagnosticLog.debug("center completion: user interrupted, mark manual for activation pid=\(pid)")
+    }
+
+    private func handleCenterOnlyCompletion(
+        _ outcome: WindowAnimator.Outcome,
+        windowElement: AXUIElement,
+        pid: pid_t,
+        activationToken: LayoutActivationToken,
+        startFlag: AnimationStartFlag
+    ) {
+        if outcome == .userInterrupted {
+            recordManualCenterInterruption(
+                outcome,
+                windowElement: windowElement,
+                pid: pid,
+                activationToken: activationToken
+            )
+            return
+        }
+        guard outcome == .finished,
+              startFlag.didStart,
+              ownsCurrentActivation(activationToken, pid: pid),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        else { return }
+        recordSelfLayoutGrace(
+            windowElement: windowElement,
+            pid: pid,
+            reason: "center-only animation completion"
+        )
+    }
+
+    /// `centerWindowElementAnimated` can fall back to an immediate AX write when
+    /// target resolution is transiently unavailable. Its completion runs before
+    /// the start result is returned, so the async start flag cannot describe that
+    /// write. Record grace from the typed return value to shield the delayed AX
+    /// move notification without legalizing a true already-at-target no-op.
+    private func recordSynchronousCenterWriteGraceIfNeeded(
+        _ startResult: WindowAnimationStartResult,
+        windowElement: AXUIElement,
+        pid: pid_t,
+        reason: String
+    ) {
+        guard startResult.synchronousWriteOccurred else { return }
+        recordSelfLayoutGrace(
+            windowElement: windowElement,
+            pid: pid,
+            reason: reason
+        )
     }
 
     private func centerCandidateWindow(for appElement: AXUIElement, hintedElement: AXUIElement?) -> AXUIElement? {
@@ -1064,7 +1599,10 @@ final class WindowEventObserver {
     }
 
     private func startInitialCenteringRetries(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
-        initialCenterTimer?.cancel()
+        guard let activationToken = currentActivationToken(for: pid) else { return }
+        cancelInitialCenterTimer()
+        let lease = makeContinuationLease(token: activationToken)
+        _ = initialCenterTimerOwnership.begin(owner: lease)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         var attempts = 0
         // 首次触发延迟 0.45s：让 app 的激活动画结束、窗口位置/尺寸稳定后再居中，
@@ -1074,27 +1612,32 @@ final class WindowEventObserver {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             attempts += 1
+            guard self.initialCenterTimerOwnership.owner == lease else { return }
 
-            // If user has switched away, stop retrying.
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                self.initialCenterTimer?.cancel()
-                self.initialCenterTimer = nil
+            guard self.ownsCurrentActivation(activationToken, pid: pid) else {
+                DiagnosticLog.debug("initial-retry: stale activation pid=\(pid), drop")
+                self.cancelInitialCenterTimer(ownedBy: lease)
                 return
             }
 
-            // handle 返回 true 表示该窗口已完成居中/平铺（含瞬态/启动小窗等不锁 PID 的情形下返回
-            // false 继续重试）。成功处理后停止重试。
-            let didProcess = self.handle(notification: "initial-retry", element: appElement, forcedPID: pid)
-            if didProcess {
-                self.initialCenterTimer?.cancel()
-                self.initialCenterTimer = nil
+            // If user has switched away, stop retrying.
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+                self.cancelInitialCenterTimer(ownedBy: lease)
+                return
+            }
+
+            // 只有 `.retry` 继续轮询；`.completed` 与 `.ignored` 都是本次 activation 的终态。
+            // gallery 虽不锁 PID，但已明确分类并完成 center-only，可停止轮询，后续文档创建通知仍会处理；
+            // undetermined 则返回 `.retry`，等待 AX 子树就绪后重新分类。
+            let outcome = self.handle(notification: "initial-retry", element: appElement, forcedPID: pid)
+            if !outcome.shouldContinueInitialRetry {
+                self.cancelInitialCenterTimer(ownedBy: lease)
                 return
             }
 
             // 固定上限 10 次（首次 0.45s + 9 次重试 ≈ 9.45s）。
             if attempts >= 10 {
-                self.initialCenterTimer?.cancel()
-                self.initialCenterTimer = nil
+                self.cancelInitialCenterTimer(ownedBy: lease)
             }
         }
         initialCenterTimer = timer
@@ -1105,76 +1648,73 @@ final class WindowEventObserver {
     /// `tileWindowElementAnimated`（其内部 emitFinalAnchor 会按「先 size 后 position」写精确目标 /
     /// 妥协形态），随后走完成判定与预算锁定。延迟给文档 app 迟到的自 resize 留出 settle 时间，
     /// 替代加载中的多轮拉锯。一次性、可取消、带前台守卫；预算耗尽则不再校正（直接锁定）。
-    private func startPostCompletionCorrection(
-        pid: pid_t,
-        appElement: AXUIElement,
-        windowElement: AXUIElement,
-        insets: TileInsets
-    ) {
-        postCompletionCorrectionTimer?.cancel()
+    private func startPostCompletionCorrection(_ payload: TileOperationPayload) {
+        guard ownsCurrentTileOperation(payload) else { return }
+        cancelPostCompletionCorrectionTimer()
+        let lease = makeContinuationLease(
+            token: payload.id.token,
+            operationID: payload.id,
+            windowKey: payload.id.windowKey
+        )
+        _ = postCompletionCorrectionTimerOwnership.begin(owner: lease)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .milliseconds(Self.postCompletionCorrectionDelayMs))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            self.postCompletionCorrectionTimer = nil
+            guard self.postCompletionCorrectionTimerOwnership.owner == lease else { return }
+            guard self.ownsCurrentTileOperation(payload) else {
+                self.cancelPostCompletionCorrectionTimer(ownedBy: lease)
+                DiagnosticLog.debug("post-completion-correction: stale operation id=\(payload.id), drop")
+                return
+            }
+            self.cancelPostCompletionCorrectionTimer(ownedBy: lease)
 
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
-                DiagnosticLog.debug("post-completion-correction: pid=\(pid) no longer frontmost, cancel")
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == payload.pid else {
+                DiagnosticLog.debug("post-completion-correction: pid=\(payload.pid) no longer frontmost, cancel")
+                return
+            }
+            if let cacheKey = self.key(pid: payload.pid, window: payload.windowElement),
+               self.manualWindowKeys.contains(cacheKey)
+            {
+                self.completeTileOperation(payload, reason: "manual during correction wait")
                 return
             }
 
             // 已达标：直接锁定。
-            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
+            if self.isWindowNearTiledTarget(
+                payload.windowElement,
+                pid: payload.pid,
+                appElement: payload.appElement,
+                insets: payload.insets
+            ) {
                 self.finishTileSession(
-                    windowElement: windowElement,
-                    pid: pid,
-                    appElement: appElement,
+                    windowElement: payload.windowElement,
+                    pid: payload.pid,
+                    appElement: payload.appElement,
                     wroteLayout: true,   // 校正前的首铺动画已写 AX → 记录自排版宽限。
-                    reason: "post-completion-correction reached target after delay"
+                    reason: "post-completion-correction reached target after delay",
+                    operationID: payload.id
                 )
-                DiagnosticLog.debug("post-completion-correction: reached target after delay, lock pid=\(pid)")
+                DiagnosticLog.debug("post-completion-correction: reached target after delay, lock pid=\(payload.pid)")
                 return
             }
 
             // 预算耗尽：接受当前 frame 锁定。
-            if self.isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
+            if self.isTileBudgetExhausted(windowElement: payload.windowElement, pid: payload.pid) {
                 self.forceLockOnBudgetExhaustion(
-                    windowElement: windowElement,
-                    pid: pid,
-                    appElement: appElement,
-                    insets: insets,
-                    reason: "post-completion-correction budget exhausted"
+                    windowElement: payload.windowElement,
+                    pid: payload.pid,
+                    appElement: payload.appElement,
+                    insets: payload.insets,
+                    reason: "post-completion-correction budget exhausted",
+                    operationID: payload.id
                 )
                 return
             }
 
-            // 仍有预算：重触发一次精确目标平铺（消耗预算），其完成回调再次走判定/预算/校正循环。
-            self.recordTileAttempt(windowElement: windowElement, pid: pid)
-            _ = try? self.service.tileWindowElementAnimated(
-                windowElement, pid: pid, appElement: appElement, insets: insets
-            ) { [weak self] in
-                guard let self else { return }
-                self.recordSelfLayoutGrace(windowElement: windowElement, pid: pid, reason: "post-completion-correction completion")
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-                if self.didWindowActuallyTile(windowElement, pid: pid, insets: insets) {
-                    self.startTileStabilizationRetries(
-                        pid: pid,
-                        appElement: appElement,
-                        windowElement: windowElement,
-                        insets: insets
-                    )
-                    DiagnosticLog.debug("post-completion-correction: reached target, lock pid=\(pid)")
-                } else {
-                    // 校正后仍未达标：交给稳定重试接力（其内部也有预算兜底）。
-                    self.startTileStabilizationRetries(
-                        pid: pid,
-                        appElement: appElement,
-                        windowElement: windowElement,
-                        insets: insets
-                    )
-                    DiagnosticLog.debug("post-completion-correction: still not at target, defer to stabilization pid=\(pid)")
-                }
-            }
+            // 仍有预算：重触发一次精确目标平铺。预算只在 service
+            // 真正返回 `.started` 时消耗。
+            self.launchTileAnimation(payload, reason: "post-completion-correction")
         }
         postCompletionCorrectionTimer = timer
         timer.resume()
@@ -1185,7 +1725,8 @@ final class WindowEventObserver {
     /// 每 `documentStableSampleIntervalMs`（400ms）采样一次窗口 frame，连续两次一致（±2px）才
     /// 启动平铺；最多采样 `documentStableMaxSamples`（6 ≈ 2.4s）次后无条件开始。定时器可取消、
     /// 带前台守卫，与「attach 后 0.45s 再首铺」的设计哲学一致，直接实现「一次就平铺完成」。
-    /// 采样期间通过 `documentStableGatePIDs` 抑制 `startInitialCenteringRetries` 的重复进入。
+    /// 采样期间通过 window-key 集合抑制 `startInitialCenteringRetries` 对同一窗口的重复进入；
+    /// 同 PID 的其它未保存文档仍各自拥有独立 gate/timer。
     private func startDocumentStableGate(
         pid: pid_t,
         appElement: AXUIElement,
@@ -1193,8 +1734,13 @@ final class WindowEventObserver {
         insets: TileInsets,
         bundleIdentifier: String?
     ) {
-        documentStableGatePIDs.insert(pid)
-        documentStableTimer?.cancel()
+        guard let activationToken = currentActivationToken(for: pid) else { return }
+        let windowKey = operationWindowKey(pid: pid, window: primaryWindow)
+        let lease = makeContinuationLease(token: activationToken, windowKey: windowKey)
+        if let previousOwner = documentStableTimerOwnership.owner(for: windowKey) {
+            endDocumentStableGate(lease: previousOwner)
+        }
+        _ = documentStableTimerOwnership.begin(owner: lease, for: windowKey)
         var lastFrame: CGRect?
         var samples = 0
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -1203,10 +1749,20 @@ final class WindowEventObserver {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             samples += 1
+            guard self.documentStableTimerOwnership.owns(lease, for: windowKey) else { return }
+
+            guard self.ownsCurrentActivation(activationToken, pid: pid),
+                  Self.sourcePID(of: primaryWindow) == pid,
+                  self.operationWindowKey(pid: pid, window: primaryWindow) == windowKey
+            else {
+                self.endDocumentStableGate(lease: lease)
+                DiagnosticLog.debug("document-stable-gate: stale activation pid=\(pid), cancel")
+                return
+            }
 
             // 前台守卫：切走 app 即停采样、清门标记。
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                self.endDocumentStableGate(pid: pid)
+                self.endDocumentStableGate(lease: lease)
                 DiagnosticLog.debug("document-stable-gate: pid=\(pid) no longer frontmost, cancel")
                 return
             }
@@ -1224,18 +1780,7 @@ final class WindowEventObserver {
             DiagnosticLog.debug("document-stable-gate: sample \(samples)/\(Self.documentStableMaxSamples) pid=\(pid) frame=\(current.map { String(describing: $0) } ?? "nil") stable=\(stable)")
 
             if stable || samples >= Self.documentStableMaxSamples {
-                self.endDocumentStableGate(pid: pid)
-                // 预算守卫：等稳期间若预算已被耗尽（理论上不会，但防御），直接接受当前 frame 锁定。
-                if self.isTileBudgetExhausted(windowElement: primaryWindow, pid: pid) {
-                    self.forceLockOnBudgetExhaustion(
-                        windowElement: primaryWindow,
-                        pid: pid,
-                        appElement: appElement,
-                        insets: insets,
-                        reason: "document-stable-gate budget exhausted"
-                    )
-                    return
-                }
+                self.endDocumentStableGate(lease: lease)
                 let _ = self.performTileAndLock(
                     notification: "document-stable-gate",
                     pid: pid,
@@ -1248,14 +1793,34 @@ final class WindowEventObserver {
                 lastFrame = current
             }
         }
-        documentStableTimer = timer
+        documentStableTimers[windowKey] = timer
         timer.resume()
     }
 
     private func endDocumentStableGate(pid: pid_t) {
-        documentStableGatePIDs.remove(pid)
-        documentStableTimer?.cancel()
-        documentStableTimer = nil
+        let ownedLeases = documentStableTimerOwnership.owners.values.filter { $0.token.pid == pid }
+        for lease in ownedLeases {
+            endDocumentStableGate(lease: lease)
+        }
+        let prefix = "\(pid):"
+        // Owners should all have been removed above. This prefix assertion is a
+        // diagnostic guard for any future owner representation change.
+        assert(!documentStableTimerOwnership.keys.contains { $0.hasPrefix(prefix) })
+    }
+
+    private func endDocumentStableGate(lease: LayoutContinuationLease) {
+        guard let windowKey = lease.windowKey,
+              documentStableTimerOwnership.end(ifOwnedBy: lease, for: windowKey)
+        else { return }
+        documentStableTimers.removeValue(forKey: windowKey)?.cancel()
+    }
+
+    private func cancelAllDocumentStableGates() {
+        for timer in documentStableTimers.values {
+            timer.cancel()
+        }
+        documentStableTimers.removeAll(keepingCapacity: false)
+        documentStableTimerOwnership.reset()
     }
 
     /// 共用的「平铺 + 锁定」执行体：被 `applyLayout` 同步路径与 document-stable-gate 复用。
@@ -1269,37 +1834,6 @@ final class WindowEventObserver {
         insets: TileInsets,
         bundleIdentifier: String?
     ) -> Bool {
-        // 无写入的平铺 preflight：候选窗口已满足最终平铺目标（精确目标 / 妥协形态 / 紧覆盖兜底）
-        // 时，直接锁定，**不**写任何 AX、**不**消耗预算、**不**记录自排版宽限。
-        //
-        // 解决的核心回归：尺寸受限的平铺 App（如 NetEase Cloud Music 拒绝目标高度 707、读回 752）
-        // 在每次 Command+Tab 重新激活时，attachToFrontmostApp 会清掉 processedPIDs / centered-cache /
-        // tile-session 预算，于是整条「平铺 → 妥协锚定 → 锁定」写入序列从头再来一遍；而旧实现的
-        // centerAfterTile 还会在锁定后再次居中移动 → 形成 113→68→90 的反复上下跳动。
-        // 本 preflight 让一个已处于可接受形态（前一次激活留下的）的窗口被立即识别并锁定，
-        // 不再触发任何动画/写入 → 重新激活对已就位的窗口幂等。
-        //
-        // 安全前置：必须排在「动画单飞守卫」之后（applyLayout 已在调用前用 isAnyAnimationInProgress
-        // 拦截），避免把进行中动画的中间帧误判为完成态。此处再次防御性检查，确保不会与进行中的
-        // 平铺会话打架。gallery / undetermined / DMG / 二级 / 手动窗口都不会到达这里——它们在
-        // applyLayout 更早的分支已 return，performTileAndLock 只处理真正的平铺候选。
-        if !service.isAnyAnimationInProgress,
-           service.isWindowAtTiledTarget(primaryWindow, pid: pid, insets: insets)
-        {
-            finishTileSession(
-                windowElement: primaryWindow,
-                pid: pid,
-                appElement: appElement,
-                wroteLayout: false,   // 无 AX 写入 → 不记录自排版宽限，后续手动拖拽可被立即识别。
-                reason: "tile-preflight: already satisfies final tile target; lock without AX write"
-            )
-            // 停掉任何同会话残留的稳定重试定时器（防御：理论上此处是首次进入，不应有残留）。
-            tileStabilizeTimer?.cancel()
-            tileStabilizeTimer = nil
-            DiagnosticLog.debug("handle[\(notification)]: tile-preflight already-at-target — lock without write pid=\(pid)")
-            return true
-        }
-
         guard let tiledWindow = tilePendingWindows(
             pid: pid,
             appElement: appElement,
@@ -1310,19 +1844,12 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[\(notification)]: tiling enabled but no window tiled")
             return false
         }
-        // 平铺未真正放大（启动期小窗 / 不可调大小窗口）：不锁 PID、不 markCentered，
-        // 让 startInitialCenteringRetries 继续接力，直到真正主窗口到达并被成功平铺。
-        if didWindowActuallyTile(tiledWindow, pid: pid, insets: insets) {
-            startTileStabilizationRetries(
-                pid: pid,
-                appElement: appElement,
-                windowElement: tiledWindow,
-                insets: insets
-            )
-            DiagnosticLog.debug("handle[\(notification)]: tiled pid=\(pid)")
-            return true
-        }
-        DiagnosticLog.debug("handle[\(notification)]: tile did not actually enlarge window — keep PID unlocked for retry pid=\(pid)")
+        // Submission is asynchronous. Only the typed completion + AX readback
+        // path may stabilize/lock; checking geometry immediately after starting
+        // an animation races its first frame and used to create duplicate retry
+        // channels.
+        _ = tiledWindow
+        DiagnosticLog.debug("handle[\(notification)]: tile operation submitted pid=\(pid)")
         return false
     }
 
@@ -1337,72 +1864,81 @@ final class WindowEventObserver {
         return CGRect(origin: pos, size: size)
     }
 
-    private func startTileStabilizationRetries(
-        pid: pid_t,
-        appElement: AXUIElement,
-        windowElement: AXUIElement,
-        insets: TileInsets
-    ) {
-        tileStabilizeTimer?.cancel()
+    private func startTileStabilizationRetries(_ payload: TileOperationPayload) {
+        guard ownsCurrentTileOperation(payload) else { return }
+        cancelTileStabilizeTimer()
+        let lease = makeContinuationLease(
+            token: payload.id.token,
+            operationID: payload.id,
+            windowKey: payload.id.windowKey
+        )
+        _ = tileStabilizeTimerOwnership.begin(owner: lease)
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        var attempts = 0
+        let busyDeadline = Date().addingTimeInterval(4.0)
         timer.schedule(deadline: .now() + 0.30, repeating: 0.35)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            attempts += 1
+            guard self.tileStabilizeTimerOwnership.owner == lease else { return }
 
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                self.tileStabilizeTimer?.cancel()
-                self.tileStabilizeTimer = nil
+            guard self.ownsCurrentTileOperation(payload) else {
+                self.cancelTileStabilizeTimer(ownedBy: lease)
+                DiagnosticLog.debug("tile stabilization: stale operation id=\(payload.id), drop")
+                return
+            }
+
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != payload.pid {
+                self.cancelTileStabilizeTimer(ownedBy: lease)
                 return
             }
 
             // 若上一轮动画仍在进行中，本轮直接跳过，避免叠加；动画内部已对同一窗口去重。
             if self.service.isAnyAnimationInProgress {
-                if attempts >= 8 {
-                    self.tileStabilizeTimer?.cancel()
-                    self.tileStabilizeTimer = nil
+                if Date() >= busyDeadline {
+                    self.cancelTileStabilizeTimer(ownedBy: lease)
+                    self.completeTileOperation(payload, reason: "stabilization writer busy timeout")
                 }
                 return
             }
 
             // 仅当窗口明显未达到平铺目标（尺寸偏小）时才重新触发，已基本铺满则停止重试。
-            if self.isWindowNearTiledTarget(windowElement, pid: pid, appElement: appElement, insets: insets) {
+            if self.isWindowNearTiledTarget(
+                payload.windowElement,
+                pid: payload.pid,
+                appElement: payload.appElement,
+                insets: payload.insets
+            ) {
+                self.cancelTileStabilizeTimer(ownedBy: lease)
                 self.finishTileSession(
-                    windowElement: windowElement,
-                    pid: pid,
-                    appElement: appElement,
+                    windowElement: payload.windowElement,
+                    pid: payload.pid,
+                    appElement: payload.appElement,
                     wroteLayout: true,   // 本轮重铺动画已写 AX → 记录自排版宽限。
-                    reason: "tile stabilization reached target"
+                    reason: "tile stabilization reached target",
+                    operationID: payload.id
                 )
-                DiagnosticLog.debug("tile stabilization: reached target and locked pid=\(pid)")
-                self.tileStabilizeTimer?.cancel()
-                self.tileStabilizeTimer = nil
+                DiagnosticLog.debug("tile stabilization: reached target and locked pid=\(payload.pid)")
                 return
             }
 
             // 每窗口平铺会话预算兜底：达到上限后接受当前 frame 并锁定，停止无限重试。
             // （Phase 1.3：稳定重试消耗同一预算。）
-            if !self.canStartTileAttempt(windowElement: windowElement, pid: pid) {
+            if !self.canStartTileAttempt(windowElement: payload.windowElement, pid: payload.pid) {
                 self.forceLockOnBudgetExhaustion(
-                    windowElement: windowElement, pid: pid, appElement: appElement, insets: insets,
-                    reason: "stabilization retries exhausted"
+                    windowElement: payload.windowElement,
+                    pid: payload.pid,
+                    appElement: payload.appElement,
+                    insets: payload.insets,
+                    reason: "stabilization retries exhausted",
+                    operationID: payload.id
                 )
                 return
             }
 
-            self.recordTileAttempt(windowElement: windowElement, pid: pid)
-            _ = try? self.service.tileWindowElementAnimated(
-                windowElement,
-                pid: pid,
-                appElement: appElement,
-                insets: insets
-            )
-
-            if attempts >= 5 {
-                self.tileStabilizeTimer?.cancel()
-                self.tileStabilizeTimer = nil
-            }
+            // Stop this polling generation before launching the next animation;
+            // its typed completion will create the next stabilization/correction
+            // continuation. This leaves a single retry channel.
+            self.cancelTileStabilizeTimer(ownedBy: lease)
+            self.launchTileAnimation(payload, reason: "stabilization retry")
         }
         tileStabilizeTimer = timer
         timer.resume()
@@ -1413,12 +1949,25 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         wroteLayout: Bool,
-        reason: String
+        reason: String,
+        operationID: LayoutOperationID
     ) {
+        guard let token = currentActivationToken(for: pid) else {
+            DiagnosticLog.debug("tile-session: stale/no activation pid=\(pid), refuse lock reason=\(reason)")
+            return
+        }
+        guard operationID.token == token, tileCoordinator.activeID == operationID else {
+            DiagnosticLog.debug("tile-session: stale operation id=\(operationID), refuse lock reason=\(reason)")
+            return
+        }
+        // End this operation's continuations before a coordinator completion
+        // promotes the next payload. Otherwise an old caller can cancel the new
+        // operation's freshly-created timer after `finishTileSession` returns.
+        cancelTileStabilizeTimer()
+        cancelPostCompletionCorrectionTimer()
         markCentered(windowElement: windowElement, pid: pid)
         processedPIDs.insert(pid)
-        initialCenterTimer?.cancel()
-        initialCenterTimer = nil
+        cancelInitialCenterTimer()
         // 仅当本次锁定前真的写了 AX（动画/校正/妥协锚定/预算耗尽锚定）时才记录自排版宽限。
         // 无写入的 preflight 锁定（窗口已达标）不记录宽限——否则用户的后续手动拖拽会被宽限期
         // 误吞（"no-write preflight 后手动拖拽不被识别"回归）。
@@ -1426,6 +1975,23 @@ final class WindowEventObserver {
             extendSelfLayoutGraceAfterSession(windowElement: windowElement, pid: pid)
         }
         DiagnosticLog.debug("tile-session: locked pid=\(pid) reason=\(reason) wroteLayout=\(wroteLayout)")
+        completeTileOperation(operationID, reason: reason)
+    }
+
+    private func completeTileOperation(_ payload: TileOperationPayload, reason: String) {
+        completeTileOperation(payload.id, reason: reason)
+    }
+
+    private func completeTileOperation(_ operationID: LayoutOperationID, reason: String) {
+        switch tileCoordinator.complete(operationID) {
+        case .ignored:
+            DiagnosticLog.debug("tile-coordinator: ignored stale completion id=\(operationID) reason=\(reason)")
+        case .completed(let next):
+            DiagnosticLog.debug("tile-coordinator: completed id=\(operationID) reason=\(reason) next=\(String(describing: next?.id))")
+            if let next {
+                startTileOperation(next.payload)
+            }
+        }
     }
 
     /// 处理 `kAXResizedNotification`：用户缩放窗口 → 标记「手动」，不再立即重铺。
@@ -1635,7 +2201,7 @@ final class WindowEventObserver {
     ///   能明确判定为 .gallery（继续居中）或 .document（平铺）。
     ///
     /// 如何区分「未定型」与「真文档」：两者此刻都不含选择器 role。但真文档窗口子树非空且
-    /// 含文档内容 role（如 AXLayoutArea / AXTextArea / AXSplitGroup 等），未定型窗口子树
+    /// 含文档内容 role（AXLayoutArea / AXTextArea；明确排除通用 AXSplitGroup），未定型窗口子树
     /// 极度贫瘠（Office 0.45s 时往往只有空壳）。用「子树是否含任意文档内容 role」区分：
     ///   - 含选择器 role → .gallery
     ///   - 不含选择器 role，但含文档内容 role → .document（应平铺）
@@ -1704,7 +2270,7 @@ final class WindowEventObserver {
 
     /// 文档类 App 无文档窗口的三态分类。纯逻辑（无 actor 依赖），可单测。
     ///
-    /// - gallery: 选择器/文件列表（只居中、不平铺，可安全锁/不锁均可——它不会再变成文档）
+    /// - gallery: 选择器/文件列表（只居中、不平铺，必须保持 PID/window 未锁）
     /// - document: 真文档窗口（应平铺 + 锁 PID）
     /// - undetermined: 子树未就绪，无法判定（只居中、不锁 PID、继续重试，直到能明确判定）
     enum DocumentAppWindowKind: Equatable {
@@ -1732,7 +2298,7 @@ final class WindowEventObserver {
     ///
     /// 规则（实测验证，见 classifyDocumentAppWindow 注释）：
     ///   - 命中选择器签名（AXCollectionList 或 AXOutline+AXBrowser）=> .gallery
-    ///   - 否则若含文档内容 role（AXLayoutArea / AXTextArea / AXSplitGroup）=> .document
+    ///   - 否则若含文档内容 role（AXLayoutArea / AXTextArea；不含通用 AXSplitGroup）=> .document
     ///   - 两者都不含（Office 启动期 0.45s 空壳、子树未构建）=> .undetermined
     /// 这是修复「Excel/Word 文件列表 0.45s 时被误判平铺并锁死 PID」的关键纯函数：
     /// 让调用方对 .undetermined 采取「只居中、不锁、继续重试」而非「平铺+锁」。
@@ -1854,9 +2420,8 @@ final class WindowEventObserver {
     /// 唯一稳定的区分硬特征是 **AXTitle**：主窗口标题是 app 名「手记/Journal」，
     /// 设置窗口标题是 AppKit 标准 Settings 窗口标题。
     ///
-    /// 关键：本判据**同时被 handle() 主路径与 handleResize() 旁路使用**。resize 旁路刻意绕过
-    /// processedPIDs 锁（见 828 行注释），手记设置窗口打开时的尺寸动画会触发 kAXResizedNotification
-    /// → 走 resize 旁路 → 被强行平铺成全屏（用户报告「设置窗口被移到左上角」的根因）。两处都必须拦截。
+    /// 关键：本判据用于所有可能写几何的候选/枚举路径。`handleMove`/`handleResize` 现在只记录
+    /// manual 状态，不再执行居中或平铺，因此无需在旁路中重复做标题判定。
     ///
     /// 多语言：设置窗口标题由 AppKit 在运行时按系统语言生成（不在 app bundle 字符串文件里），
     /// 是 macOS 数十年不变的固定翻译词汇。这里覆盖 Plumb 支持的语言（zh/en/es/fr/ja）+ 主流语言。
@@ -1909,6 +2474,7 @@ final class WindowEventObserver {
         insets: TileInsets,
         bundleIdentifier: String?
     ) -> AXUIElement? {
+        guard let activationToken = currentActivationToken(for: pid) else { return nil }
         // 所有 App 通用：滤除二级窗口。本方法会枚举该 App 的所有 AXWindow 并逐个平铺，
         // 若不同步屏蔽，则聚焦主窗口时同时打开的二级窗口（设置/扩展/弹窗/Get Info 等）会被一并平铺——
         // 这正是用户报告的「ChatGPT Atlas 二级页面被自动平铺」根因（handle() 主路径的候选
@@ -1928,85 +2494,235 @@ final class WindowEventObserver {
             }
             candidates.append(window)
         }
-        // 对所有 App 统一滤除二级窗口（候选 == 主窗口不会被误杀）。
+        // 对所有 App 统一滤除二级窗口（候选 == 主窗口不会被误杀）。Journal
+        // Settings 无法被通用分类器识别，因此枚举路径也必须携带标题特例。
         candidates = candidates.filter {
-            !isSecondaryWindowOfApp($0, appElement: appElement, bundleIdentifier: bundleIdentifier)
+            if isJournalBundle(bundleIdentifier), isJournalSettingsWindow($0) { return false }
+            if isSecondaryWindowOfApp($0, appElement: appElement, bundleIdentifier: bundleIdentifier) {
+                return false
+            }
+            if hasCentered(windowElement: $0, pid: pid) { return false }
+            if let cacheKey = key(pid: pid, window: $0), manualWindowKeys.contains(cacheKey) {
+                return false
+            }
+            return true
         }
-        var firstTiledWindow: AXUIElement?
+        if tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleIdentifier) {
+            candidates = candidates.filter {
+                let candidateKey = operationWindowKey(pid: pid, window: $0)
+                guard !documentStableTimerOwnership.keys.contains(candidateKey) else { return false }
+                if windowHasDocument($0) { return true }
+                // Every unsaved document must pass its own stable gate. This
+                // invocation may submit only the primary window whose gate just
+                // ended; other unsaved documents wait for their own event/gate.
+                return CFEqual($0, primaryWindow) && classifyDocumentAppWindow($0) == .document
+            }
+        }
+        var firstSubmittedWindow: AXUIElement?
         for window in candidates {
-            // 每窗口平铺会话预算：达到上限不再启动新动画，直接接受当前 frame 锁定。
-            // （Phase 1.3：首铺也消耗同一预算。）
-            if !canStartTileAttempt(windowElement: window, pid: pid) {
-                forceLockOnBudgetExhaustion(
-                    windowElement: window, pid: pid, appElement: appElement, insets: insets,
-                    reason: "first-tile budget already exhausted"
-                )
-                if firstTiledWindow == nil { firstTiledWindow = window }
-                continue
-            }
-            do {
-                // 首次应用也走两阶段动画（先居中、再从中心扩大），保证丝滑。
-                recordTileAttempt(windowElement: window, pid: pid)
-                try service.tileWindowElementAnimated(
-                    window,
-                    pid: pid,
-                    appElement: appElement,
-                    insets: insets
-                ) { [weak self] in
-                    guard let self else { return }
-                    self.recordSelfLayoutGrace(windowElement: window, pid: pid, reason: "tile completion")
-
-                    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
-                        DiagnosticLog.debug("tile completion: pid=\(pid) no longer frontmost, skip final lock")
-                        return
-                    }
-
-                    if self.didWindowActuallyTile(window, pid: pid, insets: insets) {
-                        self.startTileStabilizationRetries(
-                            pid: pid,
-                            appElement: appElement,
-                            windowElement: window,
-                            insets: insets
-                        )
-                        DiagnosticLog.debug("tile completion: tiled and locked pid=\(pid)")
-                    } else if self.isTileBudgetExhausted(windowElement: window, pid: pid) {
-                        // 预算耗尽且仍未达标：接受当前 frame 锁定，避免无限重铺。
-                        self.forceLockOnBudgetExhaustion(
-                            windowElement: window, pid: pid, appElement: appElement, insets: insets,
-                            reason: "tile completion but not reached, budget exhausted"
-                        )
-                    } else {
-                        // 阶段 3.2：完成后仍未达标——先延迟一次再校正，给文档 app 迟到的自 resize
-                        // 留出 settle 时间，避免在膨胀过程中立即重铺（多轮拉锯）。校正内会重触发
-                        // tileWindowElementAnimated（先 size 后 position 的精确目标），再走判定与预算。
-                        self.startPostCompletionCorrection(
-                            pid: pid,
-                            appElement: appElement,
-                            windowElement: window,
-                            insets: insets
-                        )
-                        DiagnosticLog.debug("tile completion: still not at target, schedule post-completion correction pid=\(pid)")
-                    }
-                }
-                if firstTiledWindow == nil {
-                    firstTiledWindow = window
-                }
-            } catch WindowCenteringError.unableToWriteWindowSize {
-                // Do not mark as tiled; some apps report transient resize failures before the window is fully ready.
-                continue
-            } catch {
-                continue
+            let operationID = tileOperationID(token: activationToken, pid: pid, window: window)
+            let payload = TileOperationPayload(
+                id: operationID,
+                pid: pid,
+                appElement: appElement,
+                windowElement: window,
+                insets: insets,
+                bundleIdentifier: bundleIdentifier
+            )
+            switch tileCoordinator.submit(id: operationID, payload: payload) {
+            case .startNow(let entry):
+                if firstSubmittedWindow == nil { firstSubmittedWindow = window }
+                startTileOperation(entry.payload)
+            case .queued:
+                if firstSubmittedWindow == nil { firstSubmittedWindow = window }
+                DiagnosticLog.debug("tile-coordinator: queued id=\(operationID)")
+            case .duplicate:
+                if firstSubmittedWindow == nil { firstSubmittedWindow = window }
+                DiagnosticLog.debug("tile-coordinator: duplicate suppressed id=\(operationID)")
             }
         }
 
-        return firstTiledWindow
+        return firstSubmittedWindow
+    }
+
+    private func startTileOperation(_ payload: TileOperationPayload) {
+        // A stale callback for an already-completed operation must not affect the
+        // current queue owner.
+        guard tileCoordinator.activeID == payload.id else { return }
+        // Session/frontmost loss invalidates the whole activation queue.
+        guard ownsCurrentActivation(payload.id.token, pid: payload.pid) else {
+            tileCoordinator.cancelAll()
+            return
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == payload.pid else {
+            tileCoordinator.cancelAll()
+            return
+        }
+        // A queued window may be closed while waiting. That invalidates only
+        // this candidate; complete it exactly and promote the remaining FIFO.
+        guard Self.sourcePID(of: payload.windowElement) == payload.pid,
+              operationWindowKey(pid: payload.pid, window: payload.windowElement) == payload.id.windowKey
+        else {
+            completeTileOperation(payload, reason: "candidate disappeared while queued")
+            return
+        }
+        guard isAutoCenterEligibleWindow(payload.windowElement),
+              !isSecondaryWindowOfApp(
+                payload.windowElement,
+                appElement: payload.appElement,
+                bundleIdentifier: payload.bundleIdentifier
+              ),
+              !(isJournalBundle(payload.bundleIdentifier) && isJournalSettingsWindow(payload.windowElement))
+        else {
+            completeTileOperation(payload, reason: "candidate no longer eligible")
+            return
+        }
+        if let cacheKey = key(pid: payload.pid, window: payload.windowElement),
+           manualWindowKeys.contains(cacheKey)
+        {
+            completeTileOperation(payload, reason: "window became manual before start")
+            return
+        }
+
+        // Idempotent preflight belongs to the operation, not to the caller that
+        // happened to observe the window. This prevents a retry from locking an
+        // active operation without completing/promoting the coordinator.
+        if service.isWindowAtTiledTarget(
+            payload.windowElement,
+            pid: payload.pid,
+            insets: payload.insets
+        ) {
+            finishTileSession(
+                windowElement: payload.windowElement,
+                pid: payload.pid,
+                appElement: payload.appElement,
+                wroteLayout: false,
+                reason: "tile-preflight already satisfies final target",
+                operationID: payload.id
+            )
+            return
+        }
+
+        if !canStartTileAttempt(windowElement: payload.windowElement, pid: payload.pid) {
+            forceLockOnBudgetExhaustion(
+                windowElement: payload.windowElement,
+                pid: payload.pid,
+                appElement: payload.appElement,
+                insets: payload.insets,
+                reason: "operation start budget exhausted",
+                operationID: payload.id
+            )
+            return
+        }
+        launchTileAnimation(payload, reason: "initial")
+    }
+
+    private func launchTileAnimation(_ payload: TileOperationPayload, reason: String) {
+        guard ownsCurrentTileOperation(payload) else { return }
+        do {
+            let startResult = try service.tileWindowElementAnimated(
+                payload.windowElement,
+                pid: payload.pid,
+                appElement: payload.appElement,
+                insets: payload.insets
+            ) { [weak self] outcome in
+                self?.handleTileAnimationOutcome(outcome, payload: payload)
+            }
+            switch startResult {
+            case .started:
+                let attempt = recordTileAttempt(windowElement: payload.windowElement, pid: payload.pid)
+                DiagnosticLog.debug("tile-coordinator: started id=\(payload.id) attempt=\(attempt) reason=\(reason)")
+            case .completedSynchronously:
+                guard ownsCurrentTileOperation(payload) else { return }
+                let targetSatisfied = service.isWindowAtTiledTarget(
+                    payload.windowElement,
+                    pid: payload.pid,
+                    insets: payload.insets
+                )
+                if TileAttemptAccountingPolicy.shouldCount(
+                    startResult: startResult,
+                    targetSatisfied: targetSatisfied
+                ) {
+                    let attempt = recordTileAttempt(windowElement: payload.windowElement, pid: payload.pid)
+                    DiagnosticLog.debug("tile-coordinator: synchronous unsatisfied attempt id=\(payload.id) attempt=\(attempt) reason=\(reason)")
+                    if attempt >= Self.maxTileSessionAttempts {
+                        forceLockOnBudgetExhaustion(
+                            windowElement: payload.windowElement,
+                            pid: payload.pid,
+                            appElement: payload.appElement,
+                            insets: payload.insets,
+                            reason: "synchronous completion outside target",
+                            operationID: payload.id
+                        )
+                    }
+                } else {
+                    DiagnosticLog.debug("tile-coordinator: synchronous completion id=\(payload.id) reason=\(reason)")
+                }
+            case .busy:
+                // Busy is not completion and consumes no budget. Keep the exact
+                // operation active and retry through its owned correction slot.
+                DiagnosticLog.debug("tile-coordinator: service busy id=\(payload.id) reason=\(reason)")
+                startPostCompletionCorrection(payload)
+            }
+        } catch {
+            DiagnosticLog.debug("tile-coordinator: launch failed id=\(payload.id) reason=\(reason) error=\(error)")
+            completeTileOperation(payload, reason: "launch failed: \(error)")
+        }
+    }
+
+    private func handleTileAnimationOutcome(
+        _ outcome: WindowAnimator.Outcome,
+        payload: TileOperationPayload
+    ) {
+        guard ownsCurrentTileOperation(payload) else {
+            DiagnosticLog.debug("tile-coordinator: stale animation outcome id=\(payload.id) outcome=\(outcome)")
+            return
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == payload.pid else {
+            DiagnosticLog.debug("tile-coordinator: non-frontmost outcome ignored id=\(payload.id)")
+            return
+        }
+
+        switch outcome {
+        case .finished:
+            recordSelfLayoutGrace(
+                windowElement: payload.windowElement,
+                pid: payload.pid,
+                reason: "tile animation completion"
+            )
+            if didWindowActuallyTile(payload.windowElement, pid: payload.pid, insets: payload.insets) {
+                startTileStabilizationRetries(payload)
+            } else if isTileBudgetExhausted(windowElement: payload.windowElement, pid: payload.pid) {
+                forceLockOnBudgetExhaustion(
+                    windowElement: payload.windowElement,
+                    pid: payload.pid,
+                    appElement: payload.appElement,
+                    insets: payload.insets,
+                    reason: "animation completed outside target with exhausted budget",
+                    operationID: payload.id
+                )
+            } else {
+                startPostCompletionCorrection(payload)
+            }
+        case .writerFailed:
+            cancelTileStabilizeTimer()
+            cancelPostCompletionCorrectionTimer()
+            completeTileOperation(payload, reason: "animation writer failed")
+        case .userInterrupted:
+            if let cacheKey = key(pid: payload.pid, window: payload.windowElement) {
+                manualWindowKeys.insert(cacheKey)
+            }
+            cancelTileStabilizeTimer()
+            cancelPostCompletionCorrectionTimer()
+            completeTileOperation(payload, reason: "user interrupted animation")
+        }
     }
 
     private func key(pid: pid_t, window: AXUIElement) -> String? {
-        if let num = windowNumber(of: window) {
-            return "\(pid):\(num)"
-        }
-        return "\(pid):ax:\(CFHash(window))"
+        // Include both the OS window number (when present) and the AX element
+        // identity. A window number can be reused within one activation; using
+        // it alone lets a new window inherit manual/centered/budget state.
+        operationWindowKey(pid: pid, window: window)
     }
 
     private func pruneSelfLayoutGrace(now: Date = Date()) {
@@ -2068,10 +2784,10 @@ final class WindowEventObserver {
             !hasCentered(windowElement: windowElement, pid: pid)
         else { return false }
 
-        // 护栏：当前有动画进行中、或该窗口预算已耗尽时，不再放行新的平铺会话——否则它会对
-        // 「达不到目标的窗口」永久放行 PID 锁，成为无限重铺入口。
-        if service.isAnyAnimationInProgress || isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
-            DiagnosticLog.debug("shouldProcessAdditionalDocumentWindow: animation in progress or budget exhausted pid=\(pid) — suppress re-tile entry")
+        // The FIFO owns overlap; only a per-window exhausted budget suppresses
+        // a new document entry. Animation-in-progress must not drop the event.
+        if isTileBudgetExhausted(windowElement: windowElement, pid: pid) {
+            DiagnosticLog.debug("shouldProcessAdditionalDocumentWindow: budget exhausted pid=\(pid) — suppress re-tile entry")
             return false
         }
 
@@ -2093,7 +2809,8 @@ final class WindowEventObserver {
         !canStartTileAttempt(windowElement: windowElement, pid: pid)
     }
 
-    /// 记录一次真实启动（+1）。返回该窗口本次启动后的累计次数。
+    /// 记录一次真实异步启动，或一次“同步返回但仍未满足目标”的逻辑尝试（+1）。
+    /// 后者覆盖不可缩放窗口，防止无写入的同步完成永久重建校正 timer。
     @discardableResult
     private func recordTileAttempt(windowElement: AXUIElement, pid: pid_t) -> Int {
         guard let k = key(pid: pid, window: windowElement) else { return Self.maxTileSessionAttempts }
@@ -2109,21 +2826,22 @@ final class WindowEventObserver {
         pid: pid_t,
         appElement: AXUIElement,
         insets: TileInsets,
-        reason: String
+        reason: String,
+        operationID: LayoutOperationID
     ) {
         DiagnosticLog.debug("tile-budget: exhausted — accept current frame and lock pid=\(pid) reason=\(reason) insets=\(insets)")
         // 锁定前的终末位置修正：读实际 frame，若未满足统一判定，按妥协形态只写一次 position。
         // 位置写入 app 从不抗拒（Numbers 抢的是尺寸），保证锁定结局顶距或底距之一等于设置值，
         // 不再出现「贴底短高、缺口全堆到顶部」被锁定的形态（顶距翻倍 bug 的最后一道防线）。
         service.anchorWindowToFallbackOrigin(windowElement, pid: pid, insets: insets)
-        tileStabilizeTimer?.cancel()
-        tileStabilizeTimer = nil
+        cancelTileStabilizeTimer()
         finishTileSession(
             windowElement: windowElement,
             pid: pid,
             appElement: appElement,
             wroteLayout: true,   // 预算耗尽锚定做了一次 position 写入 → 记录自排版宽限。
-            reason: "budget exhausted: \(reason)"
+            reason: "budget exhausted: \(reason)",
+            operationID: operationID
         )
     }
 

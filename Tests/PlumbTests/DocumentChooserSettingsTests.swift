@@ -184,7 +184,7 @@ func documentChooserDoesNotAffectShouldTile() async throws {
 // osascript 采 Excel/Word/Pages/Numbers 三态全子树 + 运行时日志）：
 //   - Office（Word/Excel）文件列表、iWork（Pages/Numbers）模板画廊：含 AXCollectionList
 //   - iWork（Pages/Numbers）文件列表（「打开」面板）：同时含 AXOutline 与 AXBrowser
-//   - 真文档窗口（含未保存的「工作簿2/文档1/未命名」）：含 AXLayoutArea/AXTextArea/AXSplitGroup
+//   - 真文档窗口（含未保存的「工作簿2/文档1/未命名」）：含 AXLayoutArea/AXTextArea
 //   - Office 启动期 0.45s 空壳（运行时日志确证）：什么特征 role 都没有 → undetermined
 //
 // ⚠️ undetermined 是修复「Excel/Word 文件列表被平铺」的关键：
@@ -253,7 +253,7 @@ func classify_iworkTemplateGallery_isGallery() {
 @Test
 func classify_documentWithContent_isDocument() {
     // 真文档窗口（实测 Excel/Word/Pages/Numbers 文档，含未保存的「工作簿2/文档1/未命名」）
-    // 含 AXLayoutArea/AXTextArea/AXSplitGroup 等文档内容 role → .document（应平铺）。
+    // 含 AXLayoutArea/AXTextArea 等文档内容 role → .document（应平铺）；AXSplitGroup 不算。
     // 这正是 bbfdd1c 想要「新建未保存文档也平铺」、又不破坏选择器的行为。
     #expect(WindowEventObserver.classifyWindow(
         hasCollectionList: false, hasOutline: false, hasBrowser: false,

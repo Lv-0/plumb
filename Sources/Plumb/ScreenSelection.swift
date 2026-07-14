@@ -44,7 +44,8 @@ enum ScreenSelection {
                 best = (i, area)
             }
         }
-        return best?.index
+        guard let best, best.area > 0 else { return nil }
+        return best.index
     }
 
     /// 两矩形交集面积（空集/不相交返回 0）。

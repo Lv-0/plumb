@@ -127,3 +127,201 @@ func springMonotonicInRange() {
         prev = v
     }
 }
+
+// MARK: - Typed outcome / pure tick state
+
+@Test
+func tickStateWriterFailureIsTerminalAndEmittedOnce() {
+    let start = CGRect(x: 0, y: 0, width: 100, height: 100)
+    var state = WindowAnimator.TickState(
+        tickCount: 4,
+        initialFrame: start,
+        monitorsUserDrift: false
+    )
+
+    guard case .write(_, let isFinal) = state.next(currentFrame: start) else {
+        Issue.record("first tick should request a write")
+        return
+    }
+    #expect(isFinal == false)
+    #expect(state.recordWrite(frame: start, succeeded: false, isFinal: isFinal) == .writerFailed)
+    #expect(state.outcome == .writerFailed)
+
+    // 终态只发出一次：后续 tick 和重复写入确认都不能再次产生 completion outcome。
+    #expect(state.next(currentFrame: start) == .none)
+    #expect(state.recordWrite(frame: start, succeeded: false, isFinal: false) == nil)
+}
+
+@Test
+func tickStateFinalWriteSuccessFinishesExactlyOnce() {
+    let start = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let end = CGRect(x: 200, y: 100, width: 100, height: 100)
+    var state = WindowAnimator.TickState(
+        tickCount: 1,
+        initialFrame: start,
+        monitorsUserDrift: false
+    )
+
+    guard case .write(_, let firstIsFinal) = state.next(currentFrame: start) else {
+        Issue.record("first tick should request a non-final write")
+        return
+    }
+    #expect(firstIsFinal == false)
+    #expect(state.recordWrite(frame: start, succeeded: true, isFinal: firstIsFinal) == nil)
+
+    guard case .write(let progress, let finalIsFinal) = state.next(currentFrame: start) else {
+        Issue.record("second tick should request the final write")
+        return
+    }
+    #expect(progress == 1)
+    #expect(finalIsFinal == true)
+    #expect(state.recordWrite(frame: end, succeeded: true, isFinal: finalIsFinal) == .finished)
+    #expect(state.next(currentFrame: end) == .none)
+    #expect(state.recordWrite(frame: end, succeeded: true, isFinal: true) == nil)
+}
+
+@Test
+func tickStateFinalWriteFailureReportsWriterFailedExactlyOnce() {
+    let frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+    var state = WindowAnimator.TickState(
+        tickCount: 1,
+        initialFrame: frame,
+        monitorsUserDrift: false
+    )
+
+    guard case .write(_, let firstIsFinal) = state.next(currentFrame: frame) else {
+        Issue.record("first tick should request a non-final write")
+        return
+    }
+    #expect(state.recordWrite(frame: frame, succeeded: true, isFinal: firstIsFinal) == nil)
+
+    guard case .write(_, let finalIsFinal) = state.next(currentFrame: frame) else {
+        Issue.record("second tick should request the final write")
+        return
+    }
+    #expect(finalIsFinal == true)
+    #expect(state.recordWrite(frame: frame, succeeded: false, isFinal: finalIsFinal) == .writerFailed)
+    #expect(state.next(currentFrame: frame) == .none)
+    #expect(state.recordWrite(frame: frame, succeeded: false, isFinal: true) == nil)
+}
+
+@Test
+func tickStateSustainedUserDriftInterruptsWithoutAnotherWrite() {
+    let written = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let userMoved = CGRect(x: 200, y: 0, width: 100, height: 100)
+    var state = WindowAnimator.TickState(
+        tickCount: 20,
+        initialFrame: written,
+        monitorsUserDrift: true
+    )
+
+    // 第一帧属于启动宽限，不参与漂移判定。
+    guard case .write(_, let firstIsFinal) = state.next(currentFrame: userMoved) else {
+        Issue.record("first tick should request a write")
+        return
+    }
+    #expect(state.recordWrite(frame: written, succeeded: true, isFinal: firstIsFinal) == nil)
+
+    for _ in 0..<(WindowAnimator.jumpAbortConsecutiveTicks - 1) {
+        guard case .write(_, let isFinal) = state.next(currentFrame: userMoved) else {
+            Issue.record("drift should not interrupt before the configured consecutive threshold")
+            return
+        }
+        #expect(state.recordWrite(frame: written, succeeded: true, isFinal: isFinal) == nil)
+    }
+
+    #expect(state.next(currentFrame: userMoved) == .complete(.userInterrupted))
+    #expect(state.outcome == .userInterrupted)
+    #expect(state.next(currentFrame: userMoved) == .none)
+}
+
+@Test
+func animateSynchronousWriterSuccessCompletesOnce() {
+    let start = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let end = CGRect(x: 200, y: 100, width: 100, height: 100)
+    var writes: [CGRect] = []
+    var outcomes: [WindowAnimator.Outcome] = []
+
+    let timer = WindowAnimator.animate(
+        from: start,
+        to: end,
+        duration: 0,
+        writer: { frame in
+            writes.append(frame)
+            return true
+        },
+        reader: { nil },
+        completion: { outcomes.append($0) }
+    )
+
+    #expect(timer == nil)
+    #expect(writes == [end])
+    #expect(outcomes == [.finished])
+}
+
+@Test
+func animateSynchronousWriterFailureCompletesOnce() {
+    let frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+    var writeCount = 0
+    var outcomes: [WindowAnimator.Outcome] = []
+
+    let timer = WindowAnimator.animate(
+        from: frame,
+        to: frame,
+        duration: 0,
+        writer: { _ in
+            writeCount += 1
+            return false
+        },
+        reader: { nil },
+        completion: { outcomes.append($0) }
+    )
+
+    #expect(timer == nil)
+    #expect(writeCount == 1)
+    #expect(outcomes == [.writerFailed])
+}
+
+@Test
+func animateCustomSynchronousFinalWriteReportsTypedOutcomeOnce() {
+    let end = CGRect(x: 10, y: 20, width: 300, height: 200)
+    var receivedProgress: [CGFloat] = []
+    var outcomes: [WindowAnimator.Outcome] = []
+
+    let timer = WindowAnimator.animateCustom(
+        duration: 0,
+        frameForProgress: { progress in
+            receivedProgress.append(progress)
+            return end
+        },
+        writer: { _ in false },
+        reader: { nil },
+        completion: { outcomes.append($0) }
+    )
+
+    #expect(timer == nil)
+    #expect(receivedProgress == [1])
+    #expect(outcomes == [.writerFailed])
+}
+
+@Test
+func animateCustomSynchronousSuccessCompletesOnce() {
+    let end = CGRect(x: 10, y: 20, width: 300, height: 200)
+    var writeCount = 0
+    var outcomes: [WindowAnimator.Outcome] = []
+
+    let timer = WindowAnimator.animateCustom(
+        duration: 0,
+        frameForProgress: { _ in end },
+        writer: { frame in
+            writeCount += 1
+            return frame == end
+        },
+        reader: { nil },
+        completion: { outcomes.append($0) }
+    )
+
+    #expect(timer == nil)
+    #expect(writeCount == 1)
+    #expect(outcomes == [.finished])
+}

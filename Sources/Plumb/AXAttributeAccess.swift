@@ -47,7 +47,7 @@ extension AXUIElement {
     func axBool(_ attribute: CFString) -> Bool? {
         guard let value = axRawValue(attribute) else { return nil }
         guard CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
-        return CFBooleanGetValue(value as! CFBoolean)
+        return CFBooleanGetValue((value as! CFBoolean))
     }
 
     /// 读取一个 String 属性（如 `AXRole` / `AXSubrole`）。非 String 或读取失败返回 nil。
@@ -62,7 +62,7 @@ extension AXUIElement {
     func axWindowElement(_ attribute: CFString) -> AXUIElement? {
         guard let value = axRawValue(attribute) else { return nil }
         guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return value as! AXUIElement
+        return (value as! AXUIElement)
     }
 
     /// 读取元素列表属性（如 `AXWindows`）。读取失败返回空数组。

@@ -43,9 +43,9 @@ Auto-centers and tiles macOS apps — a blessing for neat freaks!
 Named after the **plumb line** — the weight a carpenter drops to find true vertical, true center. That's exactly what Plumb does: gently place a window at the true center of the screen, or at a designated position.
 
 - 🪧 Lives in the menu bar — no Dock icon, zero intrusion
-- 🎯 Centers once on launch, then only when a window is re-opened / a new window is focused
+- 🎯 Evaluates layout per app activation / Space cycle, then suppresses duplicate work within that cycle
 - 🖥️ Computes within the usable screen area (auto-excludes Dock & menu bar), stable across multi-display
-- 📐 Per-app auto-tiling (allowlist) with a configurable uniform edge margin
+- 📐 Per-app auto-tiling (allowlist) with a global margin and optional per-app directional margins
 - 🔌 Optional **Launch at Login** (native macOS login item, no hacky scripts)
 - 🪟 Liquid Glass settings UI (macOS 26) — frosted glass, app search, pill toggles
 
@@ -53,11 +53,11 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 
 | Feature | Description |
 | --- | --- |
-| 🎯 Center once | Centers once on launch; afterwards only when a window is re-opened / a new window is focused |
-| ✋ Won't fight your layout | Dragging a window never re-triggers centering |
+| 🎯 Activation-scoped layout | Re-evaluates on app activation and Space changes, while suppressing duplicate work within the current cycle |
+| ✋ Respects manual layout | A genuine move or resize leaves that window untouched for the rest of the current activation / Space cycle |
 | 🖥️ Precisely avoids Dock/menu bar | Based on `screen.frame - screen.visibleFrame`, stable across multi-display |
-| 📐 Per-app auto-tiling | Allowlist mechanism with a configurable uniform edge margin (px) |
-| 🎚️ Per-app tiling margin | Tap any tiled app to set a custom margin for just that app; apps without one fall back to the global default |
+| 📐 Per-app auto-tiling | Allowlist mechanism with a configurable global margin (px) |
+| 🎚️ Per-app tiling margins | Tap any tiled app to set custom top, bottom, left, and right margins; apps without an override use the global default |
 | 🔄 Live app-list refresh | Newly installed apps appear in the settings picker immediately, no restart needed |
 | 🪟 Liquid Glass settings UI | macOS 26 frosted glass, search, pill toggles |
 | 🧠 Smart coordinate-space detection | Auto-detects each app's window coordinate space and caches it for stability |
@@ -69,12 +69,12 @@ Named after the **plumb line** — the weight a carpenter drops to find true ver
 Open `Tiling Settings…` from the menu bar to enable/disable the feature and manage your workflow.
 
 - Configure a single uniform edge margin (px)
-- **Per-app margin override**: tap any app in the Tiling list to expand an inline margin drawer and set a custom margin for just that app; apps without a custom setting keep using the global default. A "Use Default" button resets an app back to the global value.
+- **Per-app margin override**: tap any app in the Tiling list to expand an inline drawer and set its top, bottom, left, and right margins independently. Apps without an override use the global margin on all four sides; "Use Default" removes the override.
 - Select allowlisted apps from installed applications (system apps hidden by default, toggleable)
 - For allowlisted apps, **tiling has priority** over auto-centering
-- Trigger scope is once per process startup (PID); no repeated tiling within the same process
-- If a window cannot be resized, it is skipped
-- Document apps (Pages, Numbers, Word, Excel) auto-skip the template/file picker — only the opened document is tiled
+- Trigger scope is one app activation / Space cycle, not the lifetime of a process. Re-activating an app or changing Space starts a new evaluation.
+- Plumb tries both the standard AX size write and an AXFrame fallback. A reposition-only result is not treated as successful tiling; bounded retries continue, and only target-width geometry or the documented vertically anchored fallback is accepted.
+- For document apps (Pages, Numbers, Word, Excel), template galleries and file lists are centered only. Saved documents are tiled, while detected unsaved documents wait briefly for their frame to stabilize before tiling.
 
 > Semantics are inspired by Amethyst configuration concepts:
 > - `window-margin-size`: equivalent to tiling margin in this project
@@ -127,7 +127,7 @@ See [Build locally](#build-locally).
    - Open `Tiling Settings…` to configure the allowlist and margin
    - Open `Settings…` → **Permissions** tab to enable **Launch at Login** (Plumb starts automatically when you log in)
 
-> 💡 **Design principle**: each window is centered/tiled **only once** (keyed by `pid:windowNumber`). Manually dragging a window is never "corrected" back — Plumb won't fight your manual layout.
+> 💡 **Design principle**: automatic layout is scoped to the current app activation / Space cycle. A genuine manual move or resize is respected for the rest of that cycle; re-activating the app or changing Space clears the manual mark and evaluates layout again.
 
 ## Permissions
 
@@ -261,7 +261,7 @@ Please grant the **Screen Recording** permission. Plumb uses the `CGWindowList` 
 <details>
 <summary><b>I dragged a window and it got re-centered?</b></summary>
 
-No. Plumb centers/tiles each window **only once** — manual drags are never "corrected".
+During the current app activation / Space cycle, a genuine move or resize should leave that window where you placed it. Re-activating the app or changing Space starts a new layout cycle, so Plumb may center or tile it again then.
 
 </details>
 

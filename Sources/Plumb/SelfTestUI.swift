@@ -476,7 +476,7 @@ final class SelfTestUIDelegate: NSObject, NSApplicationDelegate {
         Self.log("SELFTEST-UI: candidate 40x24 toggles=\(toggles.count)")
         for t in toggles.sorted(by: { Self.windowY($0, in: window) > Self.windowY($1, in: window) }) {
             let p = centerInWindow(of: t, in: window)
-            Self.log("SELFTEST-UI:   toggle candidate center window-local \(p)")
+            Self.log("SELFTEST-UI:   toggle candidate center window-local \(String(describing: p))")
         }
         // Pick the topmost toggle in the tiling section. The master toggle is in the top card.
         // We assume the topmost 40x24 focus ring in the visible content area is the master toggle.

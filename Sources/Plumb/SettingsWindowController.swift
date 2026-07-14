@@ -124,7 +124,9 @@ final class SettingsWindowController: NSWindowController {
                 window?.animator().setFrame(frame, display: true)
             }, completionHandler: { [weak self] in
                 // 动画结束、size 稳定后精确居中（消除缩放引入的 origin 漂移）。
-                self?.centerOnCurrentScreen()
+                MainActor.assumeIsolated {
+                    self?.centerOnCurrentScreen()
+                }
             })
         }
 

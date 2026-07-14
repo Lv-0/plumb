@@ -43,20 +43,20 @@ Centra y coloca en mosaico las apps de macOS automáticamente — ¡una bendici�
 Recibe el nombre de la **plomada** (plumb line) — el peso que el carpintero deja caer para encontrar la verdadera vertical, el verdadero centro. Eso es justo lo que hace Plumb: colocar suavemente una ventana en el centro exacto de la pantalla o en una posición designada.
 
 - 🪧 Vive en la barra de menús — sin icono en el Dock, cero intrusiones
-- 🎯 Centra una vez al iniciar, y después solo cuando se reabre una ventana o se enfoca una nueva
+- 🎯 Evalúa la disposición en cada activación de la app o cambio de Space y, después, evita el trabajo duplicado dentro de ese ciclo
 - 🖥️ Calcula dentro del área útil de la pantalla (excluye automáticamente el Dock y la barra de menús), estable en configuraciones multi-pantalla
-- 📐 Mosaico automático por aplicación (lista de permitidas) con un margen uniforme configurable
+- 📐 Mosaico automático por aplicación (lista de permitidas) con un margen global y márgenes direccionales opcionales por app
 - 🪟 Interfaz de ajustes Liquid Glass (macOS 26) — vidrio esmerilado, búsqueda de apps, interruptores en píldora
 
 ## ✨ Funciones
 
 | Función | Descripción |
 | --- | --- |
-| 🎯 Centrar una vez | Centra una vez al iniciar; después solo cuando se reabre una ventana o se enfoca una nueva |
-| ✋ No lucha con tu disposición | Arrastrar una ventana nunca vuelve a disparar el centrado |
+| 🎯 Disposición por activación | Vuelve a evaluarla al activar una app o cambiar de Space y evita el trabajo duplicado durante el ciclo actual |
+| ✋ Respeta la disposición manual | Un movimiento o cambio de tamaño real deja esa ventana intacta durante el resto del ciclo actual de activación/Space |
 | 🖥️ Evita con precisión el Dock/barra de menús | Basado en `screen.frame - screen.visibleFrame`, estable en multi-pantalla |
-| 📐 Mosaico automático por app | Mecanismo de lista de permitidas con margen uniforme configurable (px) |
-| 🎚️ Margen de mosaico por app | Toca cualquier app en mosaico para fijar un margen personalizado solo para esa app; las que no tengan ajuste usan el margen global predeterminado |
+| 📐 Mosaico automático por app | Mecanismo de lista de permitidas con margen global configurable (px) |
+| 🎚️ Márgenes de mosaico por app | Haz clic en cualquier app en mosaico para configurar por separado sus márgenes superior, inferior, izquierdo y derecho; las apps sin ajuste usan el valor global predeterminado |
 | 🔄 Refresco en vivo de la lista de apps | Las apps recién instaladas aparecen en el selector de ajustes de inmediato, sin reiniciar |
 | 🪟 Interfaz Liquid Glass | Vidrio esmerilado de macOS 26, búsqueda, interruptores en píldora |
 | 🧠 Detección inteligente de coordenadas | Detecta automáticamente el espacio de coordenadas de cada app y lo cachea para estabilidad |
@@ -67,12 +67,12 @@ Recibe el nombre de la **plomada** (plumb line) — el peso que el carpintero de
 Abre `Ajustes de mosaico…` desde la barra de menús para activar/desactivar la función y gestionar tu flujo de trabajo.
 
 - Configura un único margen uniforme (px)
-- **Margen de mosaico por app**: toca cualquier app en la lista de mosaico para desplegar un cajón de margen integrado y fijar un margen personalizado solo para esa app; las apps sin ajuste personalizado siguen usando el margen global predeterminado. Un botón «Usar predeterminado» restablece una app al valor global.
+- **Ajuste de márgenes por app**: haz clic en cualquier app de la lista de mosaico para desplegar un panel integrado y configurar de forma independiente sus márgenes superior, inferior, izquierdo y derecho. Las apps sin ajuste usan el margen global en los cuatro lados; «Usar predeterminado» elimina el ajuste.
 - Selecciona las apps permitidas entre las aplicaciones instaladas (las apps del sistema se ocultan por defecto, conmutable)
 - Para las apps permitidas, **el mosaico tiene prioridad** sobre el centrado automático
-- El ámbito de disparo es una vez por inicio de proceso (PID); sin mosaico repetido dentro del mismo proceso
-- Si una ventana no se puede redimensionar, se omite
-- Las apps de documentos (Pages, Numbers, Word, Excel) omiten automáticamente el selector de plantillas/archivos; solo se coloca en mosaico el documento abierto
+- El ámbito de disparo es un ciclo de activación de la app o de Space, no toda la vida del proceso. Al reactivar una app o cambiar de Space comienza una nueva evaluación.
+- Plumb prueba tanto la escritura de tamaño AX estándar como una alternativa mediante AXFrame. Reposicionar la ventana sin redimensionarla no se considera un mosaico correcto: se realizan reintentos limitados y solo se acepta la geometría con el ancho objetivo o la alternativa documentada con anclaje vertical.
+- En las apps de documentos (Pages, Numbers, Word, Excel), las galerías de plantillas y las listas de archivos solo se centran. Los documentos guardados se colocan en mosaico; cuando se detecta un documento sin guardar, Plumb espera brevemente a que su marco se estabilice antes de colocarlo en mosaico.
 
 > La semántica está inspirada en los conceptos de configuración de Amethyst:
 > - `window-margin-size`: equivalente al margen de mosaico de este proyecto
@@ -122,9 +122,9 @@ Consulta [Compilar localmente](#compilar-localmente).
 3. (Opcional) Concede el permiso de [Grabación de pantalla](#grabación-de-pantalla) para mejorar la estabilidad de la detección de coordenadas en multi-pantalla.
 4. Haz clic en el icono de la barra de menús:
    - Dispara el centrado manualmente
-   - Abre `Ajustes de mosaico…` para configurar la lista de permitidas y el margen
+   - Abre `Ajustes de mosaico…` para configurar la lista de permitidas, el margen global y los márgenes direccionales por app
 
-> 💡 **Principio de diseño**: cada ventana se centra/coloca en mosaico **solo una vez** (con clave `pid:windowNumber`). Arrastrar manualmente una ventana nunca se "corrige" — Plumb no lucha con tu disposición manual.
+> 💡 **Principio de diseño**: la disposición automática se limita al ciclo actual de activación de la app o de Space. Un movimiento o cambio de tamaño manual real se respeta durante el resto de ese ciclo; al reactivar la app o cambiar de Space se elimina la marca manual y se vuelve a evaluar la disposición.
 
 ## Permisos
 
@@ -231,7 +231,7 @@ Concede el permiso de **Grabación de pantalla**. Plumb usa la API `CGWindowList
 <details>
 <summary><b>Arrastré una ventana y se volvió a centrar, ¿no?</b></summary>
 
-No. Plumb centra/coloca en mosaico cada ventana **solo una vez** — las arrastradas manuales nunca se "corrigen".
+Durante el ciclo actual de activación de la app o de Space, un movimiento o cambio de tamaño real debe dejar la ventana donde la colocaste. Al reactivar la app o cambiar de Space comienza un nuevo ciclo de disposición, por lo que Plumb puede volver a centrarla o colocarla en mosaico.
 
 </details>
 

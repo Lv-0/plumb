@@ -34,12 +34,22 @@ let selfTestDocumentChooser = UserDefaults.standard.bool(forKey: "selftestDocume
 
 let app = NSApplication.shared
 
+/// `NSApplication.delegate` is weak. Keep every launch-mode delegate alive for the
+/// complete run-loop lifetime instead of assigning a temporary instance that is
+/// released before `applicationDidFinishLaunching` can run.
+@MainActor
+private func runApplication(_ app: NSApplication, delegate: NSApplicationDelegate) -> Never {
+    app.delegate = delegate
+    withExtendedLifetime(delegate) {
+        app.run()
+    }
+    exit(0)
+}
+
 if selfTestMulti {
     UserDefaults.standard.set(false, forKey: "selftestMulti")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestMultiScreenDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestMultiScreenDelegate())
 }
 
 if selfTestMultiPhysical {
@@ -47,25 +57,19 @@ if selfTestMultiPhysical {
     // center+tile via the real engine, verify it stays on the built-in screen.
     UserDefaults.standard.set(false, forKey: "selftestMultiPhysical")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestMultiScreenPhysicalDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestMultiScreenPhysicalDelegate())
 }
 
 if selfTestGeo {
     UserDefaults.standard.set(false, forKey: "selftestGeo")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestGeometryDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestGeometryDelegate())
 }
 
 if selfTest {
     UserDefaults.standard.set(false, forKey: "selftestTile")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestTileDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestTileDelegate())
 }
 
 if selfTestSecondary {
@@ -73,9 +77,7 @@ if selfTestSecondary {
     // open a secondary window (File→Open dialog), confirm secondary is NOT moved.
     UserDefaults.standard.set(false, forKey: "selftestSecondary")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestSecondaryWindowDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestSecondaryWindowDelegate())
 }
 
 if selfTestTileApp {
@@ -83,18 +85,14 @@ if selfTestTileApp {
     // where kAXSize writes actually apply (unlike bare test NSWindows on macOS 26).
     UserDefaults.standard.set(false, forKey: "selftestTileApp")
     app.setActivationPolicy(.regular)
-    app.delegate = SelfTestTileAppDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestTileAppDelegate())
 }
 
 if selfTestCenterMulti {
     // Tests centering on EACH physical screen via the real engine.
     UserDefaults.standard.set(false, forKey: "selftestCenterMulti")
     app.setActivationPolicy(.accessory)
-    app.delegate = SelfTestCenterMultiDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestCenterMultiDelegate())
 }
 
 if selfTestSwitchAbort {
@@ -102,9 +100,7 @@ if selfTestSwitchAbort {
     // an app is activated (需求: "平铺 Safari → 切换 Music → Music 不居中").
     UserDefaults.standard.set(false, forKey: "selftestSwitchAbort")
     app.setActivationPolicy(.accessory)
-    app.delegate = SelfTestSwitchAbortDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestSwitchAbortDelegate())
 }
 
 if selfTestDocumentChooser {
@@ -113,9 +109,7 @@ if selfTestDocumentChooser {
     // Requires the user to first open Word/Excel/Pages/Numbers to its gallery state.
     UserDefaults.standard.set(false, forKey: "selftestDocumentChooser")
     app.setActivationPolicy(.accessory)
-    app.delegate = SelfTestDocumentChooserDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestDocumentChooserDelegate())
 }
 
 if selfTestUI {
@@ -125,9 +119,7 @@ if selfTestUI {
     UserDefaults.standard.set(false, forKey: "selftestUI")
     app.setActivationPolicy(.regular)
     app.activate(ignoringOtherApps: true)
-    app.delegate = SelfTestUIDelegate()
-    app.run()
-    exit(0)
+    runApplication(app, delegate: SelfTestUIDelegate())
 }
 
 // Installer mode: triggered when the normal-mode app writes installerMode=true and
@@ -150,9 +142,7 @@ if UserDefaults.standard.bool(forKey: UpdateConfig.installerModeKey) {
         bundlePathFallback: Bundle.main.bundlePath) != nil {
         UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)  // cleared here too for safety
         app.setActivationPolicy(.regular)
-        app.delegate = UpdateInstallerDelegate()
-        app.run()
-        exit(0)
+        runApplication(app, delegate: UpdateInstallerDelegate())
     } else {
         // 源文件已丢失：清零标志，落入下方正常启动分支，避免永久卡死。
         UserDefaults.standard.set(false, forKey: UpdateConfig.installerModeKey)
@@ -160,8 +150,5 @@ if UserDefaults.standard.bool(forKey: UpdateConfig.installerModeKey) {
     }
 }
 
-let delegate = AppDelegate()
-
-app.delegate = delegate
 app.setActivationPolicy(.accessory)
-app.run()
+runApplication(app, delegate: AppDelegate())
