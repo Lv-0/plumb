@@ -1,7 +1,7 @@
 {
-  "version": "2.0.55",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.55/Plumb-2.0.55.zip",
-  "sha256": "3b86c212d424e1983b709034a32f076898d2a3cacfcbf306a62702f8a2a85db1",
+  "version": "2.0.56",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.56/Plumb-2.0.56.zip",
+  "sha256": "d139a96c20db088b93cb3b75b256a81bfeac2238383149f07de35916b1d92d2d",
   "notes": {
     "en": "Hardens OTA updates end to end with strict manifests, bounded downloads, archive and signing validation, and transactional installation with rollback. Update/layout lifecycle handling and release publishing are also safer, including immutable assets and verified appcast publication. 389 tests plus the release safety suite pass.",
     "zh": "端到端强化 OTA 更新安全，加入严格清单、有界下载、压缩包与签名校验，以及支持回滚的事务安装。更新与布局生命周期、不可变发布资产和 appcast 上线前验证也更加可靠。389 项测试及发布安全测试全部通过。",
