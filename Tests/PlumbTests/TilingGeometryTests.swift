@@ -352,10 +352,37 @@ func frameSatisfiesFinalTiledTarget_exactTarget_accepts() async throws {
 
 @Test
 func frameSatisfiesFinalTiledTarget_fallbackProduct_accepts() async throws {
-    // 高窗口保底锚定 → 妥协形态 → 统一判定接受（不再循环）。
+    // 高窗口保底锚定 → 妥协形态 → 写后最终判定接受（不再循环）。无写 preflight
+    // 还必须要求 service 中存在匹配的 writer provenance。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
     let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(anchored, target: target) == true)
+}
+
+@Test
+func frameSatisfiesUnprovenTiledTarget_exactTarget_accepts() async throws {
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    #expect(WindowGeometry.frameSatisfiesUnprovenTiledTarget(target, target: target) == true)
+}
+
+@Test
+func frameSatisfiesUnprovenTiledTarget_arbitraryHalfHeightRejects() async throws {
+    // Runtime canary: target-width 500px window was top-aligned to a 1030px target and
+    // previously self-proved via frameMatchesFallbackProduct without any Plumb writer.
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let arbitraryHalfHeight = CGRect(x: 16, y: 540, width: 1888, height: 500)
+
+    #expect(WindowGeometry.frameMatchesFallbackProduct(arbitraryHalfHeight, target: target) == true)
+    #expect(WindowGeometry.frameSatisfiesUnprovenTiledTarget(arbitraryHalfHeight, target: target) == false)
+}
+
+@Test
+func frameSatisfiesUnprovenTiledTarget_writerFallbackStillNeedsEvidence() async throws {
+    let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
+    let fallback = CGRect(x: 144, y: 162, width: 1224, height: 752)
+
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(fallback, target: target) == true)
+    #expect(WindowGeometry.frameSatisfiesUnprovenTiledTarget(fallback, target: target) == false)
 }
 
 @Test
@@ -518,7 +545,7 @@ func netEaseReproduction_tallerWindowFallbackPreservesBottomEdge() async throws 
 @Test
 func netEaseReproduction_fallbackFrameSatisfiesFinalTiledTarget() async throws {
     // 锚定后的妥协形态必须被完成判定接受——这是「锚定愿意留下的，判定必然接受」不变量，
-    // 也是 no-write preflight 能识别并幂等锁定的前提。
+    // service 在真实 writer 后记录该 frame，后续 no-write preflight 通过 provenance 幂等锁定。
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
     let fallback = CGRect(x: 144, y: 162, width: 1224, height: 752)
 
@@ -537,4 +564,3 @@ func netEaseReproduction_centeredFrameRejectedAsTileProduct() async throws {
 
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(centeredAfterTile, target: target) == false)
 }
-

@@ -53,6 +53,73 @@ func selectByCenterCompletelyOffscreenReturnsNil() {
 }
 
 @Test
+func cgOverlapUsesTopLeftDisplayCoordinatesForVerticallyStackedScreen() {
+    // Current runtime topology: the external display is above/right in Cocoa, but its
+    // CGDisplayBounds Y is negative. A CG window on that display must be compared with
+    // the negative-Y CG bounds, never the positive-Y NSScreen.frame.
+    let window = CGRect(x: 877, y: -1034, width: 1888, height: 1018)
+    let externalCG = CGRect(x: 861, y: -1080, width: 1920, height: 1080)
+    let externalCocoa = CGRect(x: 861, y: 982, width: 1920, height: 1080)
+
+    #expect(ScreenSelection.hasSubstantialCGOverlap(
+        windowBounds: window,
+        displayBounds: externalCG
+    ))
+    #expect(ScreenSelection.hasSubstantialCGOverlap(
+        windowBounds: window,
+        displayBounds: externalCocoa
+    ) == false)
+}
+
+@Test
+func backgroundWindowBindingUsesExactNumberAcrossDisplays() {
+    let builtIn = ScreenSelection.CGWindowDescriptor(
+        number: 10,
+        bounds: CGRect(x: 100, y: 100, width: 800, height: 600)
+    )
+    let external = ScreenSelection.CGWindowDescriptor(
+        number: 11,
+        bounds: CGRect(x: 900, y: -1000, width: 800, height: 600)
+    )
+
+    #expect(ScreenSelection.matchingCGWindowBounds(
+        axWindowNumber: 11,
+        candidates: [builtIn, external]
+    ) == external.bounds)
+}
+
+@Test
+func backgroundWindowBindingRejectsMissingAXWindowNumber() {
+    let candidates = [
+        ScreenSelection.CGWindowDescriptor(
+            number: 20,
+            bounds: CGRect(x: 100, y: 100, width: 800, height: 600)
+        ),
+        ScreenSelection.CGWindowDescriptor(
+            number: 21,
+            bounds: CGRect(x: 900, y: -1000, width: 800, height: 600)
+        ),
+    ]
+
+    #expect(ScreenSelection.matchingCGWindowBounds(
+        axWindowNumber: nil,
+        candidates: candidates
+    ) == nil)
+}
+
+@Test
+func backgroundWindowBindingRejectsDuplicateWindowNumbers() {
+    let duplicate = ScreenSelection.CGWindowDescriptor(
+        number: 30,
+        bounds: CGRect(x: 100, y: 100, width: 800, height: 600)
+    )
+    #expect(ScreenSelection.matchingCGWindowBounds(
+        axWindowNumber: 30,
+        candidates: [duplicate, duplicate]
+    ) == nil)
+}
+
+@Test
 func insetsFromVisibleFrameComputesPerEdgeInsets() {
     let frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
     let visible = CGRect(x: 0, y: 75, width: 1440, height: 800)

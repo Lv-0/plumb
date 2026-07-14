@@ -10,7 +10,6 @@ import AppKit
 //   - 装配 NSApp.mainMenu：accessory（LSUIElement）应用默认没有主菜单，⌘W/⌘Q 这类标准快捷键
 //     无从派发；装配后「关闭窗口 ⌘W」「退出 ⌘Q」可用，打开设置（临时切到 .regular）时菜单栏也会出现。
 //   - 申请屏幕录制与辅助功能权限；启动 WindowEventObserver 进入自动居中/平铺主循环。
-//   - centerOnceOnLaunch：启动后短暂重试居中前台窗口（等待权限授予与窗口稳定）。
 //   - 持有 SettingsWindowController 单例，按需弹出设置窗口。
 //
 // 与其它模块的边界：
@@ -38,14 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private var statusItem: NSStatusItem?
     private var statusIconHealthTimer: DispatchSourceTimer?
-    private var launchCenterTimer: DispatchSourceTimer?
     private var settingsWindowController: SettingsWindowController?
 
     /// 后台「自动检查更新」定期定时器。
     /// Plumb 是菜单栏常驻 agent，启动检查只在 applicationDidFinishLaunching 跑一次；
     /// 本定时器在 app 长驻期间每 backgroundCheckMinInterval（6h）静默检查一次，
-    /// 让运行很久不重启的用户也能收到更新提示。复用 centerOnceOnLaunch 的 DispatchSourceTimer 模式。
-    /// 随 app 生命周期，无需显式 invalidate（与 launchCenterTimer 同模式）。
+    /// 让运行很久不重启的用户也能收到更新提示。随 app 生命周期，无需显式 invalidate。
     private var backgroundUpdateTimer: DispatchSourceTimer?
 
     /// 「连续两次打开 → 弹出设置」逃生口的判定器（无条件生效，不再限于图标隐藏时）。
@@ -84,8 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = ScreenCapturePermission.ensureAuthorized(prompt: true)
         _ = AccessibilityPermission.ensureTrusted(prompt: true)
         dmgMonitor.start()
+        // WindowEventObserver is the sole owner of automatic startup layout. It already
+        // attaches to the frontmost app, waits for permission, retries unstable windows,
+        // and owns self-layout grace/manual-move classification.
         eventObserver.start()
-        centerOnceOnLaunch()
         // 注入「自动检查更新」开关判定闭包：读 settings.autoCheckUpdates。
         // 之后所有自动检查路径（启动、后台定时器、打开设置）经此统一判定，关闭时全部跳过。
         UpdateCoordinator.shared.autoCheckUpdatesProvider = { [tilingSettingsStore] in
@@ -418,50 +417,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let item = statusItem else { return }
         NSStatusBar.system.removeStatusItem(item)
         statusItem = nil
-    }
-
-    private func centerOnceOnLaunch() {
-        // On launch, focus/permission prompts can delay when the "real" frontmost window is stable.
-        // Retry for a short period without showing alerts.
-        launchCenterTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        var attempts = 0
-        timer.schedule(deadline: .now() + 0.35, repeating: 0.45)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            attempts += 1
-
-            // Don't burn attempts while the Accessibility permission is still pending;
-            // the observer's awaitTrusted path will re-attach once it is granted, and this
-            // timer keeps retrying so the very first window still gets centered.
-            if !AccessibilityPermission.ensureTrusted(prompt: false) {
-                if attempts >= 60 {
-                    self.launchCenterTimer?.cancel()
-                    self.launchCenterTimer = nil
-                }
-                return
-            }
-
-            if self.frontmostAppShouldTile() {
-                return
-            }
-            self.centerNowInternal(showAlertOnFailure: false, selectionPolicy: .focusedOrAnyNonFullscreen)
-
-            // Stop after a few seconds to avoid any "continuous" behavior.
-            if attempts >= 10 {
-                self.launchCenterTimer?.cancel()
-                self.launchCenterTimer = nil
-            }
-        }
-        launchCenterTimer = timer
-        timer.resume()
-    }
-
-    private func frontmostAppShouldTile() -> Bool {
-        let settings = tilingSettingsStore.load()
-        guard settings.isEnabled else { return false }
-        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        return settings.shouldTile(bundleIdentifier: bundleID)
     }
 
     private func showAlert(title: String, message: String) {

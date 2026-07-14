@@ -1,35 +1,34 @@
 import AppKit
 import ApplicationServices
 
-/// Center-on-multi-screen verification (需求: "不同屏幕切换应用居中会失效").
+/// Physical multi-screen centering verification using a real TextEdit standard window.
+/// Every placement and result assertion is read from CGWindow bounds, so AX coordinate-space
+/// differences cannot turn a dialog or an off-screen frame into a false PASS.
 ///
-/// Drives the REAL WindowCenteringService.centerWindowElementAnimated against a real TextEdit
-/// window, testing centering on EACH physical screen. For each screen:
-///   1. Move the window onto that screen (via AX position write).
-///   2. Run centerWindowElementAnimated.
-///   3. Verify the window ends up centered on THAT screen's visibleFrame (not jumped elsewhere).
-///
-/// Trigger: `defaults write com.comet.plumb selftestCenterMulti -bool true` then run
-/// `dist/Plumb.app/Contents/MacOS/Plumb` directly.
-/// Requires TextEdit open with a single document. Output: /tmp/cw_selftest_center_multi.log
-
+/// Trigger: `defaults write com.comet.plumb selftestCenterMulti -bool true`, then launch the
+/// signed app through Launch Services. Requires two displays, Screen Recording + AX access,
+/// TextEdit running with a document window. Output: /tmp/cw_selftest_center_multi.log
 @MainActor
 final class SelfTestCenterMultiDelegate: NSObject, NSApplicationDelegate {
     private static let logPath = "/tmp/cw_selftest_center_multi.log"
-    private var service: WindowCenteringService?
+    private var service = WindowCenteringService()
     private var window: AXUIElement!
     private var app: NSRunningApplication!
+    private var failures = 0
+    private var nextCaseID = 0
+    private var pendingCaseID: Int?
 
     private static func log(_ message: String) {
         print(message)
-        if let data = (message + "\n").data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let h = FileHandle(forWritingAtPath: logPath) {
-                    h.seekToEndOfFile(); h.write(data); h.closeFile()
-                }
-            } else {
-                try? data.write(to: URL(fileURLWithPath: logPath))
-            }
+        guard let data = (message + "\n").data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: logPath),
+           let handle = FileHandle(forWritingAtPath: logPath)
+        {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: logPath))
         }
     }
 
@@ -44,16 +43,31 @@ final class SelfTestCenterMultiDelegate: NSObject, NSApplicationDelegate {
     private func run() {
         let screens = NSScreen.screens
         guard screens.count >= 2 else {
-            Self.log("CENTER-MULTI: FAIL — need 2 screens, found \(screens.count)"); finish(); return
-        }
-        for (i, s) in screens.enumerated() {
-            Self.log("CENTER-MULTI: screen[\(i)] frame=\(s.frame) visibleFrame=\(s.visibleFrame)")
+            fail("need at least 2 screens, found \(screens.count)")
+            finish()
+            return
         }
 
-        guard let a = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.TextEdit").first else {
-            Self.log("CENTER-MULTI: FAIL — TextEdit not running"); finish(); return
+        for (index, screen) in screens.enumerated() {
+            let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+            Self.log("CENTER-MULTI: screen=\(label) frame=\(screen.frame) visible=\(screen.visibleFrame) cg=\(SelfTestAXSupport.cgDisplayBounds(for: screen).map(String.init(describing:)) ?? "nil")")
+            if SelfTestAXSupport.displayID(for: screen) == nil || SelfTestAXSupport.cgVisibleFrame(for: screen) == nil {
+                fail("screen \(label) has no display ID / CG visible frame")
+            }
         }
-        app = a
+        guard failures == 0 else {
+            finish()
+            return
+        }
+
+        guard let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.TextEdit"
+        ).first else {
+            fail("TextEdit is not running")
+            finish()
+            return
+        }
+        app = running
         app.activate(options: [.activateAllWindows])
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.locateAndTest(screens: screens)
@@ -61,122 +75,230 @@ final class SelfTestCenterMultiDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func locateAndTest(screens: [NSScreen]) {
-        let appEl = AXUIElementCreateApplication(app.processIdentifier)
-        var wr: CFTypeRef?; AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute as CFString, &wr)
-        guard let w = (wr as? [AXUIElement])?.first else {
-            Self.log("CENTER-MULTI: FAIL — no TextEdit window"); finish(); return
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let candidates = appElement.axWindowElements(kAXWindowsAttribute as CFString)
+        for (index, candidate) in candidates.enumerated() {
+            Self.log("CENTER-MULTI: candidate[\(index)] \(SelfTestAXSupport.describe(candidate))")
         }
-        window = w
-        service = WindowCenteringService()
-
-        // Test each screen sequentially.
+        guard let selected = SelfTestAXSupport.selectStandardWindow(from: appElement) else {
+            fail("no eligible AXStandardWindow (dialogs are never accepted)")
+            finish()
+            return
+        }
+        window = selected
+        Self.log("CENTER-MULTI: selected \(SelfTestAXSupport.describe(selected))")
+        guard SelfTestAXSupport.cgWindowFrame(selected, pid: app.processIdentifier) != nil else {
+            fail("selected window has no authoritative CGWindow bounds; check Screen Recording and AXWindowNumber")
+            finish()
+            return
+        }
         testScreen(at: 0, screens: screens)
     }
 
-    private func testScreen(at idx: Int, screens: [NSScreen]) {
-        guard idx < screens.count else {
-            Self.log("CENTER-MULTI: ALL TESTS DONE"); finish(); return
+    private func testScreen(at index: Int, screens: [NSScreen]) {
+        guard index < screens.count else {
+            finish()
+            return
         }
-        let screen = screens[idx]
-        let label = screen.frame.contains(CGPoint.zero) ? "EXTERNAL(\(idx))" : "BUILT-IN(\(idx))"
-        Self.log("CENTER-MULTI: === testing center on \(label) ===")
+        let screen = screens[index]
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        Self.log("CENTER-MULTI: === center on \(label) ===")
 
-        let vf = screen.visibleFrame
-        // Shrink first.
-        var sz = CGSize(width: 400, height: 300)
-        if let v = AXValueCreate(.cgSize, &sz) { _ = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, v) }
+        var requestedSize = CGSize(width: 400, height: 300)
+        guard let sizeValue = AXValueCreate(.cgSize, &requestedSize),
+              AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success
+        else {
+            fail("\(label): unable to resize TextEdit test window")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
 
-        // Place window onto this screen. Retry with different coordinate interpretations
-        // until the window's center is actually inside the target screen's frame.
-        placeOnto(screen: screen, attempt: 1) { [weak self] success in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self else { return }
-            let before = self.readFrame()
-            let onScreenBefore = screen.frame.contains(CGPoint(x: before.midX, y: before.midY))
-            Self.log("  before center: \(self.stringify(before)) center=(\(Int(before.midX)),\(Int(before.midY))) onTarget=\(onScreenBefore)")
-            Self.log("  target: screen[\(idx)] visibleFrame=\(vf) center=(\(Int(vf.midX)),\(Int(vf.midY)))")
-            if !onScreenBefore {
-                Self.log("  WARN: could not place window on \(label); centering test may be inconclusive")
-            }
-            do {
-                try self.service!.centerWindowElementAnimated(self.window, pid: self.app.processIdentifier, appElement: AXUIElementCreateApplication(self.app.processIdentifier))
-            } catch {
-                Self.log("  center threw: \(error)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                let after = self.readFrame()
-                // Coord-space-agnostic check: did the window STAY on the same screen it was
-                // on before centering? Compare screen membership before vs after using the
-                // engine's own detection (read pos, find which screen's range it falls in
-                // via the primaryTopY-flipped comparison for top-left spaces).
-                // Simpler: the engine log (resolveCenterTarget) tells us detectedScreen + targetAX.
-                // Here we just report the before/after and let the engine diag confirm correctness.
-                let beforeScreen = self.screenLabel(for: before.midX, y: before.midY, screens: screens)
-                // For "after", the AX position is in the window's native space (often globalTopLeft).
-                // We can't reliably convert without knowing the space, so we report raw + note
-                // the engine's detectedScreen from its own log.
-                Self.log("  after center: \(self.stringify(after)) center=(\(Int(after.midX)),\(Int(after.midY)))")
-                Self.log("  before was on: \(beforeScreen)")
-                Self.log("  (verify via engine 'resolveCenterTarget' log: detectedScreen + targetAX must match target screen)")
-                Self.log("")
-                self.testScreen(at: idx + 1, screens: screens)
+            let actualSize = self.window.axSize(kAXSizeAttribute as CFString) ?? requestedSize
+            let candidates = SelfTestAXSupport.placementCandidates(for: screen, windowSize: actualSize)
+            self.placeOnto(screen: screen, candidates: candidates, index: 0) { placed in
+                guard placed else {
+                    self.fail("\(label): all AX coordinate-space placement candidates failed")
+                    self.testScreen(at: index + 1, screens: screens)
+                    return
+                }
+                self.startCenterCase(
+                    screen: screen,
+                    expectedSize: actualSize,
+                    index: index,
+                    screens: screens
+                )
             }
         }
     }
 
-    /// Place the window onto `screen` by writing AX position, trying multiple coordinate
-    /// interpretations (Cocoa bottom-left origin = vf.minX/minY; and primaryTopLeft-flipped y).
-    /// Verifies via read-back that the window center is inside the target screen.
-    private func placeOnto(screen: NSScreen, attempt: Int, completion: @escaping (Bool) -> Void) {
-        let vf = screen.visibleFrame
-        let primaryTopY = NSScreen.screens.first(where: { abs($0.frame.minX) < 0.5 && abs($0.frame.minY) < 0.5 })?.frame.maxY ?? 1080
-        // Candidate positions to try (Cocoa bottom-left, then top-left-flipped).
-        let candidates: [CGPoint] = [
-            CGPoint(x: vf.midX - 200, y: vf.midY - 150),                                  // cocoa BL
-            CGPoint(x: vf.midX - 200, y: primaryTopY - (vf.midY + 150) - 300),            // top-left flipped
-            CGPoint(x: vf.midX - 200, y: primaryTopY - (vf.midY - 150) - 300)
-        ]
-        let i = min(attempt - 1, candidates.count - 1)
-        var pos = candidates[i]
-        if let v = AXValueCreate(.cgPoint, &pos) { _ = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, v) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+    private func placeOnto(
+        screen: NSScreen,
+        candidates: [CGPoint],
+        index: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard index < candidates.count else {
+            completion(false)
+            return
+        }
+        var origin = candidates[index]
+        guard let value = AXValueCreate(.cgPoint, &origin),
+              AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
+        else {
+            placeOnto(screen: screen, candidates: candidates, index: index + 1, completion: completion)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
-            let cur = self.readFrame()
-            let onTarget = screen.frame.contains(CGPoint(x: cur.midX, y: cur.midY))
-            if onTarget || attempt >= candidates.count {
-                completion(onTarget)
+            if let frame = SelfTestAXSupport.cgWindowFrame(self.window, pid: self.app.processIdentifier),
+               SelfTestAXSupport.isOnScreen(frame, screen: screen)
+            {
+                Self.log("CENTER-MULTI: placement candidate[\(index)] accepted cg=\(frame)")
+                completion(true)
             } else {
-                self.placeOnto(screen: screen, attempt: attempt + 1, completion: completion)
+                self.placeOnto(screen: screen, candidates: candidates, index: index + 1, completion: completion)
             }
         }
     }
 
-    /// Best-effort screen label for a point (uses Cocoa frame containment — only valid
-    /// when the point is in Cocoa space, which the "before" read is, since we wrote it).
-    private func screenLabel(for x: CGFloat, y: CGFloat, screens: [NSScreen]) -> String {
-        for (i, s) in screens.enumerated() {
-            if s.frame.contains(CGPoint(x: x, y: y)) {
-                return s.frame.contains(CGPoint.zero) ? "EXTERNAL(\(i))" : "BUILT-IN(\(i))"
+    private func startCenterCase(
+        screen: NSScreen,
+        expectedSize: CGSize,
+        index: Int,
+        screens: [NSScreen]
+    ) {
+        nextCaseID += 1
+        let caseID = nextCaseID
+        pendingCaseID = caseID
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        do {
+            let result = try service.centerWindowElementAnimated(
+                window,
+                pid: app.processIdentifier,
+                appElement: appElement
+            ) { [weak self] outcome in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    self?.completeCenterCase(
+                        caseID: caseID,
+                        outcome: outcome,
+                        screen: screen,
+                        expectedSize: expectedSize,
+                        index: index,
+                        screens: screens
+                    )
+                }
             }
+            if result == .busy {
+                pendingCaseID = nil
+                fail("\(label): center service returned busy")
+                testScreen(at: index + 1, screens: screens)
+                return
+            }
+        } catch {
+            pendingCaseID = nil
+            fail("\(label): center threw \(error)")
+            testScreen(at: index + 1, screens: screens)
+            return
         }
-        return "NONE(gap)"
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self, self.pendingCaseID == caseID else { return }
+            self.pendingCaseID = nil
+            self.fail("\(label): center completion timed out")
+            self.service.abortActiveAnimations()
+            self.testScreen(at: index + 1, screens: screens)
+        }
     }
 
-    private func readFrame() -> CGRect {
-        var pr: CFTypeRef?; var sr: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &pr)
-        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sr)
-        var p = CGPoint.zero, s = CGSize.zero
-        if let pv = pr { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
-        if let sv = sr { AXValueGetValue(sv as! AXValue, .cgSize, &s) }
-        return CGRect(origin: p, size: s)
+    private func completeCenterCase(
+        caseID: Int,
+        outcome: WindowAnimator.Outcome,
+        screen: NSScreen,
+        expectedSize: CGSize,
+        index: Int,
+        screens: [NSScreen]
+    ) {
+        guard pendingCaseID == caseID else { return }
+        pendingCaseID = nil
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        guard outcome == .finished else {
+            fail("\(label): center completion was \(outcome)")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+        guard let visible = SelfTestAXSupport.cgVisibleFrame(for: screen) else {
+            fail("\(label): unable to convert visible frame into CG coordinates")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+        let expected = CGRect(
+            x: visible.midX - expectedSize.width / 2,
+            y: visible.midY - expectedSize.height / 2,
+            width: expectedSize.width,
+            height: expectedSize.height
+        )
+        verifyCenterCase(
+            screen: screen,
+            expected: expected,
+            label: label,
+            attempt: 0,
+            index: index,
+            screens: screens
+        )
     }
 
-    private func stringify(_ r: CGRect) -> String {
-        "x=\(Int(r.minX)) y=\(Int(r.minY)) w=\(Int(r.width)) h=\(Int(r.height))"
+    private func verifyCenterCase(
+        screen: NSScreen,
+        expected: CGRect,
+        label: String,
+        attempt: Int,
+        index: Int,
+        screens: [NSScreen]
+    ) {
+        let actual = SelfTestAXSupport.cgWindowFrame(window, pid: app.processIdentifier)
+        let geometryMatches = actual.map {
+            SelfTestAXSupport.framesMatch($0, expected, tolerance: 6)
+        } ?? false
+        let stayedOnTarget = actual.map {
+            SelfTestAXSupport.isOnScreen($0, screen: screen)
+        } ?? false
+        guard geometryMatches && stayedOnTarget else {
+            guard attempt < 10 else {
+                fail("\(label): center mismatch after bounded retry actual=\(actual.map(String.init(describing:)) ?? "nil") expected=\(expected) stayedOnTarget=\(stayedOnTarget)")
+                testScreen(at: index + 1, screens: screens)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.verifyCenterCase(
+                    screen: screen,
+                    expected: expected,
+                    label: label,
+                    attempt: attempt + 1,
+                    index: index,
+                    screens: screens
+                )
+            }
+            return
+        }
+        if let actual {
+            Self.log("CENTER-MULTI: PASS \(label) actual=\(actual) expected=\(expected)")
+        }
+        testScreen(at: index + 1, screens: screens)
+    }
+
+    private func fail(_ message: String) {
+        failures += 1
+        Self.log("CENTER-MULTI: FAIL — \(message)")
     }
 
     private func finish() {
-        Self.log("CENTER-MULTI: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+        let passed = failures == 0
+        Self.log("CENTER-MULTI: RESULT=\(passed ? "PASS" : "FAIL") failures=\(failures)")
+        let code: Int32 = passed ? 0 : 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(code) }
     }
 }

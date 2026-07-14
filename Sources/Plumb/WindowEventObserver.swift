@@ -443,8 +443,11 @@ final class WindowEventObserver {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return
         }
-        // 当前屏：main = 菜单栏/聚焦所在屏。仅动与该屏有实质重叠的窗口，避免误动其他屏。
-        guard let screenRect = NSScreen.main?.frame else { return }
+        // CGWindowList returns global top-left bounds. Use the matching CG display bounds;
+        // NSScreen.frame is Cocoa bottom-left and is not comparable when displays are stacked.
+        guard let mainScreen = NSScreen.main,
+              let screenRect = cgDisplayBounds(for: mainScreen)
+        else { return }
 
         var seenPIDs: Set<pid_t> = []
         let settings = tilingSettingsStore.load()
@@ -460,15 +463,47 @@ final class WindowEventObserver {
                   let rect = CGRect(dictionaryRepresentation: boundsDict)
             else { continue }
             // 仅当前屏：与当前屏有实质重叠（width/height 均 > 1），排除其他屏 / 桌面特殊层。
-            let overlap = rect.intersection(screenRect)
-            guard !overlap.isNull, overlap.width > 1, overlap.height > 1 else { continue }
+            guard ScreenSelection.hasSubstantialCGOverlap(
+                windowBounds: rect,
+                displayBounds: screenRect
+            ) else { continue }
 
             let app = NSRunningApplication(processIdentifier: pid)
             let bundleID = app?.bundleIdentifier
             if !settings.shouldCenter(bundleIdentifier: bundleID) { seenPIDs.insert(pid); continue }  // 白名单
 
             let appElement = AXUIElementCreateApplication(pid)
-            guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: nil) else { continue }
+            let exactWindow: AXUIElement? = cgWindowNumber(from: info).flatMap { number in
+                appElement.axWindowElements(kAXWindowsAttribute as CFString).first {
+                    windowNumber(of: $0) == number
+                }
+            }
+            // Background writes are stricter than foreground activation handling: if an app
+            // omits AXWindowNumber, title/size cannot distinguish a visible document from an
+            // equal-sized hidden-Space document. Skip rather than mutate an unproven window.
+            guard let exactWindow,
+                  let windowElement = eligibleWindowFromElement(exactWindow)
+            else {
+                DiagnosticLog.debug("spaceDidChange: no exact AX/CG window identity pid=\(pid), skip")
+                seenPIDs.insert(pid)
+                continue
+            }
+            // The CG record that admitted this PID and the AX window we will mutate must refer
+            // to the same document. Otherwise a multi-document app split across displays can
+            // move its focused/largest window on the other display.
+            guard let selectedBounds = ScreenSelection.matchingCGWindowBounds(
+                      axWindowNumber: windowNumber(of: windowElement),
+                      candidates: cgWindowDescriptors(for: pid, from: list)
+                  ),
+                  ScreenSelection.hasSubstantialCGOverlap(
+                      windowBounds: selectedBounds,
+                      displayBounds: screenRect
+                  )
+            else {
+                DiagnosticLog.debug("spaceDidChange: background AX/CG window identity ambiguous pid=\(pid), skip")
+                seenPIDs.insert(pid)
+                continue
+            }
             // Atlas 设置窗口跳动：仅排除设置窗口，主窗口正常居中（与 handle 一致）。
             if isChatGPTAtlasBundle(bundleID), isAtlasSettingsWindow(windowElement) { seenPIDs.insert(pid); continue }
             // 所有 App 通用的二级窗口屏蔽：切 Space 回桌面时同样不居中其弹窗/设置/下载窗口
@@ -938,7 +973,11 @@ final class WindowEventObserver {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        guard let windowElement = centerCandidateWindow(for: appElement, hintedElement: element) else {
+        guard let windowElement = centerCandidateWindow(
+            for: appElement,
+            hintedElement: element,
+            expectedPID: pid
+        ) else {
             DiagnosticLog.debug("handle[\(notification)]: no centerable candidate window")
             return .retry
         }
@@ -1437,7 +1476,11 @@ final class WindowEventObserver {
         )
     }
 
-    private func centerCandidateWindow(for appElement: AXUIElement, hintedElement: AXUIElement?) -> AXUIElement? {
+    private func centerCandidateWindow(
+        for appElement: AXUIElement,
+        hintedElement: AXUIElement?,
+        expectedPID: pid_t
+    ) -> AXUIElement? {
         if
             let hintedElement,
             let hintedWindow = eligibleWindowFromElement(hintedElement)
@@ -1478,7 +1521,7 @@ final class WindowEventObserver {
 
         // Some apps (observed in Office) expose focused window only through system-wide AX,
         // while app-level AXFocusedWindow/AXWindows may be empty.
-        if let pid = observedPID, let focused = systemWideFocusedWindow(for: pid), isAutoCenterEligibleWindow(focused) {
+        if let focused = systemWideFocusedWindow(for: expectedPID), isAutoCenterEligibleWindow(focused) {
             DiagnosticLog.debug("candidate: system-wide focused window")
             return focused
         }
@@ -1494,13 +1537,50 @@ final class WindowEventObserver {
             DiagnosticLog.debug("candidate: focused-window fallback (lenient)")
             return focused
         }
-        if let pid = observedPID, let focused = systemWideFocusedWindow(for: pid), isMovableNonAuxiliaryWindow(focused) {
+        if let focused = systemWideFocusedWindow(for: expectedPID), isMovableNonAuxiliaryWindow(focused) {
             DiagnosticLog.debug("candidate: system-wide focused fallback (lenient)")
             return focused
         }
 
         DiagnosticLog.debug("candidate: NONE found")
         return nil
+    }
+
+    private func cgDisplayBounds(for screen: NSScreen) -> CGRect? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let number = screen.deviceDescription[key] as? NSNumber {
+            return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        }
+        if let displayID = screen.deviceDescription[key] as? CGDirectDisplayID {
+            return CGDisplayBounds(displayID)
+        }
+        return nil
+    }
+
+    private func cgWindowNumber(from info: [String: Any]) -> Int? {
+        if let value = info[kCGWindowNumber as String] as? NSNumber {
+            return value.intValue
+        }
+        return info[kCGWindowNumber as String] as? Int
+    }
+
+    private func cgWindowDescriptors(
+        for pid: pid_t,
+        from list: [[String: Any]]
+    ) -> [ScreenSelection.CGWindowDescriptor] {
+        list.compactMap { info in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == Int(pid),
+                  let layer = info[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary)
+            else { return nil }
+            return ScreenSelection.CGWindowDescriptor(
+                number: cgWindowNumber(from: info),
+                bounds: bounds
+            )
+        }
     }
 
     private func eligibleWindowFromElement(_ element: AXUIElement) -> AXUIElement? {
@@ -2103,9 +2183,9 @@ final class WindowEventObserver {
     /// 窗口当前 frame 是否已完整匹配平铺目标（用于停止平铺稳定重试）。
     ///
     /// 委托给 `service.isWindowAtTiledTarget`：它在 service 内部复用与平铺路径相同的
-    /// 坐标空间探测（4 种空间 + CG 信号），并采用统一完成判定 `frameSatisfiesFinalTiledTarget`
-    ///（逐边语义：左严格 3px / 底向内宽松 16px / **顶 ±6px** / 右 −16/+6px，外加妥协形态相等
-    /// 与 3px 内完整覆盖两条兜底）。逐边语义挡住「贴底短高吃顶距」的错误形态（Numbers 顶距
+    /// 坐标空间探测（4 种空间 + CG 信号）。无来源先用严格逐边判定；垂直妥协形态只有命中
+    /// service 写后 provenance 才可完成。逐边语义（左严格 3px / 底向内宽松 16px /
+    /// **顶 ±6px** / 右 −16/+6px）挡住「贴底短高吃顶距」的错误形态（Numbers 顶距
     /// 翻倍 bug），左边严格挡住 iWork origin 漂移（实测 x: 16→25）。读取失败时保守返回 false。
     private func isWindowNearTiledTarget(_ windowElement: AXUIElement, pid: pid_t, appElement: AXUIElement, insets: TileInsets) -> Bool {
         service.isWindowAtTiledTarget(windowElement, pid: pid, insets: insets)
@@ -2120,7 +2200,7 @@ final class WindowEventObserver {
     /// 表现为「该 App 第一次打开不平铺，之后才正常」——这正是本方法要堵住的根因。
     ///
     /// 判据委托给 `service.isWindowAtTiledTarget`（与 `isWindowNearTiledTarget` 同源、
-    /// 保持一致），统一走 `frameSatisfiesFinalTiledTarget`（逐边语义判定，详见该方法注释）。
+    /// 保持一致），使用严格几何或匹配的 writer-produced fallback provenance。
     /// 读取失败时保守返回 false（视为未成功 → 不锁，让重试接力），与既有「主窗口缺失时
     /// 保守视为主窗口」的同类取舍一致（宁可多试一次也不误锁）。
     ///

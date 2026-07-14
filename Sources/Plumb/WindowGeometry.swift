@@ -243,6 +243,17 @@ enum WindowGeometry {
         return false
     }
 
+    /// 无写入来源时的平铺完成判定。
+    ///
+    /// `frameMatchesFallbackProduct` 以观察到的实际尺寸构造妥协 frame，因此它只能用于 Plumb
+    /// 已经尝试目标 resize 并读回 app 约束结果之后。若把它用于首次 preflight，任何目标宽度、
+    /// 顶/底锚定的任意高度窗口都会自证为完成。无来源检查只允许真实目标（含小幅 grid snap）或
+    /// 3px 内完整覆盖；历史 writer-produced fallback 由 service 的 provenance store 另行放行。
+    static func frameSatisfiesUnprovenTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
+        frameMatchesTiledTarget(frame, target: target) ||
+            frameCoversTiledTarget(frame, target: target)
+    }
+
     /// 把“全屏 frame 与可用 visibleFrame”之间的逐边 inset 计算下沉为纯函数。
     /// 让 Dock 在左/右/下、菜单栏在顶部的逐屏差异可被独立测试。
     static func insetsFromVisibleFrame(frame: CGRect, visible: CGRect) -> ScreenSelection.EdgeInsets {

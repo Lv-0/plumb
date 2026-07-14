@@ -38,7 +38,7 @@ func transient_mediumWindow_isTransient() async throws {
 @Test
 func transient_halfAreaBoundary_isNotTransient() async throws {
     // 面积比恰好 == 阈值 0.5 → 非瞬态（严格小于才瞬态）。
-    let half = CGSize(width: 960, height: 525)  // = 1920×1050 的一半
+    let half = CGSize(width: 960, height: 1050)  // 960×1050 / 1920×1050 = 0.5
     let visibleArea: CGFloat = 1920 * 1050
     #expect(TransientDetector.isTransient(size: half, largestVisibleFrameArea: visibleArea) == false)
 }
@@ -46,7 +46,7 @@ func transient_halfAreaBoundary_isNotTransient() async throws {
 @Test
 func transient_slightlyUnderHalf_isTransient() async throws {
     // 面积比略低于 0.5 → 瞬态。
-    let justUnder = CGSize(width: 900, height: 500)  // 450000 / 2016000 ≈ 0.223
+    let justUnder = CGSize(width: 959, height: 1050)
     let visibleArea: CGFloat = 1920 * 1050
     #expect(TransientDetector.isTransient(size: justUnder, largestVisibleFrameArea: visibleArea) == true)
 }

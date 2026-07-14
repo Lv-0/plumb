@@ -8,7 +8,7 @@ import AppKit
 // 职责：
 //   - 创建 NSApplication，设为 .accessory（仅菜单栏、无 Dock 图标）。
 //   - 检查 UserDefaults 中的 selftest* 标志：命中则进入对应的自测 harness（通过
-//     Launch Services 触发，使 AX 桥接处于激活状态），运行后 exit(0)。
+//     Launch Services 触发，使 AX 桥接处于激活状态），按断言结果 exit(0/1)。
 //     标志会在进入前被清零，保证每次只运行一次。
 //   - 无自测标志时：构造 AppDelegate，交给 runloop。
 //
@@ -53,8 +53,8 @@ if selfTestMulti {
 }
 
 if selfTestMultiPhysical {
-    // Physical 2-screen test: place a real TextEdit window on the built-in screen,
-    // center+tile via the real engine, verify it stays on the built-in screen.
+    // Physical multi-screen test: place a real TextEdit standard window on every screen,
+    // tile via the real engine, and verify exact per-screen CG bounds.
     UserDefaults.standard.set(false, forKey: "selftestMultiPhysical")
     app.setActivationPolicy(.regular)
     runApplication(app, delegate: SelfTestMultiScreenPhysicalDelegate())

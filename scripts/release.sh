@@ -153,7 +153,7 @@ $(c_bold "Plumb release plan: ${TAG}")
 
 steps:
   1. preflight: clean tree / on main / version strictly > latest tag /
-     swift test / swift build -c release / secret scan / signing identity
+     Testing failure canary / swift test / swift build -c release / secret scan / signing identity
   2. $([[ "$SKIP_BUMP" == "yes" ]] && echo "skip README bump" || echo "bump 5 README badges -> commit 'release: ${TAG}'")
   3. build signed .app + DMG + OTA zip
   4. verify codesign (DR must be cert leaf hash, NOT cdhash)
@@ -215,21 +215,44 @@ preflight() {
   fi
   ok "tag ${TAG} 不存在"
 
-  # 1.6 测试
+  # 1.6 测试框架失败门禁：这个过滤测试在环境变量开启时必须失败。若它错误返回 0，
+  # 正常测试的绿色结果不可信，发版必须停止。
+  step "1/7" "验证 Testing 失败门禁"
+  local canary_log canary_rc
+  canary_log=$(mktemp "${TMPDIR:-/tmp}/plumb-testing-canary.XXXXXX")
+  set +e
+  PLUMB_TEST_FAILURE_CANARY=1 swift test --filter testingFrameworkFailureCanary >"$canary_log" 2>&1
+  canary_rc=$?
+  set -e
+  if [[ $canary_rc -eq 0 ]]; then
+    rm -f "$canary_log"
+    die "Testing 失败门禁未拦截故意失败断言"
+  fi
+  if ! grep -Fq 'testingFrameworkFailureCanary()' "$canary_log" ||
+     ! grep -Fq 'Expectation failed: true == false' "$canary_log" ||
+     ! grep -Fq '1 issue' "$canary_log"; then
+    cat "$canary_log" >&2
+    rm -f "$canary_log"
+    die "Testing 失败门禁因编译/链接/runner 异常失败，未命中预期断言"
+  fi
+  rm -f "$canary_log"
+  ok "Testing 失败门禁有效"
+
+  # 1.7 测试
   step "1/7" "运行测试 (swift test)"
   if ! swift test 2>&1 | tail -3; then
     die "测试失败"
   fi
   ok "测试通过"
 
-  # 1.7 release 构建
+  # 1.8 release 构建
   step "1/7" "release 构建 (swift build -c release)"
   if ! swift build -c release 2>&1 | tail -3; then
     die "release 构建失败"
   fi
   ok "release 构建通过"
 
-  # 1.8 密钥扫描: 待推送的 commit 不应含密钥模式
+  # 1.9 密钥扫描: 待推送的 commit 不应含密钥模式
   step "1/7" "密钥安全扫描"
   local diff_to_scan
   diff_to_scan=$(git diff origin/main..HEAD 2>/dev/null || true)
@@ -238,7 +261,7 @@ preflight() {
   fi
   ok "待推送 diff 无密钥泄露"
 
-  # 1.9 签名身份
+  # 1.10 签名身份
   step "1/7" "检查签名身份"
   if [[ "$SIGN_MODE" == "local" ]]; then
     if ! security find-identity -v 2>/dev/null | grep -q "\"${DEFAULT_SIGN_IDENTITY}\""; then

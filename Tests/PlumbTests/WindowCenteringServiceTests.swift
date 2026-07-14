@@ -38,6 +38,119 @@ func processScopedCacheCanInvalidateAllProcesses() {
 }
 
 @Test
+func acceptedTileFallbackRequiresWriterRecord() {
+    var store = AcceptedTileFallbackStore()
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let constrained = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+
+    let acceptedBeforeRecord = store.accepts(
+        key: "101:7:ax:70",
+        pid: 101,
+        targetFrame: target,
+        currentFrame: constrained
+    )
+    let didRecord = store.record(
+        key: "101:7:ax:70",
+        pid: 101,
+        targetFrame: target,
+        acceptedFrame: constrained,
+        reason: .writerProduced
+    )
+    let acceptedAfterRecord = store.accepts(
+        key: "101:7:ax:70",
+        pid: 101,
+        targetFrame: target,
+        currentFrame: constrained
+    )
+
+    #expect(acceptedBeforeRecord == false)
+    #expect(didRecord)
+    #expect(acceptedAfterRecord)
+}
+
+@Test
+func acceptedTileFallbackRejectsChangedTargetOrFrame() {
+    var targetStore = AcceptedTileFallbackStore()
+    let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
+    let constrained = CGRect(x: 144, y: 162, width: 1224, height: 752)
+    let didRecordTarget = targetStore.record(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        acceptedFrame: constrained,
+        reason: .writerProduced
+    )
+
+    let acceptedChangedTarget = targetStore.accepts(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target.insetBy(dx: 1, dy: 1),
+        currentFrame: constrained
+    )
+    let acceptedOriginalTargetAfterWrongProbe = targetStore.accepts(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        currentFrame: constrained
+    )
+
+    var frameStore = AcceptedTileFallbackStore()
+    let didRecordFrame = frameStore.record(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        acceptedFrame: constrained,
+        reason: .writerProduced
+    )
+    let acceptedChangedFrame = frameStore.accepts(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        currentFrame: constrained.offsetBy(dx: 0, dy: 10)
+    )
+
+    #expect(didRecordTarget)
+    #expect(acceptedChangedTarget == false)
+    #expect(acceptedOriginalTargetAfterWrongProbe)
+    #expect(didRecordFrame)
+    #expect(acceptedChangedFrame == false)
+}
+
+@Test
+func acceptedTileFallbackInvalidatesOnlyTerminatedPID() {
+    var store = AcceptedTileFallbackStore()
+    let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
+    let constrained = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    let didRecordFirst = store.record(
+        key: "101:7:ax:70",
+        pid: 101,
+        targetFrame: target,
+        acceptedFrame: constrained,
+        reason: .writerProduced
+    )
+    let didRecordSecond = store.record(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        acceptedFrame: constrained,
+        reason: .writerProduced
+    )
+
+    store.invalidate(pid: 101)
+    let secondStillAccepted = store.accepts(
+        key: "202:8:ax:80",
+        pid: 202,
+        targetFrame: target,
+        currentFrame: constrained
+    )
+
+    #expect(didRecordFirst)
+    #expect(didRecordSecond)
+    #expect(store.count == 1)
+    #expect(secondStillAccepted)
+}
+
+@Test
 func animationSlotRejectsDifferentWindowWhileBusy() {
     var slot = WindowAnimationSlot()
     let first = slot.acquire(key: "101:1:tile")

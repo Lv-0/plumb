@@ -139,6 +139,111 @@ struct ProcessScopedCache<Value> {
     var count: Int { values.count }
 }
 
+/// Evidence that a non-exact tiled frame was produced by a real Plumb layout write.
+///
+/// Geometry alone cannot distinguish an app-enforced height constraint from an arbitrary
+/// pre-existing half-height window. This bounded store keeps that provenance outside the
+/// pure geometry module. Records survive activation/Space cycles so constrained apps do
+/// not animate repeatedly, but PID teardown and target/frame changes invalidate them.
+struct AcceptedTileFallbackStore {
+    enum Reason: String, Equatable {
+        case writerProduced
+    }
+
+    struct Record: Equatable {
+        let pid: pid_t
+        let targetFrame: CGRect
+        let acceptedFrame: CGRect
+        let reason: Reason
+    }
+
+    private var records: [String: Record] = [:]
+    private var insertionOrder: [String] = []
+    private let capacity: Int
+
+    init(capacity: Int = 200) {
+        self.capacity = max(1, capacity)
+    }
+
+    var count: Int { records.count }
+
+    @discardableResult
+    mutating func record(
+        key: String,
+        pid: pid_t,
+        targetFrame: CGRect,
+        acceptedFrame: CGRect,
+        reason: Reason
+    ) -> Bool {
+        guard WindowGeometry.frameMatchesFallbackProduct(acceptedFrame, target: targetFrame),
+              !WindowGeometry.frameSatisfiesUnprovenTiledTarget(acceptedFrame, target: targetFrame)
+        else {
+            removeValue(forKey: key)
+            return false
+        }
+
+        removeValue(forKey: key)
+        records[key] = Record(
+            pid: pid,
+            targetFrame: targetFrame,
+            acceptedFrame: acceptedFrame,
+            reason: reason
+        )
+        insertionOrder.append(key)
+
+        while insertionOrder.count > capacity {
+            let evicted = insertionOrder.removeFirst()
+            records.removeValue(forKey: evicted)
+        }
+        return true
+    }
+
+    /// Pure probe. CG and AX reads can momentarily disagree after a display/Space change, so
+    /// one mismatching source must not destroy evidence that the second source can validate.
+    /// Lifecycle teardown, final writer updates, and capacity eviction own all mutation.
+    func accepts(
+        key: String,
+        pid: pid_t,
+        targetFrame: CGRect,
+        currentFrame: CGRect,
+        tolerance: CGFloat = 3
+    ) -> Bool {
+        guard let record = records[key],
+              record.pid == pid,
+              record.targetFrame == targetFrame
+        else { return false }
+        // A CG read may briefly lag the AX read after activation. Do not destroy valid
+        // provenance merely because one coordinate source mismatches; every probe still
+        // has to match the exact accepted frame before it can return true.
+        return Self.framesMatch(record.acceptedFrame, currentFrame, tolerance: tolerance) &&
+            WindowGeometry.frameMatchesFallbackProduct(currentFrame, target: targetFrame)
+    }
+
+    mutating func removeValue(forKey key: String) {
+        records.removeValue(forKey: key)
+        insertionOrder.removeAll { $0 == key }
+    }
+
+    mutating func invalidate(pid: pid_t) {
+        let keys = records.compactMap { key, record in record.pid == pid ? key : nil }
+        for key in keys {
+            removeValue(forKey: key)
+        }
+    }
+
+    mutating func removeAll() {
+        records.removeAll()
+        insertionOrder.removeAll()
+    }
+
+    private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+        abs(lhs.minX - rhs.minX) <= tolerance &&
+            abs(lhs.minY - rhs.minY) <= tolerance &&
+            abs(lhs.width - rhs.width) <= tolerance &&
+            abs(lhs.height - rhs.height) <= tolerance
+    }
+}
+
 /// Pure global single-flight gate. A lease, rather than a bare window key, owns
 /// the slot so a delayed completion from an aborted request cannot release a
 /// newer request for the same window key.
@@ -247,6 +352,7 @@ final class WindowCenteringService {
     // Cache the last reliable coordinate system per PID to keep behavior stable.
     private var cachedSpaceByPID = ProcessScopedCache<RawSpace>()
     private var cachedDisplayByPID = ProcessScopedCache<CGDirectDisplayID>()
+    private var acceptedTileFallbacks = AcceptedTileFallbackStore()
 
     // MARK: - Phase-B 平铺动画时序参数
     //
@@ -367,6 +473,7 @@ final class WindowCenteringService {
     func invalidateCachedWindowContext(for pid: pid_t) {
         cachedSpaceByPID.removeValue(for: pid)
         cachedDisplayByPID.removeValue(for: pid)
+        acceptedTileFallbacks.invalidate(pid: pid)
         DiagnosticLog.debug("window-context-cache: invalidated pid=\(pid)")
     }
 
@@ -375,6 +482,7 @@ final class WindowCenteringService {
     func invalidateAllCachedWindowContexts() {
         cachedSpaceByPID.removeAll()
         cachedDisplayByPID.removeAll()
+        acceptedTileFallbacks.removeAll()
         DiagnosticLog.debug("window-context-cache: invalidated all")
     }
 
@@ -635,7 +743,13 @@ final class WindowCenteringService {
             throw WindowCenteringError.unableToWriteWindowSize
         }
 
-        if tileReachedTarget(windowElement, pid: pid, context: context, primaryTopY: primaryTopY, targetFrame: targetFrame) {
+        if tileReachedTarget(
+            windowElement,
+            pid: pid,
+            context: context,
+            primaryTopY: primaryTopY,
+            targetFrame: targetFrame
+        ) {
             return
         }
 
@@ -649,7 +763,14 @@ final class WindowCenteringService {
                 primaryTopY: primaryTopY
             )
             if setPointAttribute(kAXPositionAttribute as CFString, value: candidateOrigin, on: windowElement),
-               tileReachedTarget(windowElement, pid: pid, context: context, space: space, primaryTopY: primaryTopY, targetFrame: targetFrame)
+               tileReachedTarget(
+                   windowElement,
+                   pid: pid,
+                   context: context,
+                   space: space,
+                   primaryTopY: primaryTopY,
+                   targetFrame: targetFrame
+               )
             {
                 rememberResolvedContext(pid: pid, screen: context.screen, space: space)
                 return
@@ -667,7 +788,14 @@ final class WindowCenteringService {
             )
             let frameRect = CGRect(origin: candidateOrigin, size: targetFrame.size)
             if setRectAttribute("AXFrame" as CFString, value: frameRect, on: windowElement),
-               tileReachedTarget(windowElement, pid: pid, context: context, space: space, primaryTopY: primaryTopY, targetFrame: targetFrame)
+               tileReachedTarget(
+                   windowElement,
+                   pid: pid,
+                   context: context,
+                   space: space,
+                   primaryTopY: primaryTopY,
+                   targetFrame: targetFrame
+               )
             {
                 rememberResolvedContext(pid: pid, screen: context.screen, space: space)
                 return
@@ -1215,6 +1343,7 @@ final class WindowCenteringService {
             pid: pid,
             via: via,
             sizeOutcome: sizeOutcome,
+            didWriteTargetSize: sizeOutcome.didResize,
             isAnimationLeaseActive: isAnimationLeaseActive,
             finishActive: finishActive,
             completion: completion
@@ -1245,6 +1374,7 @@ final class WindowCenteringService {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         activeTileTimer = timer
         var round = 0
+        var didWriteTargetSize = firstOutcome.didResize
         timer.schedule(deadline: .now() + .milliseconds(Self.settleDelayMs), repeating: .milliseconds(Self.settleDelayMs))
         timer.setEventHandler { [weak self] in
             guard let self else {
@@ -1268,13 +1398,14 @@ final class WindowCenteringService {
             // 重写 pos+size（pos 也重写，防 layout 滚动期间 origin 漂）。
             _ = self.setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
             let outcome = self.resizeWindowWithFallback(windowElement, newSize: endSize)
+            didWriteTargetSize = didWriteTargetSize || outcome.didResize
             let now = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
-            // 见好就收：尺寸达标 **或** 统一判定通过（含妥协形态）。后者覆盖 Numbers 忙碌期
-            // 把高度读回比目标略大但已保底锚定（妥协形态）的情形——settle 不必非等到尺寸精确，
-            // 避免「明明已落到可接受的妥协形态仍继续重写」的徒劳轮次。
+            // 见好就收：尺寸达标或严格目标判定通过。不能在这里用裸 fallback product：它由
+            // 当前 frame 自身尺寸构造，会让首次受限 readback 在第一轮自证完成，绕过完整 settle。
+            // 真正持续拒绝目标尺寸的 app 会走完有界重写，再由 final readback 建立 provenance。
             let sizeReached = now.map { abs($0.width - endSize.width) <= 4 && abs($0.height - endSize.height) <= 4 } ?? false
             let frameReached = self.currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY)
-                .map { self.frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+                .map { self.frameSatisfiesUnprovenTiledTarget($0, target: targetFrame) } ?? false
             let reached = sizeReached || frameReached
             DiagnosticLog.debug("tile-animator: settle round=\(round)/\(Self.settleMaxRounds) via=\(via) wrote=\(endSize) read=\(now.map { String(describing: $0) } ?? "nil") sizeReached=\(sizeReached) frameReached=\(frameReached)")
             if reached || round >= Self.settleMaxRounds {
@@ -1290,6 +1421,7 @@ final class WindowCenteringService {
                     pid: pid,
                     via: reached ? "\(via)+settle" : "\(via)+settle-giveup",
                     sizeOutcome: outcome,
+                    didWriteTargetSize: didWriteTargetSize,
                     isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
@@ -1322,6 +1454,7 @@ final class WindowCenteringService {
         pid: pid_t?,
         via: String,
         sizeOutcome: ResizeOutcome,
+        didWriteTargetSize: Bool,
         isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
         completion: WindowAnimator.Completion?
@@ -1349,6 +1482,7 @@ final class WindowCenteringService {
                 pid: pid,
                 via: via,
                 sizeOutcome: sizeOutcome,
+                didWriteTargetSize: didWriteTargetSize,
                 attemptIndex: 0,
                 isAnimationLeaseActive: isAnimationLeaseActive,
                 finishActive: finishActive,
@@ -1363,7 +1497,7 @@ final class WindowCenteringService {
                 windowElement,
                 context: context,
                 primaryTopY: primaryTopY
-            ).map { frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+            ).map { frameSatisfiesUnprovenTiledTarget($0, target: targetFrame) } ?? false
             if !alreadySatisfiesTarget {
                 _ = setPointAttribute(kAXPositionAttribute as CFString, value: targetAXOrigin, on: windowElement)
                 DiagnosticLog.debug("tile-animator: anchored drift (posOff) actualPos=\(actualPos.map { String(describing: $0) } ?? "nil") → \(targetAXOrigin) targetAX=\(targetAXOrigin)")
@@ -1378,6 +1512,7 @@ final class WindowCenteringService {
             pid: pid,
             via: via,
             sizeOutcome: sizeOutcome,
+            fallbackReason: didWriteTargetSize ? .writerProduced : nil,
             isAnimationLeaseActive: isAnimationLeaseActive,
             finishActive: finishActive,
             completion: completion
@@ -1400,6 +1535,7 @@ final class WindowCenteringService {
         pid: pid_t?,
         via: String,
         sizeOutcome: ResizeOutcome,
+        didWriteTargetSize: Bool,
         attemptIndex: Int,
         isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
@@ -1426,6 +1562,7 @@ final class WindowCenteringService {
                 return
             }
             if self.activeTileTimer === timer { self.activeTileTimer = nil }
+            timer.cancel()
 
             // 前台守卫：切走即收尾退出（不写后台窗口），与 Phase-B settle/smooth/robust 一致。
             if let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
@@ -1436,7 +1573,8 @@ final class WindowCenteringService {
 
             // 写入顺序（关键，防「假设高度出屏」bug 复发）：
             // 1. 永远只写目标尺寸 endSize，绝不写其它高度（旧阶梯写矮高度 → 顶距翻倍）。
-            _ = self.resizeWindowWithFallback(windowElement, newSize: endSize)
+            let rewriteOutcome = self.resizeWindowWithFallback(windowElement, newSize: endSize)
+            let hasWriterEvidence = didWriteTargetSize || rewriteOutcome.didResize
             // 2. 读回实际尺寸。
             let actual = self.sizeAttribute(kAXSizeAttribute as CFString, on: windowElement) ?? endSize
             // 3. 尺寸达标 → 写目标 origin；否则用实际尺寸算妥协 origin（保顶 / 保底）。
@@ -1469,6 +1607,7 @@ final class WindowCenteringService {
                     pid: pid,
                     via: satisfied ? "\(via)+precise" : "\(via)+precise-giveup",
                     sizeOutcome: sizeOutcome,
+                    fallbackReason: hasWriterEvidence ? .writerProduced : nil,
                     isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
                     completion: completion
@@ -1484,6 +1623,7 @@ final class WindowCenteringService {
                     pid: pid,
                     via: via,
                     sizeOutcome: sizeOutcome,
+                    didWriteTargetSize: hasWriterEvidence,
                     attemptIndex: attemptIndex + 1,
                     isAnimationLeaseActive: isAnimationLeaseActive,
                     finishActive: finishActive,
@@ -1507,6 +1647,7 @@ final class WindowCenteringService {
         pid: pid_t?,
         via: String,
         sizeOutcome: ResizeOutcome,
+        fallbackReason: AcceptedTileFallbackStore.Reason?,
         isAnimationLeaseActive: @escaping () -> Bool,
         finishActive: @escaping () -> Void,
         completion: WindowAnimator.Completion?
@@ -1519,6 +1660,15 @@ final class WindowCenteringService {
         let postPos = pointAttribute(kAXPositionAttribute as CFString, on: windowElement)
         let finalFrame = currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY)
         let satisfied = finalFrame.map { frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+        if let finalFrame {
+            updateAcceptedTileFallback(
+                windowElement: windowElement,
+                pid: pid,
+                targetFrame: targetFrame,
+                finalFrame: finalFrame,
+                reason: fallbackReason
+            )
+        }
         DiagnosticLog.debug("tile-animator: phase B done (via=\(via)) pid=\(pid.map(String.init) ?? "?") target=\(targetFrame) targetAX=\(targetAXOrigin) via=\(sizeOutcome) actualPos=\(postPos.map { String(describing: $0) } ?? "nil") actualSize=\(postSize.map { String(describing: $0) } ?? "nil") finalFrame=\(finalFrame.map { String(describing: $0) } ?? "nil") satisfied=\(satisfied)")
         finishActive()
         completion?(.finished)
@@ -1586,10 +1736,11 @@ final class WindowCenteringService {
     /// （不只 size）——这是与 `tiledTargetFrame` 配套的「在位校验」：`tiledTargetFrame`
     /// 只返回目标 frame，调用方需自行比较；本方法封装「解算目标 + 读窗口 + 比对」整段。
     ///
-    /// ⚠️ 完成判定统一走 `frameSatisfiesFinalTiledTarget`（逐边语义判定，详见
-    /// `WindowGeometry.frameMatchesTiledTarget` 的容差策略）：
+    /// ⚠️ 无写入来源时先走 `frameSatisfiesUnprovenTiledTarget`（逐边语义判定，详见
+    /// `WindowGeometry.frameMatchesTiledTarget` 的容差策略）；宽松的垂直 fallback 只有命中
+    /// service 中此前真实 writer/readback 记录的同 window + target + frame provenance 才通过：
     ///   - 左边严格 3px、底边向内宽松 16px、**顶边 ±6px（关键：挡住「贴底短高」吃顶距）**、
-    ///     右边 −16/+6px；外加「等于妥协形态」「3px 内完整覆盖」两条兜底。
+    ///     右边 −16/+6px；外加「3px 内完整覆盖」兜底。
     ///   - 左边严格挡住 iWork（Numbers/Pages）在 smooth Phase B resize 后的 origin 漂移
     ///     （实测 x: 16→25，漂移 9px），避免锁在漂移位置上。
     ///   - 底/右向内宽松保留对 Terminal/electerm 按字符网格 snap 尺寸（偏差可达 10-20px）的 app
@@ -1597,7 +1748,7 @@ final class WindowCenteringService {
     ///   - 顶边 ±6px 是本次修复的核心：旧「minY 严格 + height ≤16」判定放行了「贴底矮 16px」
     ///     形态（maxY 缺 16px → 顶距被吃掉），导致 Numbers 顶距翻倍 bug。
     ///
-    /// 与 `tileReachedTarget` 共用坐标空间探测（同走 CG 优先 + AX 回退），判定语义完全一致。
+    /// 与 `tileReachedTarget` 共用坐标空间探测（同走 CG 优先 + AX 回退）与 provenance 判定。
     /// 读取失败或无法确定坐标空间时返回 false（保守地由调用方视为「未达目标」，继续重试）。
     func isWindowAtTiledTarget(
         _ windowElement: AXUIElement,
@@ -1626,7 +1777,12 @@ final class WindowCenteringService {
             let visibleFrame = effectiveVisibleFrame(for: screenPick.screen)
             let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
             // origin 严格 / size 宽松（详见方法注释）：挡住 iWork origin 漂移，兼容 size snap。
-            if frameSatisfiesFinalTiledTarget(cocoaRect, target: targetFrame) {
+            if frameSatisfiesPreflightTiledTarget(
+                cocoaRect,
+                target: targetFrame,
+                windowElement: windowElement,
+                pid: pid
+            ) {
                 return true
             }
             DiagnosticLog.debug("isWindowAtTiledTarget: CG mismatch, falling back to AX pid=\(pid) cgRect=\(cgRect) target=\(targetFrame)")
@@ -1641,7 +1797,12 @@ final class WindowCenteringService {
         ) else { return false }
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
-        return frameSatisfiesFinalTiledTarget(context.currentGlobalRect, target: targetFrame)
+        return frameSatisfiesPreflightTiledTarget(
+            context.currentGlobalRect,
+            target: targetFrame,
+            windowElement: windowElement,
+            pid: pid
+        )
     }
 
     /// 预算耗尽锁定前的最后修正（无动画、无定时器、单次写入）。
@@ -1683,9 +1844,15 @@ final class WindowCenteringService {
         let visibleFrame = effectiveVisibleFrame(for: context.screen)
         let targetFrame = WindowGeometry.tiledFrame(visibleFrame: visibleFrame, insets: insets)
 
-        // 读实际 global frame，已满足统一判定则不动。
+        // 读实际 global frame。无来源 fallback 不能仅凭几何自证；只有严格目标或既有 writer
+        // provenance 才能无写返回。预算耗尽只锁定当前 activation，不建立跨周期证据。
         guard let actualFrame = currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY) else { return }
-        if frameSatisfiesFinalTiledTarget(actualFrame, target: targetFrame) {
+        if frameSatisfiesPreflightTiledTarget(
+            actualFrame,
+            target: targetFrame,
+            windowElement: windowElement,
+            pid: pid
+        ) {
             DiagnosticLog.debug("anchor-fallback: already satisfied pid=\(pid.map(String.init) ?? "?") frame=\(actualFrame) target=\(targetFrame)")
             return
         }
@@ -1699,8 +1866,11 @@ final class WindowCenteringService {
             space: context.space,
             primaryTopY: primaryTopY
         )
-        _ = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
-        DiagnosticLog.debug("anchor-fallback: corrected pid=\(pid.map(String.init) ?? "?") actualFrame=\(actualFrame) target=\(targetFrame) → bl=\(anchoredBL) ax=\(anchoredAX)")
+        let didWrite = setPointAttribute(kAXPositionAttribute as CFString, value: anchoredAX, on: windowElement)
+        let finalFrame = didWrite
+            ? currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY)
+            : nil
+        DiagnosticLog.debug("anchor-fallback: corrected pid=\(pid.map(String.init) ?? "?") wrote=\(didWrite) actualFrame=\(actualFrame) finalFrame=\(finalFrame.map { String(describing: $0) } ?? "nil") target=\(targetFrame) → bl=\(anchoredBL) ax=\(anchoredAX)")
     }
 
 
@@ -1794,6 +1964,76 @@ final class WindowCenteringService {
             return "\(kind):\(pidPart):\(num)"
         }
         return "\(kind):\(pidPart):ax:\(CFHash(windowElement))"
+    }
+
+    /// Fallback provenance needs a window identity that remains stable across observer
+    /// re-enumeration but does not leak across a recycled PID/window object.
+    private func acceptedTileFallbackKey(for windowElement: AXUIElement, pid: pid_t) -> String {
+        let windowPart = windowIDAttribute(on: windowElement).map(String.init) ?? "unknown"
+        return "\(pid):\(windowPart):ax:\(CFHash(windowElement))"
+    }
+
+    private func frameSatisfiesUnprovenTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
+        WindowGeometry.frameSatisfiesUnprovenTiledTarget(frame, target: target)
+    }
+
+    /// Read-only/preflight completion: strict geometry is always valid; a loose vertical
+    /// fallback is valid only when it exactly matches a prior writer-produced record.
+    private func frameSatisfiesPreflightTiledTarget(
+        _ frame: CGRect,
+        target: CGRect,
+        windowElement: AXUIElement,
+        pid: pid_t?
+    ) -> Bool {
+        if frameSatisfiesUnprovenTiledTarget(frame, target: target) {
+            return true
+        }
+
+        guard let pid else { return false }
+        let key = acceptedTileFallbackKey(for: windowElement, pid: pid)
+        let accepted = acceptedTileFallbacks.accepts(
+            key: key,
+            pid: pid,
+            targetFrame: target,
+            currentFrame: frame
+        )
+        if accepted {
+            DiagnosticLog.debug("tile-fallback-evidence: matched pid=\(pid) key=\(key) frame=\(frame) target=\(target)")
+        }
+        return accepted
+    }
+
+    /// Updates provenance after an actual target-size writer. Strict targets need no record;
+    /// failed/unproven outcomes and current-activation-only budget anchors cannot create one.
+    private func updateAcceptedTileFallback(
+        windowElement: AXUIElement,
+        pid: pid_t?,
+        targetFrame: CGRect,
+        finalFrame: CGRect,
+        reason: AcceptedTileFallbackStore.Reason?
+    ) {
+        guard let pid else { return }
+        let key = acceptedTileFallbackKey(for: windowElement, pid: pid)
+
+        if frameSatisfiesUnprovenTiledTarget(finalFrame, target: targetFrame) {
+            acceptedTileFallbacks.removeValue(forKey: key)
+            return
+        }
+
+        guard frameSatisfiesFinalTiledTarget(finalFrame, target: targetFrame),
+              let reason,
+              acceptedTileFallbacks.record(
+                  key: key,
+                  pid: pid,
+                  targetFrame: targetFrame,
+                  acceptedFrame: finalFrame,
+                  reason: reason
+              )
+        else {
+            acceptedTileFallbacks.removeValue(forKey: key)
+            return
+        }
+        DiagnosticLog.debug("tile-fallback-evidence: recorded pid=\(pid) key=\(key) reason=\(reason.rawValue) frame=\(finalFrame) target=\(targetFrame)")
     }
 
     private func focusedWindowElement(for appElement: AXUIElement) -> AXUIElement? {
@@ -2347,7 +2587,12 @@ final class WindowCenteringService {
             let screenPick = pickScreenForCGRect(cgRect)
         {
             let cocoaRect = cocoaRectFromCGWindowBounds(cgRect, screen: screenPick.screen, primaryTopY: primaryTopY)
-            if frameSatisfiesFinalTiledTarget(cocoaRect, target: targetFrame) {
+            if frameSatisfiesPreflightTiledTarget(
+                cocoaRect,
+                target: targetFrame,
+                windowElement: windowElement,
+                pid: pid
+            ) {
                 return true
             }
             DiagnosticLog.debug("tileReachedTarget: CG mismatch, falling back to AX pid=\(pid) cgRect=\(cgRect) target=\(targetFrame)")
@@ -2368,7 +2613,12 @@ final class WindowCenteringService {
             primaryTopY: primaryTopY
         )
 
-        return frameSatisfiesFinalTiledTarget(currentFrame, target: targetFrame)
+        return frameSatisfiesPreflightTiledTarget(
+            currentFrame,
+            target: targetFrame,
+            windowElement: windowElement,
+            pid: pid
+        )
     }
 
     private func frameSatisfiesFinalTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {

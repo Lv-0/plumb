@@ -15,6 +15,11 @@ import CoreGraphics
 /// 纯函数多屏选屏：不依赖 AppKit/NSScreen，便于单测。
 /// “app 原先在哪屏就在哪屏居中/平铺” —— 用窗口中心点归属选屏。
 enum ScreenSelection {
+    struct CGWindowDescriptor: Equatable {
+        let number: Int?
+        let bounds: CGRect
+    }
+
     struct EdgeInsets: Equatable {
         let left: CGFloat
         let right: CGFloat
@@ -46,6 +51,36 @@ enum ScreenSelection {
         }
         guard let best, best.area > 0 else { return nil }
         return best.index
+    }
+
+    /// `CGWindowList` and `CGDisplayBounds` share the global top-left coordinate space.
+    /// Keep this predicate pure so background Space enumeration cannot accidentally compare
+    /// CG window bounds with Cocoa/NSScreen bottom-left frames on vertically arranged displays.
+    static func hasSubstantialCGOverlap(
+        windowBounds: CGRect,
+        displayBounds: CGRect,
+        minimumExtent: CGFloat = 1
+    ) -> Bool {
+        guard !windowBounds.isNull, !windowBounds.isEmpty,
+              !displayBounds.isNull, !displayBounds.isEmpty
+        else { return false }
+        let overlap = windowBounds.intersection(displayBounds)
+        return !overlap.isNull &&
+            overlap.width > minimumExtent &&
+            overlap.height > minimumExtent
+    }
+
+    /// Bind an AX window back to one authoritative WindowServer record. Background Space
+    /// enumeration must not use a different document window merely because it belongs to the
+    /// same PID. Without AXWindowNumber there is no bidirectionally authoritative identity:
+    /// title/size can collide with a hidden-Space document, so the safe result is `nil`.
+    static func matchingCGWindowBounds(
+        axWindowNumber: Int?,
+        candidates: [CGWindowDescriptor]
+    ) -> CGRect? {
+        guard let axWindowNumber else { return nil }
+        let exact = candidates.filter { $0.number == axWindowNumber }
+        return exact.count == 1 ? exact[0].bounds : nil
     }
 
     /// 两矩形交集面积（空集/不相交返回 0）。

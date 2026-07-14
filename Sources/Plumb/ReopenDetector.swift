@@ -36,11 +36,14 @@ struct ReopenDetector {
     ///
     /// 返回 true 时会清零 `lastOpen`，使后续第三次打开重新开始一轮，避免误触发。
     mutating func registerOpen(now: Date = Date()) -> Bool {
-        defer { lastOpen = now }
-        if let last = lastOpen, now.timeIntervalSince(last) <= Self.threshold {
-            lastOpen = nil      // 清零：避免紧接其后的第三次打开被误判为「连续两次」
-            return true
+        if let last = lastOpen {
+            let elapsed = now.timeIntervalSince(last)
+            if elapsed >= 0, elapsed <= Self.threshold {
+                lastOpen = nil  // 清零：避免紧接其后的第三次打开被误判为「连续两次」
+                return true
+            }
         }
+        lastOpen = now
         return false
     }
 }

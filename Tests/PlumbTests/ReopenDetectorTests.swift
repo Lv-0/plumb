@@ -60,6 +60,27 @@ func reopenDetectorClearsAfterTrigger() {
 }
 
 @Test
+func reopenDetectorAlternatesAcrossTwoCompletePairs() {
+    var detector = ReopenDetector()
+    let t0 = Date(timeIntervalSince1970: 1_000)
+
+    #expect(detector.registerOpen(now: t0) == false)
+    #expect(detector.registerOpen(now: t0.addingTimeInterval(1)) == true)
+    #expect(detector.registerOpen(now: t0.addingTimeInterval(2)) == false)
+    #expect(detector.registerOpen(now: t0.addingTimeInterval(3)) == true)
+}
+
+@Test
+func reopenDetectorClockRollbackStartsANewPair() {
+    var detector = ReopenDetector()
+    let t0 = Date(timeIntervalSince1970: 1_000)
+
+    #expect(detector.registerOpen(now: t0) == false)
+    #expect(detector.registerOpen(now: t0.addingTimeInterval(-1)) == false)
+    #expect(detector.registerOpen(now: t0) == true)
+}
+
+@Test
 func reopenDetectorRespectsArbitraryLongGap() {
     var detector = ReopenDetector()
     let t0 = Date(timeIntervalSince1970: 1_000)

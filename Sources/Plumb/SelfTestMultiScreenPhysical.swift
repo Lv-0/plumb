@@ -1,44 +1,39 @@
 import AppKit
 import ApplicationServices
 
-/// Physical multi-screen verification (需求 4: 原屏居中/平铺, 逐屏 visibleFrame).
+/// Physical multi-screen tiling verification using the real animated service.
+/// It places one eligible TextEdit document window on every connected display, tiles it,
+/// and compares authoritative CGWindow bounds against the exact per-screen target.
 ///
-/// Runs the REAL WindowCenteringService (centerWindowElementAnimated + tileWindowElementAnimated)
-/// against a real TextEdit window, with the window physically placed on the BUILT-IN screen
-/// (the secondary display in this setup, located at a negative-x offset from the external 4K).
-/// Verifies the service keeps the window on its ORIGINAL screen and uses THAT screen's
-/// visibleFrame — proving no "jump to primary" regression.
-///
-/// Two screens observed in this env:
-///   screen[0] external 4K at (0, 0), 1920x1080, visibleFrame (0,0,1920,1050) [bottom Dock 30]
-///   screen[1] built-in Retina at (-747, -982), 1512x982, visibleFrame (-747,-900,1512,868) [top 82]
-///
-/// Trigger: `defaults write com.comet.plumb selftestMultiPhysical -bool true` then
-/// run `dist/Plumb.app/Contents/MacOS/Plumb` directly (for AX trust).
-/// Requires TextEdit open with a single document. Output: /tmp/cw_selftest_multi_phys.log
-
+/// Trigger: `defaults write com.comet.plumb selftestMultiPhysical -bool true`, then launch
+/// the signed app through Launch Services. Output: /tmp/cw_selftest_multi_phys.log
 @MainActor
 final class SelfTestMultiScreenPhysicalDelegate: NSObject, NSApplicationDelegate {
     private static let logPath = "/tmp/cw_selftest_multi_phys.log"
-    private var service: WindowCenteringService?
+    private let insets = TileInsets(all: 16)
+    private var service = WindowCenteringService()
+    private var window: AXUIElement!
+    private var app: NSRunningApplication!
+    private var failures = 0
+    private var nextCaseID = 0
+    private var pendingCaseID: Int?
 
     private static func log(_ message: String) {
         print(message)
-        if let data = (message + "\n").data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let h = FileHandle(forWritingAtPath: logPath) {
-                    h.seekToEndOfFile(); h.write(data); h.closeFile()
-                }
-            } else {
-                try? data.write(to: URL(fileURLWithPath: logPath))
-            }
+        guard let data = (message + "\n").data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: logPath),
+           let handle = FileHandle(forWritingAtPath: logPath)
+        {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: logPath))
         }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? "".write(toFile: Self.logPath, atomically: true, encoding: .utf8)
-        // ACCESSORY so our harness does not steal frontmost from TextEdit — AX position/size
-        // writes are silently ignored when the target app is not frontmost.
         NSApp.setActivationPolicy(.accessory)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.run()
@@ -48,100 +43,280 @@ final class SelfTestMultiScreenPhysicalDelegate: NSObject, NSApplicationDelegate
     private func run() {
         let screens = NSScreen.screens
         guard screens.count >= 2 else {
-            Self.log("MULTI-PHYS: FAIL — need 2 physical screens, found \(screens.count)")
-            finish(); return
+            fail("need at least 2 screens, found \(screens.count)")
+            finish()
+            return
         }
-        // Enumerate screens with device IDs.
-        for (i, s) in screens.enumerated() {
-            let id = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-            Self.log("MULTI-PHYS: screen[\(i)] frame=\(s.frame) visibleFrame=\(s.visibleFrame) displayID=\(id.map(String.init) ?? "?")")
+        for (index, screen) in screens.enumerated() {
+            let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+            Self.log("MULTI-PHYS: screen=\(label) frame=\(screen.frame) visible=\(screen.visibleFrame) cg=\(SelfTestAXSupport.cgDisplayBounds(for: screen).map { String(describing: $0) } ?? "nil")")
+            if SelfTestAXSupport.displayID(for: screen) == nil || SelfTestAXSupport.cgVisibleFrame(for: screen) == nil {
+                fail("screen \(label) has no display ID / CG visible frame")
+            }
+        }
+        guard failures == 0 else {
+            finish()
+            return
         }
 
-        // Pick the BUILT-IN screen as the "original" screen for the test. Heuristic: the
-        // built-in is the one NOT containing the global origin (0,0) in its frame.
-        let builtIn = screens.first(where: { !$0.frame.contains(CGPoint.zero) }) ?? screens.last!
-        let external = screens.first(where: { $0.frame.contains(CGPoint.zero) }) ?? screens.first!
-        Self.log("MULTI-PHYS: builtIn frame=\(builtIn.frame) visible=\(builtIn.visibleFrame)")
-        Self.log("MULTI-PHYS: external frame=\(external.frame) visible=\(external.visibleFrame)")
-        Self.log("MULTI-PHYS: test = place window on BUILT-IN, center+tile, verify stays on BUILT-IN")
-
-        let bundleID = "com.apple.TextEdit"
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
-            Self.log("MULTI-PHYS: FAIL — TextEdit not running"); finish(); return
+        guard let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.TextEdit"
+        ).first else {
+            fail("TextEdit is not running")
+            finish()
+            return
         }
+        app = running
         app.activate(options: [.activateAllWindows])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.locateAndPlace(app: app, builtIn: builtIn, external: external, screens: screens)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.locateAndTest(screens: screens)
         }
     }
 
-    private func locateAndPlace(app: NSRunningApplication, builtIn: NSScreen, external: NSScreen, screens: [NSScreen]) {
-        let appEl = AXUIElementCreateApplication(app.processIdentifier)
-        var winsRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute as CFString, &winsRef)
-        guard let wins = winsRef as? [AXUIElement], let window = wins.first else {
-            Self.log("MULTI-PHYS: FAIL — no TextEdit window"); finish(); return
+    private func locateAndTest(screens: [NSScreen]) {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let candidates = appElement.axWindowElements(kAXWindowsAttribute as CFString)
+        for (index, candidate) in candidates.enumerated() {
+            Self.log("MULTI-PHYS: candidate[\(index)] \(SelfTestAXSupport.describe(candidate))")
         }
-
-        // Determine where the window CURRENTLY is (its original screen). The engine's job is to
-        // keep it there. We test BOTH screens by running the engine twice — first wherever the
-        // window naturally starts (usually external), then attempt to relocate via CGEvent drag.
-        // For coordinate-space safety, we use the AXFrame attribute which takes a rect in the
-        // window's native space — and we read the current frame to learn the space.
-        let curFrame = readFrame(window)
-        let originalScreen = screens.first(where: { $0.frame.contains(CGPoint(x: curFrame.midX, y: curFrame.midY)) }) ?? external
-        Self.log("MULTI-PHYS: window currently at \(stringify(curFrame)) → on \(originalScreen == external ? "EXTERNAL" : "BUILT-IN")")
-        Self.log("MULTI-PHYS: running center+tile on the ORIGINAL screen, verifying it stays there")
-
-        // === Test: TILE on the original screen (the production path: observer does ONE of center/tile) ===
-        // Success criteria (coordinate-space-agnostic):
-        //   (a) After tile: window center still inside the ORIGINAL screen's frame (no jump to other screen).
-        //   (b) Window grew (tiling enlarged it).
-        //   (c) Tile fills a meaningful fraction of the original screen's visible area.
-        let service = WindowCenteringService()
-        self.service = service
-        let originalLabel = (originalScreen === external) ? "EXTERNAL" : "BUILT-IN"
-        let beforeTile = curFrame
-        Self.log("MULTI-PHYS: tiling (no prior center) on \(originalLabel), before=\(stringify(beforeTile))")
-        do {
-            try service.tileWindowElementAnimated(window, pid: app.processIdentifier, appElement: AXUIElementCreateApplication(app.processIdentifier), insets: TileInsets(all: 16))
-        } catch {
-            Self.log("MULTI-PHYS: tile threw: \(error)")
+        guard let selected = SelfTestAXSupport.selectStandardWindow(from: appElement) else {
+            fail("no eligible AXStandardWindow (dialogs are never accepted)")
+            finish()
+            return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        window = selected
+        Self.log("MULTI-PHYS: selected \(SelfTestAXSupport.describe(selected))")
+        guard SelfTestAXSupport.cgWindowFrame(selected, pid: app.processIdentifier) != nil else {
+            fail("selected window has no authoritative CGWindow bounds; check Screen Recording and AXWindowNumber")
+            finish()
+            return
+        }
+        testScreen(at: 0, screens: screens)
+    }
+
+    private func testScreen(at index: Int, screens: [NSScreen]) {
+        guard index < screens.count else {
+            finish()
+            return
+        }
+        let screen = screens[index]
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        Self.log("MULTI-PHYS: === tile on \(label) ===")
+
+        // Move a small seed window to the destination first. macOS constrains a size write
+        // against the window's current display, so asking for an external-screen width while
+        // the window is still on the built-in panel would invalidate the canary setup.
+        let seedSize = CGSize(width: 400, height: 300)
+        var writableSize = seedSize
+        guard let sizeValue = AXValueCreate(.cgSize, &writableSize),
+              AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success
+        else {
+            fail("\(label): unable to resize TextEdit seed window")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self else { return }
-            let tiled = self.readFrame(window)
-            let stillOriginalAfterTile = originalScreen.frame.contains(CGPoint(x: tiled.midX, y: tiled.midY))
-            let grew = (tiled.width > beforeTile.width + 100) && (tiled.height > beforeTile.height + 100)
-            let origVisibleArea = originalScreen.visibleFrame.width * originalScreen.visibleFrame.height
-            let tiledArea = tiled.width * tiled.height
-            let fillsOriginal = tiledArea >= origVisibleArea * 0.5
-            Self.log("MULTI-PHYS: AFTER TILE = \(self.stringify(tiled)) center=(\(Int(tiled.midX)),\(Int(tiled.midY)))")
-            Self.log("  stayed on \(originalLabel)? \(stillOriginalAfterTile ? "✓" : "✗ JUMPED TO OTHER SCREEN")")
-            Self.log("  grew from \(Int(beforeTile.width))x\(Int(beforeTile.height))? \(grew ? "✓" : "✗")")
-            Self.log("  fills >=50% of \(originalLabel) visibleArea (\(Int(origVisibleArea/1_000_000))M px²)? \(fillsOriginal ? "✓ (tiledArea=\(Int(tiledArea/1_000_000))M)" : "✗ (tiledArea=\(Int(tiledArea/1_000_000))M)")")
-            let allPass = stillOriginalAfterTile && grew && fillsOriginal
-            Self.log("MULTI-PHYS: RESULT=\(allPass ? "PASS" : "CHECK")")
-            self.finish()
+            let actualSize = self.window.axSize(kAXSizeAttribute as CFString) ?? seedSize
+            let seedFrame = CGRect(
+                x: screen.visibleFrame.midX - actualSize.width / 2,
+                y: screen.visibleFrame.midY - actualSize.height / 2,
+                width: actualSize.width,
+                height: actualSize.height
+            )
+            guard let expectedSeed = SelfTestAXSupport.cgFrame(fromCocoa: seedFrame, on: screen) else {
+                self.fail("\(label): unable to convert seed frame into CG coordinates")
+                self.testScreen(at: index + 1, screens: screens)
+                return
+            }
+            self.placeOnto(
+                screen: screen,
+                expected: expectedSeed,
+                candidates: SelfTestAXSupport.placementCandidates(forCocoaFrame: seedFrame, on: screen),
+                index: 0
+            ) { placed in
+                guard placed else {
+                    self.fail("\(label): unable to place seed window on destination display")
+                    self.testScreen(at: index + 1, screens: screens)
+                    return
+                }
+                self.startTileCase(screen: screen, index: index, screens: screens)
+            }
         }
     }
 
-    private func readFrame(_ el: AXUIElement) -> CGRect {
-        var posRef: CFTypeRef?; var sizeRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posRef)
-        AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeRef)
-        var p = CGPoint.zero, s = CGSize.zero
-        if let pv = posRef { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
-        if let sv = sizeRef { AXValueGetValue(sv as! AXValue, .cgSize, &s) }
-        return CGRect(origin: p, size: s)
+    private func placeOnto(
+        screen: NSScreen,
+        expected: CGRect,
+        candidates: [CGPoint],
+        index: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard index < candidates.count else {
+            completion(false)
+            return
+        }
+        var origin = candidates[index]
+        guard let value = AXValueCreate(.cgPoint, &origin),
+              AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
+        else {
+            placeOnto(
+                screen: screen,
+                expected: expected,
+                candidates: candidates,
+                index: index + 1,
+                completion: completion
+            )
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            if let frame = SelfTestAXSupport.cgWindowFrame(self.window, pid: self.app.processIdentifier),
+               SelfTestAXSupport.isOnScreen(frame, screen: screen),
+               SelfTestAXSupport.framesMatch(frame, expected, tolerance: 6)
+            {
+                Self.log("MULTI-PHYS: placement candidate[\(index)] accepted cg=\(frame)")
+                completion(true)
+            } else {
+                self.placeOnto(
+                    screen: screen,
+                    expected: expected,
+                    candidates: candidates,
+                    index: index + 1,
+                    completion: completion
+                )
+            }
+        }
     }
 
-    private func stringify(_ r: CGRect) -> String {
-        "x=\(Int(r.minX)) y=\(Int(r.minY)) w=\(Int(r.width)) h=\(Int(r.height))"
+    private func startTileCase(screen: NSScreen, index: Int, screens: [NSScreen]) {
+        nextCaseID += 1
+        let caseID = nextCaseID
+        pendingCaseID = caseID
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        do {
+            let result = try service.tileWindowElementAnimated(
+                window,
+                pid: app.processIdentifier,
+                appElement: appElement,
+                insets: insets
+            ) { [weak self] outcome in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    self?.completeTileCase(
+                        caseID: caseID,
+                        outcome: outcome,
+                        screen: screen,
+                        index: index,
+                        screens: screens
+                    )
+                }
+            }
+            if result == .busy {
+                pendingCaseID = nil
+                fail("\(label): tile service returned busy")
+                testScreen(at: index + 1, screens: screens)
+                return
+            }
+        } catch {
+            pendingCaseID = nil
+            fail("\(label): tile threw \(error)")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
+            guard let self, self.pendingCaseID == caseID else { return }
+            self.pendingCaseID = nil
+            self.fail("\(label): tile completion timed out")
+            self.service.abortActiveAnimations()
+            self.testScreen(at: index + 1, screens: screens)
+        }
+    }
+
+    private func completeTileCase(
+        caseID: Int,
+        outcome: WindowAnimator.Outcome,
+        screen: NSScreen,
+        index: Int,
+        screens: [NSScreen]
+    ) {
+        guard pendingCaseID == caseID else { return }
+        pendingCaseID = nil
+        let label = SelfTestAXSupport.displayLabel(for: screen, index: index)
+        guard outcome == .finished else {
+            fail("\(label): tile completion was \(outcome)")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+        let cocoaTarget = WindowGeometry.tiledFrame(visibleFrame: screen.visibleFrame, insets: insets)
+        guard let expected = SelfTestAXSupport.cgFrame(fromCocoa: cocoaTarget, on: screen) else {
+            fail("\(label): unable to convert final target into CG coordinates")
+            testScreen(at: index + 1, screens: screens)
+            return
+        }
+        verifyTileCase(
+            screen: screen,
+            expected: expected,
+            label: label,
+            attempt: 0,
+            index: index,
+            screens: screens
+        )
+    }
+
+    /// AX size changes can become visible before the matching WindowServer record does.
+    /// Poll the authoritative CG frame for a bounded 1.5 seconds, without relaxing the
+    /// exact target predicate or starting the next display case in the meantime.
+    private func verifyTileCase(
+        screen: NSScreen,
+        expected: CGRect,
+        label: String,
+        attempt: Int,
+        index: Int,
+        screens: [NSScreen]
+    ) {
+        let actual = SelfTestAXSupport.cgWindowFrame(window, pid: app.processIdentifier)
+        let geometryMatches = actual.map {
+            SelfTestAXSupport.framesMatch($0, expected, tolerance: 6)
+        } ?? false
+        let stayedOnTarget = actual.map {
+            SelfTestAXSupport.isOnScreen($0, screen: screen)
+        } ?? false
+        guard geometryMatches && stayedOnTarget else {
+            guard attempt < 10 else {
+                fail("\(label): tile mismatch after bounded retry actual=\(actual.map(String.init(describing:)) ?? "nil") expected=\(expected) stayedOnTarget=\(stayedOnTarget)")
+                testScreen(at: index + 1, screens: screens)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.verifyTileCase(
+                    screen: screen,
+                    expected: expected,
+                    label: label,
+                    attempt: attempt + 1,
+                    index: index,
+                    screens: screens
+                )
+            }
+            return
+        }
+        if let actual {
+            Self.log("MULTI-PHYS: PASS \(label) actual=\(actual) expected=\(expected)")
+        }
+        testScreen(at: index + 1, screens: screens)
+    }
+
+    private func fail(_ message: String) {
+        failures += 1
+        Self.log("MULTI-PHYS: FAIL — \(message)")
     }
 
     private func finish() {
-        Self.log("MULTI-PHYS: DONE")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+        let passed = failures == 0
+        Self.log("MULTI-PHYS: RESULT=\(passed ? "PASS" : "FAIL") failures=\(failures)")
+        let code: Int32 = passed ? 0 : 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(code) }
     }
 }
