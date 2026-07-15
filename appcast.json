@@ -1,7 +1,7 @@
 {
-  "version": "2.0.56",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.56/Plumb-2.0.56.zip",
-  "sha256": "d139a96c20db088b93cb3b75b256a81bfeac2238383149f07de35916b1d92d2d",
+  "version": "2.0.57",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.57/Plumb-2.0.57.zip",
+  "sha256": "5719929f5432ac23ced12075f0625976faf6be049905ef03381399b0fc3d3fcf",
   "notes": {
     "en": "Reopening the running Plumb app now opens Settings immediately. The menu-bar icon recovery behavior is preserved, and the full test suite passes.",
     "zh": "重新打开正在运行的 Plumb 后会立即打开设置界面。保留菜单栏图标自愈行为，完整测试套件已通过。",
