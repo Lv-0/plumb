@@ -1,5 +1,100 @@
+import Foundation
 import Testing
 @testable import Plumb
+
+@Test("launch-only centering permits launch activations and preserves tiling")
+func launchOnlyCenteringTriggerPolicy() {
+    var settings = AppTilingSettings.default
+    settings.centerOnlyOnAppLaunch = true
+
+    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.centered",
+        isLaunchAuthorizedActivation: true
+    ) == .center)
+    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.centered",
+        isLaunchAuthorizedActivation: false
+    ) == .none)
+
+    settings.isEnabled = true
+    settings.tiledBundleIDs = ["com.example.tiled"]
+    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled",
+        isLaunchAuthorizedActivation: false
+    ) == .tile)
+
+    settings.centerOnlyOnAppLaunch = false
+    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.centered",
+        isLaunchAuthorizedActivation: false
+    ) == .center)
+}
+
+@Test("launch admission is exact, single-use, and expires")
+func applicationLaunchAdmissionTrackerSemantics() {
+    let now = Date(timeIntervalSinceReferenceDate: 1_000)
+    let launchDate = Date(timeIntervalSinceReferenceDate: 900)
+    let original = ProcessIncarnation(startSeconds: 100, startMicroseconds: 1)
+    let replacement = ProcessIncarnation(startSeconds: 101, startMicroseconds: 1)
+    var tracker = ApplicationLaunchAdmissionTracker()
+
+    tracker.record(pid: 42, incarnation: original, launchDate: launchDate, now: now)
+    let mismatched = tracker.consume(pid: 42, incarnation: replacement, launchDate: launchDate, now: now)
+    #expect(!mismatched)
+
+    tracker.record(pid: 42, incarnation: original, launchDate: launchDate, now: now)
+    let matched = tracker.consume(pid: 42, incarnation: original, launchDate: launchDate, now: now)
+    let consumedAgain = tracker.consume(pid: 42, incarnation: original, launchDate: launchDate, now: now)
+    #expect(matched)
+    #expect(!consumedAgain)
+
+    tracker.record(pid: 43, incarnation: original, launchDate: launchDate, now: now, validityInterval: 1)
+    let expired = tracker.consume(
+        pid: 43,
+        incarnation: original,
+        launchDate: launchDate,
+        now: now.addingTimeInterval(2)
+    )
+    #expect(!expired)
+
+    tracker.record(pid: 44, incarnation: nil, launchDate: launchDate, now: now)
+    let matchedByLaunchDate = tracker.consume(pid: 44, incarnation: nil, launchDate: launchDate, now: now)
+    #expect(matchedByLaunchDate)
+
+    tracker.record(pid: 45, incarnation: replacement, launchDate: launchDate, now: now)
+    let staleTerminationRemoved = tracker.removeIfMatching(
+        pid: 45,
+        incarnation: nil,
+        launchDate: launchDate.addingTimeInterval(-100)
+    )
+    let survivedStaleTermination = tracker.consume(
+        pid: 45,
+        incarnation: replacement,
+        launchDate: launchDate,
+        now: now
+    )
+    #expect(!staleTerminationRemoved)
+    #expect(survivedStaleTermination)
+
+    tracker.record(pid: 46, incarnation: original, launchDate: launchDate, now: now)
+    let matchingTerminationRemoved = tracker.removeIfMatching(
+        pid: 46,
+        incarnation: original,
+        launchDate: launchDate
+    )
+    let removedAdmissionCannotBeConsumed = tracker.consume(
+        pid: 46,
+        incarnation: original,
+        launchDate: launchDate,
+        now: now
+    )
+    #expect(matchingTerminationRemoved)
+    #expect(!removedAdmissionCannotBeConsumed)
+}
 
 @Test("owned operation ignores cleanup from an unrelated owner")
 func ownedOperationIgnoresUnrelatedOwnerCleanup() {

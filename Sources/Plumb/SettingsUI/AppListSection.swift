@@ -223,6 +223,7 @@ enum AppListFilter {
 struct CenteringSection: View {
     let footnote: String
     @Binding var centerEnabled: Bool
+    @Binding var centerOnlyOnAppLaunch: Bool
     @Binding var selected: Set<String>
     let apps: [InstalledAppInfo]
 
@@ -250,19 +251,39 @@ struct CenteringSection: View {
 
     // MARK: - 顶部固定卡片
 
-    /// 居中总开关，复刻 TilingSection.headerCard 的总开关行 + 圆角卡片容器（无边距滑块）。
+    /// 居中总开关与“仅应用启动时居中”策略开关。
     private var headerCard: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.enableAutoCentering)
-                    .foregroundStyle(.primary)
-                Text(L10n.enableAutoCenteringHint)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.enableAutoCentering)
+                        .foregroundStyle(.primary)
+                    Text(L10n.enableAutoCenteringHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 12)
+                PillToggle(isOn: $centerEnabled)
+                    .accessibilityLabel(Text(L10n.enableAutoCentering))
+                    .animation(.spring(duration: 0.32, bounce: 0.25), value: centerEnabled)
             }
-            Spacer(minLength: 12)
-            PillToggle(isOn: $centerEnabled)
-                .animation(.spring(duration: 0.32, bounce: 0.25), value: centerEnabled)
+
+            Divider()
+                .opacity(0.25)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.centerOnlyOnAppLaunch)
+                        .foregroundStyle(.primary)
+                    Text(L10n.centerOnlyOnAppLaunchHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 12)
+                PillToggle(isOn: $centerOnlyOnAppLaunch)
+                    .accessibilityLabel(Text(L10n.centerOnlyOnAppLaunch))
+                    .animation(.spring(duration: 0.32, bounce: 0.25), value: centerOnlyOnAppLaunch)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)

@@ -185,6 +185,7 @@ struct SettingsView: View {
             CenteringSection(
                 footnote: L10n.centeringFootnote,
                 centerEnabled: $settings.centerEnabled,
+                centerOnlyOnAppLaunch: $settings.centerOnlyOnAppLaunch,
                 selected: $settings.centeredBundleIDs,
                 apps: apps
             )

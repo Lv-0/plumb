@@ -71,6 +71,120 @@ enum DocumentStartupNotificationPolicy {
     }
 }
 
+/// Auto-centering may optionally be limited to the activation created by a real
+/// application launch. Tiling remains independent: this policy only removes a
+/// `.center` decision when the current activation lacks launch authorization.
+enum AutomaticCenteringTriggerPolicy {
+    static func allowsAutomaticCentering(
+        centerOnlyOnAppLaunch: Bool,
+        isLaunchAuthorizedActivation: Bool
+    ) -> Bool {
+        !centerOnlyOnAppLaunch || isLaunchAuthorizedActivation
+    }
+
+    static func resolvedLayoutMode(
+        settings: AppTilingSettings,
+        bundleIdentifier: String?,
+        isLaunchAuthorizedActivation: Bool
+    ) -> AutomaticLayoutMode {
+        let baseMode = settings.resolvedAutomaticLayout(for: bundleIdentifier)
+        guard baseMode == .center else { return baseMode }
+        return allowsAutomaticCentering(
+            centerOnlyOnAppLaunch: settings.centerOnlyOnAppLaunch,
+            isLaunchAuthorizedActivation: isLaunchAuthorizedActivation
+        ) ? .center : .none
+    }
+}
+
+/// A launch notification authorizes exactly one near-term activation of the
+/// same process lifetime. PID alone is insufficient because macOS can recycle it.
+/// Entries expire so an app launched silently in the background is not treated as
+/// newly opened when the user switches to it much later.
+struct ApplicationLaunchAdmissionTracker {
+    static let defaultValidityInterval: TimeInterval = 10
+
+    private struct Admission {
+        let incarnation: ProcessIncarnation?
+        let launchDate: Date?
+        let expiresAt: Date
+    }
+
+    private var admissions: [pid_t: Admission] = [:]
+
+    mutating func record(
+        pid: pid_t,
+        incarnation: ProcessIncarnation?,
+        launchDate: Date?,
+        now: Date,
+        validityInterval: TimeInterval = Self.defaultValidityInterval
+    ) {
+        pruneExpired(now: now)
+        admissions[pid] = Admission(
+            incarnation: incarnation,
+            launchDate: launchDate,
+            expiresAt: now.addingTimeInterval(max(0, validityInterval))
+        )
+    }
+
+    mutating func consume(
+        pid: pid_t,
+        incarnation: ProcessIncarnation?,
+        launchDate: Date?,
+        now: Date
+    ) -> Bool {
+        pruneExpired(now: now)
+        guard let admission = admissions.removeValue(forKey: pid) else { return false }
+        let fallbackLaunchDatesMatch: Bool?
+        if let recordedLaunchDate = admission.launchDate, let launchDate {
+            fallbackLaunchDatesMatch = recordedLaunchDate == launchDate
+        } else {
+            fallbackLaunchDatesMatch = nil
+        }
+        return ProcessIdentityPolicy.isSameProcess(
+            pidMatches: true,
+            observedIncarnation: admission.incarnation,
+            currentIncarnation: incarnation,
+            fallbackLaunchDatesMatch: fallbackLaunchDatesMatch
+        )
+    }
+
+    /// Removes an admission only when the termination notification proves it
+    /// belongs to the same process lifetime. A delayed notification for an old
+    /// process must not erase a newly-recorded admission after PID reuse.
+    @discardableResult
+    mutating func removeIfMatching(
+        pid: pid_t,
+        incarnation: ProcessIncarnation?,
+        launchDate: Date?
+    ) -> Bool {
+        guard let admission = admissions[pid] else { return false }
+        let fallbackLaunchDatesMatch: Bool?
+        if let recordedLaunchDate = admission.launchDate, let launchDate {
+            fallbackLaunchDatesMatch = recordedLaunchDate == launchDate
+        } else {
+            fallbackLaunchDatesMatch = nil
+        }
+        guard ProcessIdentityPolicy.isSameProcess(
+            pidMatches: true,
+            observedIncarnation: admission.incarnation,
+            currentIncarnation: incarnation,
+            fallbackLaunchDatesMatch: fallbackLaunchDatesMatch
+        ) else {
+            return false
+        }
+        admissions.removeValue(forKey: pid)
+        return true
+    }
+
+    mutating func reset() {
+        admissions.removeAll(keepingCapacity: false)
+    }
+
+    private mutating func pruneExpired(now: Date) {
+        admissions = admissions.filter { $0.value.expiresAt >= now }
+    }
+}
+
 enum BackgroundSpaceLayoutPolicy {
     enum Disposition: Equatable {
         case center
@@ -236,6 +350,12 @@ final class WindowEventObserver {
     /// captures one generation token and must still own the current activation
     /// before it may read or write geometry.
     private var activationTracker = LayoutActivationTracker()
+    /// Short-lived, process-identity-bound admissions produced only by
+    /// NSWorkspace.didLaunchApplicationNotification while launch-only centering is enabled.
+    private var applicationLaunchAdmissions = ApplicationLaunchAdmissionTracker()
+    /// Exact activation allowed to perform automatic center writes in launch-only mode.
+    /// A normal app switch or Space rebind creates a different token and therefore cannot reuse it.
+    private var launchAuthorizedActivationToken: LayoutActivationToken?
     private var nextLayoutOperationSequence: UInt64 = 0
     private var nextContinuationSequence: UInt64 = 0
     /// Owns pending tile work for the current activation. The service still
@@ -359,6 +479,20 @@ final class WindowEventObserver {
     private func currentActivationToken(for pid: pid_t) -> LayoutActivationToken? {
         guard let token = activationTracker.currentToken, token.pid == pid else { return nil }
         return token
+    }
+
+    private func isLaunchAuthorizedActivation(_ token: LayoutActivationToken?) -> Bool {
+        guard let token else { return false }
+        return launchAuthorizedActivationToken == token && activationTracker.isCurrent(token)
+    }
+
+    private func revokeLaunchAuthorization() {
+        launchAuthorizedActivationToken = nil
+    }
+
+    private func revokeLaunchAuthorization(ifOwnedBy token: LayoutActivationToken) {
+        guard launchAuthorizedActivationToken == token else { return }
+        revokeLaunchAuthorization()
     }
 
     private func ownsCurrentActivation(_ token: LayoutActivationToken, pid: pid_t) -> Bool {
@@ -589,6 +723,21 @@ final class WindowEventObserver {
         initialCenterTimer = nil
     }
 
+    /// Ends the bounded launch retry and consumes its launch-only authorization.
+    /// This prevents later windows in the same still-frontmost app from borrowing
+    /// an opening event after the startup window-selection period has finished.
+    private func finishInitialCenteringRetries(
+        ownedBy lease: LayoutContinuationLease,
+        activationToken: LayoutActivationToken,
+        pid: pid_t,
+        reason: String
+    ) {
+        guard initialCenterTimerOwnership.owner == lease else { return }
+        cancelInitialCenterTimer(ownedBy: lease)
+        revokeLaunchAuthorization(ifOwnedBy: activationToken)
+        DiagnosticLog.debug("initial-retry: finished pid=\(pid) reason=\(reason)")
+    }
+
     private func cancelReattachTimer(ownedBy lease: LayoutContinuationLease? = nil) {
         if let lease {
             guard reattachTimerOwnership.end(ifOwnedBy: lease) else { return }
@@ -731,6 +880,12 @@ final class WindowEventObserver {
         )
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
+            selector: #selector(appDidLaunch(_:)),
+            name: NSWorkspace.didLaunchApplicationNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
             selector: #selector(appDidTerminate(_:)),
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
@@ -765,7 +920,7 @@ final class WindowEventObserver {
                         return
                     }
                     self.accessibilityTrustPolling = nil
-                    self.attachToFrontmostApp()
+                    self.attachToFrontmostApp(consumePendingLaunch: true)
                 }
             }
             accessibilityTrustPolling = polling.isActive ? polling : nil
@@ -792,6 +947,8 @@ final class WindowEventObserver {
         observedLaunchDate = nil
         observedProcessIncarnation = nil
         activationTracker.invalidate()
+        applicationLaunchAdmissions.reset()
+        revokeLaunchAuthorization()
         centeredWindowKeys.removeAll()
         centeredWindowKeySet.removeAll()
         processedPIDs.removeAll()
@@ -807,7 +964,15 @@ final class WindowEventObserver {
     }
 
     @objc private func activeAppChanged() {
-        attachToFrontmostApp()
+        // Revoke launch authorization as soon as a different app becomes frontmost,
+        // even if Accessibility was revoked and attach must return early. A later
+        // permission refresh must not resurrect the old app's launch activation.
+        if let launchAuthorizedActivationToken,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier != launchAuthorizedActivationToken.pid
+        {
+            revokeLaunchAuthorization()
+        }
+        attachToFrontmostApp(consumePendingLaunch: true)
     }
 
     /// Space（虚拟桌面）切换处理。
@@ -820,8 +985,15 @@ final class WindowEventObserver {
     ///   2. 居中当前屏可见的**后台**标准窗口。切回桌面时前台 = Finder，桌面上的 app 窗口是后台，
     ///      原「只动前台」架构不会碰它们——用户期望这些窗口也被整理居中（打破该契约，用户已确认）。
     @objc private func activeSpaceDidChange() {
-        guard AccessibilityPermission.ensureTrusted(prompt: false) else { return }
-        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
+        // A Space transition is explicitly not an app launch. Revoke before every
+        // early return so neither the foreground retry nor a later AX event can reuse it.
+        revokeLaunchAuthorization()
+        guard AccessibilityPermission.ensureTrusted(prompt: false) else {
+            return
+        }
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            return
+        }
 
         // A Space change starts a new layout cycle for every visible/background PID,
         // not only for the app that happens to be frontmost. Cross-cycle fallback
@@ -913,7 +1085,11 @@ final class WindowEventObserver {
             let app = NSRunningApplication(processIdentifier: pid)
             let bundleID = app?.bundleIdentifier
             switch BackgroundSpaceLayoutPolicy.disposition(
-                for: settings.resolvedAutomaticLayout(for: bundleID)
+                for: AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+                    settings: settings,
+                    bundleIdentifier: bundleID,
+                    isLaunchAuthorizedActivation: false
+                )
             ) {
             case .center:
                 break
@@ -1083,7 +1259,32 @@ final class WindowEventObserver {
         {
             return
         }
-        attachToFrontmostApp()
+        attachToFrontmostApp(consumePendingLaunch: true)
+    }
+
+    @objc private func appDidLaunch(_ notification: Notification) {
+        // With the option off, launch notifications must not change observer state or
+        // restart an activation; this preserves the historical didActivate-driven flow.
+        guard tilingSettingsStore.load().centerOnlyOnAppLaunch else { return }
+        guard
+            let userInfo = notification.userInfo,
+            let app = userInfo[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        else { return }
+
+        let pid = app.processIdentifier
+        applicationLaunchAdmissions.record(
+            pid: pid,
+            incarnation: Self.processIncarnation(for: pid),
+            launchDate: app.launchDate,
+            now: Date()
+        )
+        DiagnosticLog.debug("launch-only-center: recorded launch admission pid=\(pid) bundle=\(app.bundleIdentifier ?? "?")")
+
+        // didLaunch and didActivate can arrive in either order. If this process is
+        // already frontmost, consume/upgrade immediately; otherwise didActivate will.
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+            attachToFrontmostApp(consumePendingLaunch: true)
+        }
     }
 
     @objc private func appDidTerminate(_ notification: Notification) {
@@ -1115,6 +1316,11 @@ final class WindowEventObserver {
             DiagnosticLog.debug("terminate: stale PID-reuse notification pid=\(pid), ignore")
             return
         }
+        _ = applicationLaunchAdmissions.removeIfMatching(
+            pid: pid,
+            incarnation: observedPID == pid ? observedProcessIncarnation : nil,
+            launchDate: app.launchDate
+        )
         service.invalidateCachedWindowContext(for: pid)
         // If the terminated app is the one we were observing, drop the observer too so a stale
         // source does not fire for a recycled PID.
@@ -1137,6 +1343,7 @@ final class WindowEventObserver {
             observedProcessIncarnation = nil
             if let token = activationTracker.currentToken, token.pid == pid {
                 _ = activationTracker.invalidate(token)
+                revokeLaunchAuthorization()
             }
         }
 
@@ -1153,7 +1360,10 @@ final class WindowEventObserver {
         endDocumentStableGate(pid: pid)
     }
 
-    private func attachToFrontmostApp(forceRebind: Bool = false) {
+    private func attachToFrontmostApp(
+        forceRebind: Bool = false,
+        consumePendingLaunch: Bool = false
+    ) {
         guard AccessibilityPermission.ensureTrusted(prompt: false) else {
             DiagnosticLog.debug("attach: accessibility NOT trusted — skipping")
             return
@@ -1164,8 +1374,30 @@ final class WindowEventObserver {
         }
 
         let appIncarnation = Self.processIncarnation(for: app.processIdentifier)
+        let admittedLaunch = consumePendingLaunch && applicationLaunchAdmissions.consume(
+            pid: app.processIdentifier,
+            incarnation: appIncarnation,
+            launchDate: app.launchDate,
+            now: Date()
+        )
+        let launchAuthorized = admittedLaunch
         let isSameProcess = isObservingSameProcess(app, incarnation: appIncarnation)
         if isSameProcess, !observerRegistrationFailed, !forceRebind {
+            // didActivate may be delivered just before didLaunch. Upgrade the existing
+            // activation in place and restart its bounded initial retry instead of creating
+            // a second observer/session solely because notification order differed.
+            if launchAuthorized,
+               let activationToken = currentActivationToken(for: app.processIdentifier)
+            {
+                launchAuthorizedActivationToken = activationToken
+                let appElement = AXUIElementCreateApplication(app.processIdentifier)
+                startInitialCenteringRetries(
+                    pid: app.processIdentifier,
+                    appElement: appElement,
+                    bundleIdentifier: app.bundleIdentifier
+                )
+                DiagnosticLog.debug("launch-only-center: upgraded current activation pid=\(app.processIdentifier)")
+            }
             DiagnosticLog.debug("attach: already observing pid=\(app.processIdentifier) (\(app.bundleIdentifier ?? "?"))")
             return
         }
@@ -1189,6 +1421,7 @@ final class WindowEventObserver {
         service.abortActiveAnimations()
         tileCoordinator.cancelAll()
         activationTracker.invalidate()
+        revokeLaunchAuthorization()
 
         cancelInitialCenterTimer()
         cancelReattachTimer()
@@ -1248,7 +1481,11 @@ final class WindowEventObserver {
         observedPID = pid
         observedLaunchDate = app.launchDate
         observedProcessIncarnation = appIncarnation
-        _ = activationTracker.activate(pid: pid)
+        let activationToken = activationTracker.activate(pid: pid)
+        launchAuthorizedActivationToken = launchAuthorized ? activationToken : nil
+        if launchAuthorized {
+            DiagnosticLog.debug("launch-only-center: authorized activation pid=\(pid) generation=\(activationToken.generation)")
+        }
         let appElement = AXUIElementCreateApplication(pid)
         seedObservedWindowKeys(pid: pid, appElement: appElement)
 
@@ -1446,6 +1683,27 @@ final class WindowEventObserver {
             return .ignored
         }
 
+        let bundleIdentifier = frontmostApp.bundleIdentifier
+        let triggerSettings = tilingSettingsStore.load()
+        let launchAuthorized = isLaunchAuthorizedActivation(currentActivationToken(for: pid))
+        let launchOnlyCenteringSuppressed = triggerSettings.resolvedAutomaticLayout(for: bundleIdentifier) == .center
+            && !AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
+                centerOnlyOnAppLaunch: triggerSettings.centerOnlyOnAppLaunch,
+                isLaunchAuthorizedActivation: launchAuthorized
+            )
+        let isPointerManualNotification = (
+            notification == (kAXMovedNotification as String)
+                || notification == (kAXResizedNotification as String)
+        ) && NSEvent.pressedMouseButtons != 0
+        if launchOnlyCenteringSuppressed, !isPointerManualNotification {
+            // This gate intentionally precedes move/resize bookkeeping. Workspace may
+            // deliver didActivate just before didLaunch; startup self-layout notifications
+            // in that gap must not mark the window manual and defeat the later launch grant.
+            // A direct pointer gesture remains authoritative and still enters the manual path.
+            DiagnosticLog.debug("handle[\(notification)]: launch-only centering suppressed pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
+            return .ignored
+        }
+
         // resize 事件走独立旁路：必须在下方 processedPIDs 守卫之前分流，否则一个已平铺的窗口
         //（PID 已被锁）在用户缩放后，事件会被 PID 锁直接 short-circuit，到不了「标记手动」旁路。
         // handleResize 内部自带 frontmost / stale / 真实窗口 / 自身动画守卫，仅标记 manualWindowKeys。
@@ -1470,7 +1728,6 @@ final class WindowEventObserver {
             DiagnosticLog.debug("handle[\(notification)]: no centerable candidate window")
             return .retry
         }
-        let bundleIdentifier = frontmostApp.bundleIdentifier
         let observedWindowKey = operationWindowKey(pid: pid, window: windowElement)
         let isFirstNormalObservation = observedWindowKeys.insert(observedWindowKey).inserted
 
@@ -1588,11 +1845,20 @@ final class WindowEventObserver {
             return false
         }
         let tilingSettings = tilingSettingsStore.load()
+        let launchAuthorized = isLaunchAuthorizedActivation(activationToken)
+        let allowsAutomaticCentering = AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
+            centerOnlyOnAppLaunch: tilingSettings.centerOnlyOnAppLaunch,
+            isLaunchAuthorizedActivation: launchAuthorized
+        )
         // 运行时排版决策（互斥）：平铺优先于居中。一个 App 在同一激活周期内只会被自动
         // 「平铺」或「居中」之一——不再有「先平铺再居中」（centerAfterTile）。
         // 显式决策替代旧的隐式 tile-then-center 行为：后者让尺寸受限的平铺 App（拒绝目标高度）
         // 在每次激活后被居中再次移动，造成反复跳动（见 performTileAndLock 的 preflight 注释）。
-        let layoutMode = tilingSettings.resolvedAutomaticLayout(for: bundleIdentifier)
+        let layoutMode = AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+            settings: tilingSettings,
+            bundleIdentifier: bundleIdentifier,
+            isLaunchAuthorizedActivation: launchAuthorized
+        )
         let shouldTile = (layoutMode == .tile)
         let shouldCenter = (layoutMode == .center)
         // per-app 间距：该 app 单独设置过 → 用其四向 insets；否则回退全局 edgeInsets。
@@ -1658,6 +1924,10 @@ final class WindowEventObserver {
                     // tick cannot later transition the same window into the stable/tile path.
                     endDocumentClassificationGate(windowKey: documentWindowKey)
                     endDocumentStartupBootstrap(windowKey: documentWindowKey, reason: "gallery resolved by AX event")
+                    guard allowsAutomaticCentering else {
+                        DiagnosticLog.debug("handle[\(notification)]: launch-only centering suppressed for gallery pid=\(pid)")
+                        return true
+                    }
                     guard tileCoordinator.activeID == nil else {
                         DiagnosticLog.debug("handle[\(notification)]: active tile session — defer gallery center pid=\(pid)")
                         return false
@@ -1714,6 +1984,10 @@ final class WindowEventObserver {
                         insets: effectiveInsets,
                         bundleIdentifier: bundleIdentifier
                     )
+                    guard allowsAutomaticCentering else {
+                        DiagnosticLog.debug("handle[\(notification)]: launch-only centering suppressed for undetermined window pid=\(pid)")
+                        return false
+                    }
                     guard tileCoordinator.activeID == nil else {
                         DiagnosticLog.debug("handle[\(notification)]: active tile session — classification gate owns deferred undetermined window pid=\(pid)")
                         return false
@@ -1769,6 +2043,10 @@ final class WindowEventObserver {
                let title = windowElement.axString(kAXTitleAttribute as CFString),
                dmgMonitor.isMountedDmgVolume(title)
             {
+                guard allowsAutomaticCentering else {
+                    DiagnosticLog.debug("handle[\(notification)]: launch-only centering suppressed for DMG window pid=\(pid)")
+                    return true
+                }
                 guard tileCoordinator.activeID == nil else {
                     DiagnosticLog.debug("handle[\(notification)]: active tile session — defer DMG center pid=\(pid)")
                     return false
@@ -1903,6 +2181,7 @@ final class WindowEventObserver {
                 self.markCentered(windowElement: windowElement, pid: pid)
                 self.processedPIDs.insert(pid)
                 self.cancelInitialCenterTimer()
+                self.revokeLaunchAuthorization(ifOwnedBy: activationToken)
                 DiagnosticLog.debug("center completion: verified and locked pid=\(pid)")
             }
             if startResult == .started {
@@ -1953,6 +2232,7 @@ final class WindowEventObserver {
             manualWindowKeys.insert(cacheKey)
         }
         cancelInitialCenterTimer()
+        revokeLaunchAuthorization(ifOwnedBy: activationToken)
         DiagnosticLog.debug("center completion: user interrupted, mark manual for activation pid=\(pid)")
     }
 
@@ -2208,6 +2488,16 @@ final class WindowEventObserver {
     private func startInitialCenteringRetries(pid: pid_t, appElement: AXUIElement, bundleIdentifier: String?) {
         guard let activationToken = currentActivationToken(for: pid) else { return }
         cancelInitialCenterTimer()
+        let settings = tilingSettingsStore.load()
+        if settings.resolvedAutomaticLayout(for: bundleIdentifier) == .center,
+           !AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
+               centerOnlyOnAppLaunch: settings.centerOnlyOnAppLaunch,
+               isLaunchAuthorizedActivation: isLaunchAuthorizedActivation(activationToken)
+           )
+        {
+            DiagnosticLog.debug("initial-retry: launch-only centering suppressed pid=\(pid)")
+            return
+        }
         let lease = makeContinuationLease(token: activationToken)
         _ = initialCenterTimerOwnership.begin(owner: lease)
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -2223,13 +2513,23 @@ final class WindowEventObserver {
 
             guard self.ownsCurrentActivation(activationToken, pid: pid) else {
                 DiagnosticLog.debug("initial-retry: stale activation pid=\(pid), drop")
-                self.cancelInitialCenterTimer(ownedBy: lease)
+                self.finishInitialCenteringRetries(
+                    ownedBy: lease,
+                    activationToken: activationToken,
+                    pid: pid,
+                    reason: "stale activation"
+                )
                 return
             }
 
             // If user has switched away, stop retrying.
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                self.cancelInitialCenterTimer(ownedBy: lease)
+                self.finishInitialCenteringRetries(
+                    ownedBy: lease,
+                    activationToken: activationToken,
+                    pid: pid,
+                    reason: "app no longer frontmost"
+                )
                 return
             }
 
@@ -2238,13 +2538,23 @@ final class WindowEventObserver {
             // undetermined 则返回 `.retry`，等待 AX 子树就绪后重新分类。
             let outcome = self.handle(notification: "initial-retry", element: appElement, forcedPID: pid)
             if !outcome.shouldContinueInitialRetry {
-                self.cancelInitialCenterTimer(ownedBy: lease)
+                self.finishInitialCenteringRetries(
+                    ownedBy: lease,
+                    activationToken: activationToken,
+                    pid: pid,
+                    reason: "terminal outcome \(outcome)"
+                )
                 return
             }
 
             // 固定上限 10 次（首次 0.45s + 9 次重试 ≈ 9.45s）。
             if attempts >= 10 {
-                self.cancelInitialCenterTimer(ownedBy: lease)
+                self.finishInitialCenteringRetries(
+                    ownedBy: lease,
+                    activationToken: activationToken,
+                    pid: pid,
+                    reason: "attempt limit"
+                )
             }
         }
         initialCenterTimer = timer
@@ -2743,6 +3053,7 @@ final class WindowEventObserver {
         markCentered(windowElement: windowElement, pid: pid)
         processedPIDs.insert(pid)
         cancelInitialCenterTimer()
+        revokeLaunchAuthorization(ifOwnedBy: token)
         // 仅当本次锁定前真的写了 AX（动画/校正/妥协锚定/预算耗尽锚定）时才记录自排版宽限。
         // 无写入的 preflight 锁定（窗口已达标）不记录宽限——否则用户的后续手动拖拽会被宽限期
         // 误吞（"no-write preflight 后手动拖拽不被识别"回归）。

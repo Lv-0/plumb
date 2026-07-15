@@ -14,6 +14,7 @@ import Foundation
 //   - isEnabled / edgeInsets / tiledBundleIDs     ：平铺总开关、全局四向间距、平铺白名单。
 //   - centerEnabled / centeredBundleIDs           ：居中总开关与居中白名单
 //     （空列表 => 居中全部；非空 => 仅列表内；关闭 => 永不自动居中）。
+//   - centerOnlyOnAppLaunch                       ：仅在应用进程启动时自动居中。
 //   - perAppInsets                                 ：每个 app 单独的上/下/左/右间距（key=归一化 bundle id）。
 //   - documentChooserBundleIDs                    ：启用"文档选择器感知"的 App。
 //     这些文档类 App（Pages/Word/Excel/Numbers 等）启动时常先弹出模板/文件列表窗口，
@@ -88,7 +89,7 @@ struct AppTilingSettings: Equatable, Codable {
     //   仅在下面的 _LegacyKeys 单独声明，仅供 init(from:) 解码旧文件。
     private enum CodingKeys: String, CodingKey {
         case isEnabled, edgeInsets, tiledBundleIDs, hideSystemAppsInPicker
-        case centerEnabled, centeredBundleIDs, documentChooserBundleIDs
+        case centerEnabled, centeredBundleIDs, centerOnlyOnAppLaunch, documentChooserBundleIDs
         case perAppInsets, hideStatusBarIcon, autoCheckUpdates
     }
 
@@ -112,6 +113,8 @@ struct AppTilingSettings: Equatable, Codable {
         hideSystemAppsInPicker = try c.decodeIfPresent(Bool.self, forKey: .hideSystemAppsInPicker) ?? true
         centerEnabled = try c.decodeIfPresent(Bool.self, forKey: .centerEnabled) ?? true
         centeredBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .centeredBundleIDs) ?? []
+        // 后增字段：旧设置缺键时回退 false，完整保留原有的激活/Space 自动居中逻辑。
+        centerOnlyOnAppLaunch = try c.decodeIfPresent(Bool.self, forKey: .centerOnlyOnAppLaunch) ?? false
         documentChooserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .documentChooserBundleIDs) ?? Self.defaultDocumentChooserBundleIDs
         // 旧文件迁移必须按“键是否缺失”判断，而不是按新映射是否为空判断。显式空映射
         // 表示用户已经清除了所有 per-app override；若此时再读残留的 perAppMargins，
@@ -144,7 +147,8 @@ struct AppTilingSettings: Equatable, Codable {
         documentChooserBundleIDs: Set<String>,
         perAppInsets: [String: TileInsets] = [:],
         hideStatusBarIcon: Bool = false,
-        autoCheckUpdates: Bool = true
+        autoCheckUpdates: Bool = true,
+        centerOnlyOnAppLaunch: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.edgeInsets = edgeInsets
@@ -156,6 +160,7 @@ struct AppTilingSettings: Equatable, Codable {
         self.perAppInsets = perAppInsets
         self.hideStatusBarIcon = hideStatusBarIcon
         self.autoCheckUpdates = autoCheckUpdates
+        self.centerOnlyOnAppLaunch = centerOnlyOnAppLaunch
     }
 
     /// 默认启用"文档选择器感知"的 App 集合。
@@ -200,6 +205,9 @@ struct AppTilingSettings: Equatable, Codable {
     var centerEnabled: Bool
     /// 仅对列表内 app 自动居中；为空时居中全部 app（向后兼容）。
     var centeredBundleIDs: Set<String>
+    /// 开启后，仅应用进程启动产生的激活周期允许自动居中；默认关闭，保持原有逻辑。
+    /// 只约束自动居中，不影响自动平铺或菜单栏“立即居中”。
+    var centerOnlyOnAppLaunch: Bool
 
     /// 启用"文档选择器感知"的 App（默认预置 Pages/Numbers/Word/Excel）。
     /// 语义：仅影响选择器窗口的处理方式，**不影响**该 App 是否会被平铺——后者仍由
@@ -219,7 +227,8 @@ struct AppTilingSettings: Equatable, Codable {
         centerEnabled: true,
         centeredBundleIDs: [],
         documentChooserBundleIDs: defaultDocumentChooserBundleIDs,
-        perAppInsets: [:]
+        perAppInsets: [:],
+        centerOnlyOnAppLaunch: false
     )
 
     func normalized() -> AppTilingSettings {
@@ -255,7 +264,8 @@ struct AppTilingSettings: Equatable, Codable {
             documentChooserBundleIDs: normalizedChooserIDs,
             perAppInsets: normalizedPerApp,
             hideStatusBarIcon: hideStatusBarIcon,
-            autoCheckUpdates: autoCheckUpdates
+            autoCheckUpdates: autoCheckUpdates,
+            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch
         )
     }
 
@@ -332,6 +342,7 @@ final class AppTilingSettingsStore {
         static let hideSystemApps = "tiling.hideSystemAppsInPicker"
         static let centerEnabled = "centering.enabled"
         static let centeredBundleIDs = "centering.bundleIDs"
+        static let centerOnlyOnAppLaunch = "centering.onlyOnAppLaunch"
         static let documentChooserBundleIDs = "tiling.documentChooserBundleIDs"
         static let perAppInsets = "tiling.perAppInsets"
         static let legacyEdgeMargin = "tiling.edgeMargin"        // 仅读取用于一次性迁移
@@ -440,7 +451,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-            "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) insets=t\(Int(s.edgeInsets.top))b\(Int(s.edgeInsets.bottom))l\(Int(s.edgeInsets.left))r\(Int(s.edgeInsets.right)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
+            "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) centerLaunchOnly=\(s.centerOnlyOnAppLaunch) insets=t\(Int(s.edgeInsets.top))b\(Int(s.edgeInsets.bottom))l\(Int(s.edgeInsets.left))r\(Int(s.edgeInsets.right)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -541,6 +552,7 @@ final class AppTilingSettingsStore {
         let hasHideSystemApps = defaults.object(forKey: Keys.hideSystemApps) != nil
         let hasCenterEnabled = defaults.object(forKey: Keys.centerEnabled) != nil
         let hasCenteredBundleIDs = defaults.object(forKey: Keys.centeredBundleIDs) != nil
+        let hasCenterOnlyOnAppLaunch = defaults.object(forKey: Keys.centerOnlyOnAppLaunch) != nil
         let hasDocumentChooserBundleIDs = defaults.object(forKey: Keys.documentChooserBundleIDs) != nil
         let hasPerAppInsets = defaults.object(forKey: Keys.perAppInsets) != nil
         let hasLegacyPerAppMargins = defaults.object(forKey: Keys.legacyPerAppMargins) != nil
@@ -548,7 +560,7 @@ final class AppTilingSettingsStore {
         let hasAutoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) != nil
 
         if !hasEnabled, !hasEdgeInsets, !hasLegacyEdgeMargin, !hasBundleIDs, !hasHideSystemApps,
-           !hasCenterEnabled, !hasCenteredBundleIDs, !hasDocumentChooserBundleIDs,
+           !hasCenterEnabled, !hasCenteredBundleIDs, !hasCenterOnlyOnAppLaunch, !hasDocumentChooserBundleIDs,
            !hasPerAppInsets, !hasLegacyPerAppMargins, !hasHideStatusBarIcon,
            !hasAutoCheckUpdates {
             return .default
@@ -574,6 +586,9 @@ final class AppTilingSettingsStore {
         let hideSystemApps = hasHideSystemApps ? defaults.bool(forKey: Keys.hideSystemApps) : AppTilingSettings.default.hideSystemAppsInPicker
         let centerEnabled = hasCenterEnabled ? defaults.bool(forKey: Keys.centerEnabled) : AppTilingSettings.default.centerEnabled
         let centeredBundleIDsArray = defaults.array(forKey: Keys.centeredBundleIDs) as? [String] ?? []
+        let centerOnlyOnAppLaunch = hasCenterOnlyOnAppLaunch
+            ? defaults.bool(forKey: Keys.centerOnlyOnAppLaunch)
+            : AppTilingSettings.default.centerOnlyOnAppLaunch
         // 向后兼容：旧版本无此键时回退到默认预置的 4 个文档类 App。
         let documentChooserBundleIDsArray = hasDocumentChooserBundleIDs
             ? (defaults.array(forKey: Keys.documentChooserBundleIDs) as? [String] ?? [])
@@ -618,7 +633,8 @@ final class AppTilingSettingsStore {
             documentChooserBundleIDs: Set(documentChooserBundleIDsArray.map(AppTilingSettings.normalizeBundleID).filter { !$0.isEmpty }),
             perAppInsets: perAppInsets,
             hideStatusBarIcon: hideStatusBarIcon,
-            autoCheckUpdates: autoCheckUpdates
+            autoCheckUpdates: autoCheckUpdates,
+            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch
         ).normalized()
     }
 
@@ -637,6 +653,7 @@ final class AppTilingSettingsStore {
         defaults.set(normalized.hideSystemAppsInPicker, forKey: Keys.hideSystemApps)
         defaults.set(normalized.centerEnabled, forKey: Keys.centerEnabled)
         defaults.set(Array(normalized.centeredBundleIDs).sorted(), forKey: Keys.centeredBundleIDs)
+        defaults.set(normalized.centerOnlyOnAppLaunch, forKey: Keys.centerOnlyOnAppLaunch)
         defaults.set(Array(normalized.documentChooserBundleIDs).sorted(), forKey: Keys.documentChooserBundleIDs)
         // per-app 四向间距镜像双写：序列化为 [String: [String: Double]]（UserDefaults 原生支持）。
         // 不再双写旧键 tiling.perAppMargins（仅读取迁移用）——首次 save 后旧键即被新键取代。

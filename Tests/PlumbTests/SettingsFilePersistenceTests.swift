@@ -34,7 +34,7 @@ func filePersistenceRoundTrip() async throws {
         try? FileManager.default.removeItem(at: tmpDir)
     }
 
-    let input = AppTilingSettings(
+    var input = AppTilingSettings(
         isEnabled: true, edgeInsets: TileInsets(all: 24),
         tiledBundleIDs: ["com.microsoft.word", "com.apple.safari"],
         hideSystemAppsInPicker: false,
@@ -42,6 +42,7 @@ func filePersistenceRoundTrip() async throws {
         centeredBundleIDs: ["com.apple.mail"],
         documentChooserBundleIDs: ["com.microsoft.word", "com.microsoft.excel"]
     )
+    input.centerOnlyOnAppLaunch = true
     store.save(input)
 
     // 文件应已生成。
@@ -52,6 +53,7 @@ func filePersistenceRoundTrip() async throws {
     let loaded = freshStore.load()
 
     #expect(loaded == input)
+    #expect(loaded.centerOnlyOnAppLaunch)
 }
 
 @Test

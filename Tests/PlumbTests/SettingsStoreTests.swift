@@ -24,6 +24,7 @@ func settingsStoreDefaultValues() async throws {
     // 居中默认开启、列表为空（=> 全部居中，向后兼容）。
     #expect(settings.centerEnabled == true)
     #expect(settings.centeredBundleIDs.isEmpty)
+    #expect(settings.centerOnlyOnAppLaunch == false)
 }
 
 @Test
@@ -80,7 +81,7 @@ func settingsStoreCenteringRoundTrip() async throws {
         try? FileManager.default.removeItem(at: tmpDir)
     }
 
-    let input = AppTilingSettings(
+    var input = AppTilingSettings(
         isEnabled: false,
         edgeInsets: TileInsets(all: AppTilingSettings.defaultEdgeMargin),
         tiledBundleIDs: [],
@@ -89,12 +90,15 @@ func settingsStoreCenteringRoundTrip() async throws {
         centeredBundleIDs: ["com.apple.Safari", "  COM.GOOGLE.CHROME  "],
         documentChooserBundleIDs: AppTilingSettings.defaultDocumentChooserBundleIDs
     )
+    input.centerOnlyOnAppLaunch = true
 
     store.save(input)
     let loaded = store.load()
 
     #expect(loaded.centerEnabled == false)
     #expect(loaded.centeredBundleIDs == ["com.apple.safari", "com.google.chrome"])
+    #expect(loaded.centerOnlyOnAppLaunch == true)
+    #expect(defaults.bool(forKey: "centering.onlyOnAppLaunch") == true)
 
     // 切换为开启并清空列表。
     var enabled = loaded
@@ -104,6 +108,7 @@ func settingsStoreCenteringRoundTrip() async throws {
     let loaded2 = store.load()
     #expect(loaded2.centerEnabled == true)
     #expect(loaded2.centeredBundleIDs.isEmpty)
+    #expect(loaded2.centerOnlyOnAppLaunch == true)
 }
 
 @Test
@@ -169,8 +174,41 @@ func settingsStoreBackwardCompatWhenCenterKeysAbsent() async throws {
     let loaded = store.load()
     #expect(loaded.centerEnabled == AppTilingSettings.default.centerEnabled)
     #expect(loaded.centeredBundleIDs == AppTilingSettings.default.centeredBundleIDs)
+    #expect(loaded.centerOnlyOnAppLaunch == false)
     // 迁移后文件应已生成（含从 UserDefaults 读到的数据）。
     #expect(FileManager.default.fileExists(atPath: fileURL.path))
+}
+
+@Test
+func settingsStoreRecognizesLaunchOnlyKeyAsNonEmptyDomain() async throws {
+    let suiteName = "Plumb.tests.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        Issue.record("Failed to create isolated UserDefaults suite")
+        return
+    }
+    defaults.removePersistentDomain(forName: suiteName)
+    let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("plumb-tests-\(UUID().uuidString)")
+    let fileURL = tmpDir.appendingPathComponent("settings.json")
+    let store = AppTilingSettingsStore(defaults: defaults, settingsFileURL: fileURL)
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    defaults.set(true, forKey: "centering.onlyOnAppLaunch")
+    let loaded = store.load()
+
+    #expect(loaded.centerOnlyOnAppLaunch)
+    #expect(FileManager.default.fileExists(atPath: fileURL.path))
+}
+
+@Test
+func settingsJSONWithoutLaunchOnlyKeyKeepsHistoricalBehavior() throws {
+    let legacyJSON = Data(#"{"centerEnabled":true,"centeredBundleIDs":[]}"#.utf8)
+    let decoded = try JSONDecoder().decode(AppTilingSettings.self, from: legacyJSON)
+
+    #expect(decoded.centerEnabled)
+    #expect(decoded.centerOnlyOnAppLaunch == false)
 }
 
 // MARK: - resolvedAutomaticLayout (tile/center 互斥、平铺优先)
@@ -295,4 +333,3 @@ func resolvedLayoutPreservesEmptyCenteredBundleIDsSemantics() async throws {
     #expect(settings.resolvedAutomaticLayout(for: "com.other.app") == .center)
     #expect(settings.resolvedAutomaticLayout(for: nil) == .center)
 }
-
