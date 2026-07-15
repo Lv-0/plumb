@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.57/Plumb-2.0.57.zip",
   "sha256": "5719929f5432ac23ced12075f0625976faf6be049905ef03381399b0fc3d3fcf",
   "notes": {
-    "en": "Reopening the running Plumb app now opens Settings immediately. The menu-bar icon recovery behavior is preserved, and the full test suite passes.",
-    "zh": "重新打开正在运行的 Plumb 后会立即打开设置界面。保留菜单栏图标自愈行为，完整测试套件已通过。",
-    "es": "Volver a abrir Plumb mientras está en ejecución abre Ajustes de inmediato. Se conserva la recuperación del icono de la barra de menús y todas las pruebas pasan.",
-    "fr": "Rouvrir Plumb pendant son exécution ouvre désormais les Réglages immédiatement. La récupération de l’icône de la barre des menus est conservée et tous les tests passent.",
-    "ja": "実行中の Plumb をもう一度開くと、設定がすぐに表示されます。メニューバーアイコンの自動修復は維持され、すべてのテストに合格しています。"
+    "en": "Fixed Pages blank-document layout so the first and subsequent documents are centered and tiled reliably, with safer multi-window completion checks.",
+    "zh": "修复 Pages 空白文稿首次及后续文稿无法自动居中平铺的问题，并加强多窗口完成状态判断。",
+    "es": "Se corrigió la disposición automática de documentos en blanco de Pages, incluidos los documentos posteriores, y se reforzó la validación de ventanas múltiples.",
+    "fr": "Correction du centrage et du pavage automatiques des documents vierges Pages, y compris les suivants, avec une validation multi-fenêtre plus sûre.",
+    "ja": "Pages の空白書類で、最初と後続の書類が自動配置されない問題を修正し、複数ウィンドウの完了判定も強化しました。"
   },
   "minOS": "26.0"
 }
