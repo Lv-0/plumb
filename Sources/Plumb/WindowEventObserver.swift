@@ -46,6 +46,31 @@ enum AnimationNotificationPolicy {
     }
 }
 
+/// Pure policy for the short lifecycle gap between a document window identity first appearing and
+/// its AX subtree becoming classifiable. Existing windows must keep the ordinary sticky-manual
+/// behavior; only a brand-new, eligible identity may bootstrap classification from a no-pointer
+/// move/resize notification.
+enum DocumentStartupNotificationPolicy {
+    enum Disposition: Equatable {
+        case beginBootstrap
+        case suppressDuringBootstrap
+        case markManual
+    }
+
+    static func disposition(
+        isKnownWindow: Bool,
+        hasActiveBootstrap: Bool,
+        canBeginBootstrap: Bool,
+        pointerButtonDown: Bool
+    ) -> Disposition {
+        // A held pointer is direct user-intent evidence and always wins over startup suppression.
+        if pointerButtonDown { return .markManual }
+        if hasActiveBootstrap { return .suppressDuringBootstrap }
+        if !isKnownWindow, canBeginBootstrap { return .beginBootstrap }
+        return .markManual
+    }
+}
+
 enum BackgroundSpaceLayoutPolicy {
     enum Disposition: Equatable {
         case center
@@ -259,6 +284,20 @@ final class WindowEventObserver {
     /// 仅当通知窗口与 service 的精确 animation owner 一致时才作为自写排除；另一窗口的
     /// genuine move/resize 仍会被标记，避免全局单飞误吞多文档手势。
     private var manualWindowKeys: Set<String> = []
+    /// Exact window identities already present or observed in the current activation/Space cycle.
+    /// The set is seeded from AXWindows at attach so a later resize of an existing document can
+    /// never masquerade as startup. A new Pages document may first arrive through AXResized; that
+    /// identity is the only case eligible for the bounded bootstrap below.
+    private var observedWindowKeys: Set<String> = []
+    private struct DocumentStartupBootstrap {
+        let activationToken: LayoutActivationToken
+        let deadline: Date
+    }
+    /// Per-window startup suppression. It does not write geometry and is intentionally shorter than
+    /// the classification/stability gates. Pointer interaction cancels it immediately and marks the
+    /// exact window manual.
+    private var documentStartupBootstraps: [String: DocumentStartupBootstrap] = [:]
+    private static let documentStartupBootstrapInterval: TimeInterval = 1.5
     /// Plumb 自己刚完成布局后的短暂宽限窗口。部分 app 会在 `activeAnimationKey` 清掉后才投递
     /// 由我们刚写入 AXPosition/AXSize 触发的迟到 move/resize 通知；这些通知不能被当作用户手动操作。
     private var selfLayoutGraceUntil: [String: Date] = [:]
@@ -289,6 +328,14 @@ final class WindowEventObserver {
     /// 慢载入的迟到自 resize（加载完成后一次性自设 frame），可能把坏形态误标 manual 永久冻结。
     /// 对 document-chooser app 延长到 4.0s 覆盖其迟到自 resize。非 document-chooser app 仍用 1.8s。
     private static let documentChooserPostSessionGraceInterval: TimeInterval = 4.0
+    /// 新建文档窗口的 AX 子树可能在 AXWindowCreated/AXFocusedWindowChanged 到达时仍为空壳。
+    /// 分类等待必须按窗口拥有，不能依赖已经可能耗尽的 activation-wide initial retry，也不能
+    /// 让同 PID 的多个文档互相覆盖。首次 .undetermined 事件只居中一次；后续 timer tick 仅分类，
+    /// 明确为 .document 后转交下方稳定门，明确为 .gallery 或超时则安全结束且不锁 PID。
+    private var documentClassificationTimers: [String: DispatchSourceTimer] = [:]
+    private var documentClassificationTimerOwnership = MultiOwnedOperationState<String, LayoutContinuationLease>()
+    private static let documentClassificationSampleIntervalMs: Int = 400
+    private static let documentClassificationMaxSamples: Int = 6 // 400ms × 6 ≈ 2.4s
     /// 阶段 3.1 的稳定门按窗口拥有。一个文档 App 可同时创建多个未保存文档；若按 PID
     /// 共用单槽，先稳定的窗口会让同 PID 的其它窗口绕过自己的稳定检查。
     private var documentStableTimers: [String: DispatchSourceTimer] = [:]
@@ -356,6 +403,145 @@ final class WindowEventObserver {
             pid: pid,
             windowNumber: windowNumber(of: window),
             fallbackAXHash: Int(CFHash(window)))
+    }
+
+    private func seedObservedWindowKeys(pid: pid_t, appElement: AXUIElement) {
+        let keys = appElement.axWindowElements(kAXWindowsAttribute as CFString).map {
+            operationWindowKey(pid: pid, window: $0)
+        }
+        observedWindowKeys.formUnion(keys)
+        DiagnosticLog.debug("document-startup-bootstrap: seeded \(keys.count) existing window identity(s) pid=\(pid)")
+    }
+
+    private func canBeginDocumentStartupBootstrap(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        appElement: AXUIElement,
+        bundleIdentifier: String?
+    ) -> Bool {
+        let settings = tilingSettingsStore.load()
+        guard
+            currentActivationToken(for: pid) != nil,
+            settings.shouldTile(bundleIdentifier: bundleIdentifier),
+            settings.isDocumentChooserApp(bundleIdentifier: bundleIdentifier),
+            isAutoCenterEligibleWindow(windowElement),
+            !isSecondaryWindowOfApp(
+                windowElement,
+                appElement: appElement,
+                bundleIdentifier: bundleIdentifier
+            ),
+            !(isJournalBundle(bundleIdentifier) && isJournalSettingsWindow(windowElement)),
+            !hasCentered(windowElement: windowElement, pid: pid)
+        else { return false }
+        if let manualKey = key(pid: pid, window: windowElement), manualWindowKeys.contains(manualKey) {
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func beginDocumentStartupBootstrap(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        appElement: AXUIElement,
+        bundleIdentifier: String?,
+        startClassification: Bool,
+        reason: String
+    ) -> Bool {
+        guard
+            let activationToken = currentActivationToken(for: pid),
+            canBeginDocumentStartupBootstrap(
+                windowElement: windowElement,
+                pid: pid,
+                appElement: appElement,
+                bundleIdentifier: bundleIdentifier
+            )
+        else { return false }
+
+        let windowKey = operationWindowKey(pid: pid, window: windowElement)
+        documentStartupBootstraps[windowKey] = DocumentStartupBootstrap(
+            activationToken: activationToken,
+            deadline: Date().addingTimeInterval(Self.documentStartupBootstrapInterval)
+        )
+        DiagnosticLog.debug(
+            "document-startup-bootstrap: begin key=\(windowKey) pid=\(pid) " +
+            "interval=\(Self.documentStartupBootstrapInterval)s reason=\(reason)"
+        )
+
+        if startClassification {
+            let settings = tilingSettingsStore.load()
+            startDocumentClassificationGate(
+                pid: pid,
+                appElement: appElement,
+                primaryWindow: windowElement,
+                insets: settings.effectiveInsets(for: bundleIdentifier),
+                bundleIdentifier: bundleIdentifier
+            )
+        }
+        return true
+    }
+
+    private func endDocumentStartupBootstrap(windowKey: String, reason: String) {
+        guard documentStartupBootstraps.removeValue(forKey: windowKey) != nil else { return }
+        DiagnosticLog.debug("document-startup-bootstrap: end key=\(windowKey) reason=\(reason)")
+    }
+
+    private func hasActiveDocumentStartupBootstrap(windowKey: String, now: Date = Date()) -> Bool {
+        guard let state = documentStartupBootstraps[windowKey] else { return false }
+        guard state.deadline > now, activationTracker.currentToken == state.activationToken else {
+            endDocumentStartupBootstrap(windowKey: windowKey, reason: "expired or stale activation")
+            return false
+        }
+        return true
+    }
+
+    /// Returns true when the notification belongs to the bounded startup lifecycle and therefore
+    /// must not become sticky-manual. Returns false for ordinary/user notifications.
+    private func suppressDocumentStartupManualNotificationIfNeeded(
+        windowElement: AXUIElement,
+        pid: pid_t,
+        event: String
+    ) -> Bool {
+        let windowKey = operationWindowKey(pid: pid, window: windowElement)
+        let isKnownWindow = observedWindowKeys.contains(windowKey)
+        let hasActiveBootstrap = hasActiveDocumentStartupBootstrap(windowKey: windowKey)
+        let appElement = AXUIElementCreateApplication(pid)
+        let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let canBeginBootstrap = canBeginDocumentStartupBootstrap(
+            windowElement: windowElement,
+            pid: pid,
+            appElement: appElement,
+            bundleIdentifier: bundleIdentifier
+        )
+        let decision = DocumentStartupNotificationPolicy.disposition(
+            isKnownWindow: isKnownWindow,
+            hasActiveBootstrap: hasActiveBootstrap,
+            canBeginBootstrap: canBeginBootstrap,
+            pointerButtonDown: NSEvent.pressedMouseButtons != 0
+        )
+        observedWindowKeys.insert(windowKey)
+
+        switch decision {
+        case .beginBootstrap:
+            guard beginDocumentStartupBootstrap(
+                windowElement: windowElement,
+                pid: pid,
+                appElement: appElement,
+                bundleIdentifier: bundleIdentifier,
+                startClassification: true,
+                reason: "first AX\(event) before focused/created"
+            ) else { return false }
+            DiagnosticLog.debug("handle[\(event)]: new document identity bootstraps classification key=\(windowKey) pid=\(pid)")
+            return true
+        case .suppressDuringBootstrap:
+            DiagnosticLog.debug("handle[\(event)]: document startup bootstrap — ignore app-driven geometry key=\(windowKey) pid=\(pid)")
+            return true
+        case .markManual:
+            endDocumentStartupBootstrap(windowKey: windowKey, reason: "manual geometry notification")
+            endDocumentClassificationGate(windowKey: windowKey)
+            endDocumentStableGate(windowKey: windowKey)
+            return false
+        }
     }
 
     private func tileOperationID(
@@ -440,6 +626,8 @@ final class WindowEventObserver {
         centeredWindowKeySet.removeAll(keepingCapacity: true)
         processedPIDs.removeAll(keepingCapacity: true)
         manualWindowKeys.removeAll(keepingCapacity: true)
+        observedWindowKeys.removeAll(keepingCapacity: true)
+        documentStartupBootstraps.removeAll(keepingCapacity: true)
         selfLayoutGraceUntil.removeAll(keepingCapacity: true)
         tileSessionAttempts.removeAll(keepingCapacity: true)
         DiagnosticLog.debug("spaceDidChange: cleared activation-scoped layout state for all pids")
@@ -608,8 +796,11 @@ final class WindowEventObserver {
         centeredWindowKeySet.removeAll()
         processedPIDs.removeAll()
         manualWindowKeys.removeAll()
+        observedWindowKeys.removeAll()
+        documentStartupBootstraps.removeAll()
         selfLayoutGraceUntil.removeAll()
         tileSessionAttempts.removeAll()
+        cancelAllDocumentClassificationGates()
         cancelAllDocumentStableGates()
         cancelPostCompletionCorrectionTimer()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -953,9 +1144,12 @@ final class WindowEventObserver {
         centeredWindowKeySet = centeredWindowKeySet.filter { !$0.hasPrefix(prefix) }
         centeredWindowKeys = centeredWindowKeys.filter { !$0.hasPrefix(prefix) }
         manualWindowKeys = manualWindowKeys.filter { !$0.hasPrefix(prefix) }
+        observedWindowKeys = observedWindowKeys.filter { !$0.hasPrefix(prefix) }
+        documentStartupBootstraps = documentStartupBootstraps.filter { !$0.key.hasPrefix(prefix) }
         selfLayoutGraceUntil = selfLayoutGraceUntil.filter { !$0.key.hasPrefix(prefix) }
         tileSessionAttempts = tileSessionAttempts.filter { !$0.key.hasPrefix(prefix) }
         processedPIDs.remove(pid)
+        endDocumentClassificationGate(pid: pid)
         endDocumentStableGate(pid: pid)
     }
 
@@ -1000,9 +1194,12 @@ final class WindowEventObserver {
         cancelReattachTimer()
         resetBackgroundCenterPass()
         cancelTileStabilizeTimer()
-        // 同步取消上一个 app 的 document-stable-gate 采样定时器（阶段 3.1），避免切走后 zombie
-        // 定时器在后台继续对非前台 app 的窗口采样/平铺。
+        // 同步取消上一个 app 的 document classification/stable gate 定时器，避免切走后 zombie
+        // 定时器在后台继续对非前台 app 的窗口分类、采样或平铺。
+        cancelAllDocumentClassificationGates()
         cancelAllDocumentStableGates()
+        observedWindowKeys.removeAll(keepingCapacity: true)
+        documentStartupBootstraps.removeAll(keepingCapacity: true)
         // 同步取消阶段 3.2 的完成后校正定时器（同属 per-app 生命周期）。
         cancelPostCompletionCorrectionTimer()
         observerRegistrationFailed = false
@@ -1033,6 +1230,7 @@ final class WindowEventObserver {
         //（旧实现刻意保留 manual 标记；该需求已变更。）
         // Bug #3: 同步清除 per-PID 标记，让 app 重新激活后能重新居中其主窗口。
         processedPIDs.remove(pid)
+        endDocumentClassificationGate(pid: pid)
         endDocumentStableGate(pid: pid)
         // 同步清除该 PID 的「手动排版」标记：用户手动移动/缩放过的窗口在新需求下应只在
         // 下一次切 App / 切 Space 时被重新按规则排版——故切回该 App 时把它的 manualWindowKeys
@@ -1052,6 +1250,7 @@ final class WindowEventObserver {
         observedProcessIncarnation = appIncarnation
         _ = activationTracker.activate(pid: pid)
         let appElement = AXUIElementCreateApplication(pid)
+        seedObservedWindowKeys(pid: pid, appElement: appElement)
 
         var newObserver: AXObserver?
         let result = AXObserverCreate(pid, { sourceObserver, element, notification, refcon in
@@ -1272,6 +1471,8 @@ final class WindowEventObserver {
             return .retry
         }
         let bundleIdentifier = frontmostApp.bundleIdentifier
+        let observedWindowKey = operationWindowKey(pid: pid, window: windowElement)
+        let isFirstNormalObservation = observedWindowKeys.insert(observedWindowKey).inserted
 
         // Bug #3: 本激活周期内此 PID 的主窗口已完成居中/平铺 → 默认跳过后续窗口事件
         //（二级窗口、对话框、标签页弹层等）。例外：Pages/Numbers/Office 这类文档 App
@@ -1341,6 +1542,20 @@ final class WindowEventObserver {
         {
             DiagnosticLog.debug("handle[\(notification)]: secondary window — skip (no tile, no center) pid=\(pid)")
             return .ignored
+        }
+
+        // If focused/created wins the AX ordering race, establish the same short startup lifecycle
+        // before applyLayout starts the classification/stability gates. If resize wins, the manual
+        // notification path already created this state and `isFirstNormalObservation` is false.
+        if isFirstNormalObservation {
+            _ = beginDocumentStartupBootstrap(
+                windowElement: windowElement,
+                pid: pid,
+                appElement: appElement,
+                bundleIdentifier: bundleIdentifier,
+                startClassification: false,
+                reason: "first normal AX event \(notification)"
+            )
         }
 
         let didComplete = applyLayout(
@@ -1435,8 +1650,14 @@ final class WindowEventObserver {
             if tilingSettings.isDocumentChooserApp(bundleIdentifier: bundleIdentifier),
                !windowHasDocument(windowElement)
             {
+                let documentWindowKey = operationWindowKey(pid: pid, window: windowElement)
                 switch classifyDocumentAppWindow(windowElement) {
                 case .gallery:
+                    // A genuine AX event may arrive after a classification timer has already observed
+                    // this terminal state. End that exact lease before the center-only path so a stale
+                    // tick cannot later transition the same window into the stable/tile path.
+                    endDocumentClassificationGate(windowKey: documentWindowKey)
+                    endDocumentStartupBootstrap(windowKey: documentWindowKey, reason: "gallery resolved by AX event")
                     guard tileCoordinator.activeID == nil else {
                         DiagnosticLog.debug("handle[\(notification)]: active tile session — defer gallery center pid=\(pid)")
                         return false
@@ -1478,8 +1699,23 @@ final class WindowEventObserver {
                         return false
                     }
                 case .undetermined:
+                    // Event callbacks do not automatically schedule another callback. Once the
+                    // activation-wide initial retry has expired, a newly-created Pages/Office window
+                    // can otherwise remain centered forever after this first empty-subtree read.
+                    // Give that exact window a bounded classification owner before attempting center.
+                    if documentClassificationTimerOwnership.keys.contains(documentWindowKey) {
+                        DiagnosticLog.debug("handle[\(notification)]: document classification gate already sampling pid=\(pid) — skip re-entry")
+                        return false
+                    }
+                    startDocumentClassificationGate(
+                        pid: pid,
+                        appElement: appElement,
+                        primaryWindow: windowElement,
+                        insets: effectiveInsets,
+                        bundleIdentifier: bundleIdentifier
+                    )
                     guard tileCoordinator.activeID == nil else {
-                        DiagnosticLog.debug("handle[\(notification)]: active tile session — defer undetermined center pid=\(pid)")
+                        DiagnosticLog.debug("handle[\(notification)]: active tile session — classification gate owns deferred undetermined window pid=\(pid)")
                         return false
                     }
                     // 子树未就绪（Office 启动期空壳）：只居中、不锁、不 markCentered、继续重试。
@@ -1516,6 +1752,7 @@ final class WindowEventObserver {
                         return false
                     }
                 case .document:
+                    endDocumentClassificationGate(windowKey: documentWindowKey)
                     // 无 kAXDocument 但子树含文档内容（新建未保存文档）→ 落到下方正常平铺。
                     // 标记需要稳定门：等加载完成、frame 停止抖动后再平铺（阶段 3.1）。
                     documentStableGateActive = true
@@ -2090,6 +2327,143 @@ final class WindowEventObserver {
         timer.resume()
     }
 
+    /// 新窗口 AX 子树的「等待可分类」阶段。
+    ///
+    /// `AXWindowCreated` / `AXFocusedWindowChanged` 只证明窗口对象存在，不保证 Pages/Office 已经
+    /// 暴露 AXLayoutArea/AXTextArea 或 gallery roles。事件路径返回 `.retry` 本身不会产生未来事件，
+    /// 而 activation-wide initial retry 也可能早已耗尽，因此每个 `.undetermined` 窗口必须拥有
+    /// 自己的 bounded timer。Tick 只读分类，不重复居中，也不递归调用 `handle()`；明确为 document
+    /// 后才转交现有 stable gate，gallery/超时则保持 center-only/unlocked。
+    private func startDocumentClassificationGate(
+        pid: pid_t,
+        appElement: AXUIElement,
+        primaryWindow: AXUIElement,
+        insets: TileInsets,
+        bundleIdentifier: String?
+    ) {
+        guard let activationToken = currentActivationToken(for: pid) else { return }
+        let windowKey = operationWindowKey(pid: pid, window: primaryWindow)
+        guard !documentClassificationTimerOwnership.keys.contains(windowKey) else {
+            DiagnosticLog.debug("document-classification-gate: duplicate start suppressed pid=\(pid) key=\(windowKey)")
+            return
+        }
+
+        let lease = makeContinuationLease(token: activationToken, windowKey: windowKey)
+        _ = documentClassificationTimerOwnership.begin(owner: lease, for: windowKey)
+        var samples = 0
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now() + .milliseconds(Self.documentClassificationSampleIntervalMs),
+            repeating: .milliseconds(Self.documentClassificationSampleIntervalMs)
+        )
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            samples += 1
+            guard self.documentClassificationTimerOwnership.owns(lease, for: windowKey) else { return }
+
+            guard self.ownsCurrentActivation(activationToken, pid: pid),
+                  Self.sourcePID(of: primaryWindow) == pid,
+                  self.operationWindowKey(pid: pid, window: primaryWindow) == windowKey
+            else {
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification stale activation/window")
+                DiagnosticLog.debug("document-classification-gate: stale activation/window pid=\(pid), cancel")
+                return
+            }
+
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification lost foreground")
+                DiagnosticLog.debug("document-classification-gate: pid=\(pid) no longer frontmost, cancel")
+                return
+            }
+
+            guard self.isAutoCenterEligibleWindow(primaryWindow) else {
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification window ineligible")
+                DiagnosticLog.debug("document-classification-gate: window no longer eligible pid=\(pid), cancel")
+                return
+            }
+
+            if let manualKey = self.key(pid: pid, window: primaryWindow),
+               self.manualWindowKeys.contains(manualKey)
+            {
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification window manual")
+                DiagnosticLog.debug("document-classification-gate: manual window pid=\(pid), cancel")
+                return
+            }
+
+            let kind: DocumentAppWindowKind = self.windowHasDocument(primaryWindow)
+                ? .document
+                : self.classifyDocumentAppWindow(primaryWindow)
+            let decision = Self.documentClassificationRetryDecision(
+                for: kind,
+                attempt: samples,
+                maxAttempts: Self.documentClassificationMaxSamples
+            )
+            DiagnosticLog.debug(
+                "document-classification-gate: sample \(samples)/\(Self.documentClassificationMaxSamples) " +
+                "pid=\(pid) key=\(windowKey) kind=\(kind) decision=\(decision)"
+            )
+
+            switch decision {
+            case .keepWaiting:
+                break
+            case .finishGallery:
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification resolved gallery")
+                DiagnosticLog.debug("document-classification-gate: gallery resolved, keep unlocked pid=\(pid)")
+            case .beginStableGate:
+                self.endDocumentClassificationGate(lease: lease)
+                guard !self.documentStableTimerOwnership.keys.contains(windowKey) else {
+                    DiagnosticLog.debug("document-classification-gate: stable gate already owns pid=\(pid) key=\(windowKey)")
+                    return
+                }
+                self.startDocumentStableGate(
+                    pid: pid,
+                    appElement: appElement,
+                    primaryWindow: primaryWindow,
+                    insets: insets,
+                    bundleIdentifier: bundleIdentifier
+                )
+            case .timedOut:
+                self.endDocumentClassificationGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification timed out")
+                DiagnosticLog.debug("document-classification-gate: timed out, keep unlocked pid=\(pid) key=\(windowKey)")
+            }
+        }
+        documentClassificationTimers[windowKey] = timer
+        timer.resume()
+    }
+
+    private func endDocumentClassificationGate(pid: pid_t) {
+        let ownedLeases = documentClassificationTimerOwnership.owners.values.filter { $0.token.pid == pid }
+        for lease in ownedLeases {
+            endDocumentClassificationGate(lease: lease)
+        }
+    }
+
+    private func endDocumentClassificationGate(windowKey: String) {
+        guard let lease = documentClassificationTimerOwnership.owner(for: windowKey) else { return }
+        endDocumentClassificationGate(lease: lease)
+    }
+
+    private func endDocumentClassificationGate(lease: LayoutContinuationLease) {
+        guard let windowKey = lease.windowKey,
+              documentClassificationTimerOwnership.end(ifOwnedBy: lease, for: windowKey)
+        else { return }
+        documentClassificationTimers.removeValue(forKey: windowKey)?.cancel()
+    }
+
+    private func cancelAllDocumentClassificationGates() {
+        for timer in documentClassificationTimers.values {
+            timer.cancel()
+        }
+        documentClassificationTimers.removeAll(keepingCapacity: false)
+        documentClassificationTimerOwnership.reset()
+    }
+
     /// 阶段 3.1：document-chooser .document 窗口的「等稳再铺」采样门。
     ///
     /// 每 `documentStableSampleIntervalMs`（400ms）采样一次窗口 frame，连续两次一致（±2px）才
@@ -2106,6 +2480,9 @@ final class WindowEventObserver {
     ) {
         guard let activationToken = currentActivationToken(for: pid) else { return }
         let windowKey = operationWindowKey(pid: pid, window: primaryWindow)
+        // Classification and frame-stability are sequential owners for the same window. Ending any
+        // remaining classification lease here is a defensive handoff against a racing genuine AX event.
+        endDocumentClassificationGate(windowKey: windowKey)
         let lease = makeContinuationLease(token: activationToken, windowKey: windowKey)
         if let previousOwner = documentStableTimerOwnership.owner(for: windowKey) {
             endDocumentStableGate(lease: previousOwner)
@@ -2126,6 +2503,7 @@ final class WindowEventObserver {
                   self.operationWindowKey(pid: pid, window: primaryWindow) == windowKey
             else {
                 self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate stale activation/window")
                 DiagnosticLog.debug("document-stable-gate: stale activation pid=\(pid), cancel")
                 return
             }
@@ -2133,7 +2511,24 @@ final class WindowEventObserver {
             // 前台守卫：切走 app 即停采样、清门标记。
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
                 self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate lost foreground")
                 DiagnosticLog.debug("document-stable-gate: pid=\(pid) no longer frontmost, cancel")
+                return
+            }
+
+            guard self.isAutoCenterEligibleWindow(primaryWindow) else {
+                self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate window ineligible")
+                DiagnosticLog.debug("document-stable-gate: window no longer eligible pid=\(pid), cancel")
+                return
+            }
+
+            if let manualKey = self.key(pid: pid, window: primaryWindow),
+               self.manualWindowKeys.contains(manualKey)
+            {
+                self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate window manual")
+                DiagnosticLog.debug("document-stable-gate: manual window pid=\(pid), cancel")
                 return
             }
 
@@ -2151,6 +2546,7 @@ final class WindowEventObserver {
 
             if stable || samples >= Self.documentStableMaxSamples {
                 self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate handing off to tile")
                 let _ = self.performTileAndLock(
                     notification: "document-stable-gate",
                     pid: pid,
@@ -2176,6 +2572,11 @@ final class WindowEventObserver {
         // Owners should all have been removed above. This prefix assertion is a
         // diagnostic guard for any future owner representation change.
         assert(!documentStableTimerOwnership.keys.contains { $0.hasPrefix(prefix) })
+    }
+
+    private func endDocumentStableGate(windowKey: String) {
+        guard let lease = documentStableTimerOwnership.owner(for: windowKey) else { return }
+        endDocumentStableGate(lease: lease)
     }
 
     private func endDocumentStableGate(lease: LayoutContinuationLease) {
@@ -2204,6 +2605,10 @@ final class WindowEventObserver {
         insets: TileInsets,
         bundleIdentifier: String?
     ) -> Bool {
+        endDocumentStartupBootstrap(
+            windowKey: operationWindowKey(pid: pid, window: primaryWindow),
+            reason: "tile handoff"
+        )
         guard let tiledWindow = tilePendingWindows(
             pid: pid,
             appElement: appElement,
@@ -2438,8 +2843,17 @@ final class WindowEventObserver {
         if consumeAnimationOwnedManualEvent(windowElement: element, pid: pid, event: "resize") {
             return false
         }
-        if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
+        if NSEvent.pressedMouseButtons == 0,
+           isWithinSelfLayoutGrace(windowElement: element, pid: pid)
+        {
             DiagnosticLog.debug("handle[resize]: self-layout grace — ignore, no manual mark pid=\(pid)")
+            return false
+        }
+        if suppressDocumentStartupManualNotificationIfNeeded(
+            windowElement: element,
+            pid: pid,
+            event: "resize"
+        ) {
             return false
         }
 
@@ -2492,8 +2906,17 @@ final class WindowEventObserver {
         if consumeAnimationOwnedManualEvent(windowElement: element, pid: pid, event: "move") {
             return false
         }
-        if isWithinSelfLayoutGrace(windowElement: element, pid: pid) {
+        if NSEvent.pressedMouseButtons == 0,
+           isWithinSelfLayoutGrace(windowElement: element, pid: pid)
+        {
             DiagnosticLog.debug("handle[move]: self-layout grace — ignore, no manual mark pid=\(pid)")
+            return false
+        }
+        if suppressDocumentStartupManualNotificationIfNeeded(
+            windowElement: element,
+            pid: pid,
+            event: "move"
+        ) {
             return false
         }
 
@@ -2682,6 +3105,42 @@ final class WindowEventObserver {
         case gallery
         case document
         case undetermined
+    }
+
+    enum DocumentClassificationRetryDecision: Equatable {
+        case keepWaiting
+        case finishGallery
+        case beginStableGate
+        case timedOut
+    }
+
+    /// Pure transition policy for the per-window classification gate. The timer owns scheduling;
+    /// this function only decides whether the observed AX subtree remains unresolved or may move to
+    /// one of the two safe terminal paths. Keeping it pure makes timeout and transition semantics
+    /// deterministic under unit tests without requiring live Accessibility objects.
+    nonisolated static func documentClassificationRetryDecision(
+        for kind: DocumentAppWindowKind,
+        attempt: Int,
+        maxAttempts: Int
+    ) -> DocumentClassificationRetryDecision {
+        switch kind {
+        case .gallery:
+            return .finishGallery
+        case .document:
+            return .beginStableGate
+        case .undetermined:
+            return attempt >= max(1, maxAttempts) ? .timedOut : .keepWaiting
+        }
+    }
+
+    /// A completed document under the PID-cycle lock must not suppress a newly-created window whose
+    /// subtree is merely not ready yet. Proven galleries stay suppressed; documents and unresolved
+    /// candidates may continue to the lower secondary/manual/classification guards.
+    nonisolated static func shouldAdmitAdditionalDocumentWindow(
+        hasDocument: Bool,
+        kindWhenUnsaved: DocumentAppWindowKind
+    ) -> Bool {
+        hasDocument || kindWhenUnsaved != .gallery
     }
 
     /// 纯逻辑判定：给定子树中各特征 role 的命中情况，是否构成「文件列表 / 模板画廊」签名。
@@ -2915,6 +3374,7 @@ final class WindowEventObserver {
         if tilingSettingsStore.load().isDocumentChooserApp(bundleIdentifier: bundleIdentifier) {
             candidates = candidates.filter {
                 let candidateKey = operationWindowKey(pid: pid, window: $0)
+                guard !documentClassificationTimerOwnership.keys.contains(candidateKey) else { return false }
                 guard !documentStableTimerOwnership.keys.contains(candidateKey) else { return false }
                 if windowHasDocument($0) { return true }
                 // Every unsaved document must pass its own stable gate. This
@@ -3196,10 +3656,16 @@ final class WindowEventObserver {
             return false
         }
 
-        if windowHasDocument(windowElement) {
-            return true
-        }
-        return classifyDocumentAppWindow(windowElement) == .document
+        let hasDocument = windowHasDocument(windowElement)
+        let kindWhenUnsaved = hasDocument ? DocumentAppWindowKind.document : classifyDocumentAppWindow(windowElement)
+        // A newly-created document often arrives as `.undetermined` before its AX subtree exposes
+        // document roles. Let it pass the PID-cycle guard so the per-window classification gate can
+        // own that readiness gap. A proven gallery remains suppressed after another document has
+        // already completed in this activation.
+        return Self.shouldAdmitAdditionalDocumentWindow(
+            hasDocument: hasDocument,
+            kindWhenUnsaved: kindWhenUnsaved
+        )
     }
 
     // MARK: - 每窗口平铺会话预算（见 tileSessionAttempts 注释）

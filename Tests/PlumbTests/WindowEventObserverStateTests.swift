@@ -72,6 +72,69 @@ func multipleDocumentStableGateOwnersRemainIndependent() {
     #expect(state.owns(second, for: "42:second"))
 }
 
+@Test("multiple document windows own independent classification gates")
+func multipleDocumentClassificationGateOwnersRemainIndependent() {
+    let token = LayoutActivationToken(pid: 42, generation: 1)
+    let first = LayoutContinuationLease(token: token, sequence: 11, operationID: nil, windowKey: "42:first")
+    let second = LayoutContinuationLease(token: token, sequence: 12, operationID: nil, windowKey: "42:second")
+    var state = MultiOwnedOperationState<String, LayoutContinuationLease>()
+
+    _ = state.begin(owner: first, for: "42:first")
+    _ = state.begin(owner: second, for: "42:second")
+
+    #expect(state.owns(first, for: "42:first"))
+    #expect(state.owns(second, for: "42:second"))
+    let staleEnd = state.end(ifOwnedBy: first, for: "42:second")
+    #expect(!staleEnd)
+    let firstEnd = state.end(ifOwnedBy: first, for: "42:first")
+    #expect(firstEnd)
+    #expect(state.owns(second, for: "42:second"))
+}
+
+@Test("only a new eligible no-pointer document identity begins startup bootstrap")
+func documentStartupBootstrapAdmissionIsNarrow() {
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: false,
+        hasActiveBootstrap: false,
+        canBeginBootstrap: true,
+        pointerButtonDown: false
+    ) == .beginBootstrap)
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: true,
+        hasActiveBootstrap: false,
+        canBeginBootstrap: true,
+        pointerButtonDown: false
+    ) == .markManual)
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: false,
+        hasActiveBootstrap: false,
+        canBeginBootstrap: false,
+        pointerButtonDown: false
+    ) == .markManual)
+}
+
+@Test("startup bootstrap suppresses app geometry but pointer evidence stays manual")
+func documentStartupBootstrapPreservesUserIntent() {
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: true,
+        hasActiveBootstrap: true,
+        canBeginBootstrap: true,
+        pointerButtonDown: false
+    ) == .suppressDuringBootstrap)
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: true,
+        hasActiveBootstrap: true,
+        canBeginBootstrap: true,
+        pointerButtonDown: true
+    ) == .markManual)
+    #expect(DocumentStartupNotificationPolicy.disposition(
+        isKnownWindow: false,
+        hasActiveBootstrap: false,
+        canBeginBootstrap: true,
+        pointerButtonDown: true
+    ) == .markManual)
+}
+
 @Test("termination policy preserves a running replacement even after it was attached")
 func terminationPolicyPreservesRunningReplacement() {
     #expect(!TerminationNotificationPolicy.shouldIgnore(

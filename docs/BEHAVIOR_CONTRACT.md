@@ -45,8 +45,21 @@ The current implemented behavior is the baseline:
 - Template galleries and file lists are centered only and do not lock the PID or
   mark the window complete.
 - An AX subtree that is not ready is `undetermined`: it may be centered for
-  usability, but classification retries continue until it becomes a gallery or
-  document, or the bounded retry window expires.
+  usability once, but its exact window owns an activation-scoped classification
+  retry even if the app-level initial retry has already expired. Classification
+  ticks do not repeatedly center or simulate AX notifications; they continue
+  until the window becomes a gallery or document, or the bounded retry expires.
+- A resolved document hands off from classification ownership to the same
+  window's stable gate. A resolved gallery or persistent `undetermined` window
+  remains unlocked, and another document cannot enumerate around either gate.
+- Pages may replace a gallery/placeholder identity with a real document whose
+  first callback is `AXResized`. At attach, Plumb seeds the activation's known
+  window identities from `AXWindows`. Only a newly observed, eligible document
+  identity can enter a 1.5-second startup bootstrap and begin classification
+  from move/resize without becoming manual. Existing identities still become
+  manual immediately; pointer-down evidence cancels bootstrap and wins as user
+  intent. Bootstrap is exact-window/activation owned and cleared at every
+  lifecycle boundary.
 - Animated and synchronous-fallback center writes receive self-layout grace;
   an already-centered no-op does not. Delayed AX move notifications therefore
   do not freeze gallery/undetermined classification as a manual placement.
@@ -75,6 +88,10 @@ The current implemented behavior is the baseline:
 - Ambiguous coordinate evidence may fall back to the last high-confidence value,
   but zero-overlap evidence must not silently select the first display.
 - Screen Recording is optional and only supplies additional CG evidence.
+- If a foreground app omits `AXWindowNumber`, CG window geometry may support an
+  already-tiled decision only when the closest same-PID window is unique for the
+  exact AX element's current size. Target-sized or equal-scoring sibling windows
+  cannot complete that element's tile operation without an AX read/write.
 
 ## Manual acceptance
 

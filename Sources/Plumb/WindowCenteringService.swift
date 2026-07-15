@@ -282,6 +282,51 @@ enum WindowStateIdentity {
     }
 }
 
+/// Conservative selector for CGWindowList fallback when an app omits AXWindowNumber.
+///
+/// CG geometry is only a supporting signal: a same-PID sibling must never prove that the
+/// exact AX element is already tiled. The closest-size candidate is therefore usable only
+/// when it is uniquely best. Equal-scoring siblings fail closed and let the exact AX element
+/// continue through the normal read/write path.
+enum CGWindowGeometryFallbackSelection {
+    static func select(
+        candidates: [CGRect],
+        expectedSize: CGSize,
+        preferredDisplayBounds: CGRect?,
+        tieTolerance: CGFloat = 0.5
+    ) -> CGRect? {
+        var bestRect: CGRect?
+        var bestScore: CGFloat = .greatestFiniteMagnitude
+        var bestIsAmbiguous = false
+        let tolerance = max(0, tieTolerance)
+
+        for rect in candidates {
+            var score = abs(rect.width - expectedSize.width) + abs(rect.height - expectedSize.height)
+
+            if let preferredDisplayBounds {
+                let overlap = rect.intersection(preferredDisplayBounds).area
+                if overlap <= 1 {
+                    score += 10_000
+                } else {
+                    let rectArea = max(1, rect.area)
+                    let outsideRatio = max(0, min(1, (rectArea - overlap) / rectArea))
+                    score += outsideRatio * 500
+                }
+            }
+
+            if score < bestScore - tolerance {
+                bestScore = score
+                bestRect = rect
+                bestIsAmbiguous = false
+            } else if abs(score - bestScore) <= tolerance {
+                bestIsAmbiguous = true
+            }
+        }
+
+        return bestIsAmbiguous ? nil : bestRect
+    }
+}
+
 /// Pure global single-flight gate. A lease, rather than a bare window key, owns
 /// the slot so a delayed completion from an aborted request cannot release a
 /// newer request for the same window key.
@@ -1285,7 +1330,6 @@ final class WindowCenteringService {
 
         // 阶段 B 的尺寸能否写入（即窗口是否可调整大小）。
         let canResize = isResizable(windowElement)
-
 
         // 若既已在原点又不可调整大小，则无需动画。
         if alreadyAtTileOrigin, !canResize {
@@ -2802,47 +2846,31 @@ final class WindowCenteringService {
             }
         }
 
-        // Some apps do not expose AXWindowNumber (e.g. certain Office windows).
-        // Fallback: pick the best on-screen window for this PID by closest size.
+        // Some apps do not expose AXWindowNumber (including Pages document windows).
+        // A closest-size fallback is safe only when it uniquely identifies one same-PID
+        // window. Ambiguous siblings fail closed so CG evidence cannot stand in for the
+        // identity of the exact AX element that the caller will read or write.
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
-
-        var bestRect: CGRect?
-        var bestScore: CGFloat = .greatestFiniteMagnitude
 
         let preferredDisplayBounds: CGRect? = {
             guard let preferredDisplayID else { return nil }
             return CGDisplayBounds(preferredDisplayID)
         }()
 
-        for info in list {
-            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int, ownerPID == Int(pid) else { continue }
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
-            guard let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                  let rect = CGRect(dictionaryRepresentation: boundsDict)
-            else { continue }
-
-            var score = abs(rect.width - expectedSize.width) + abs(rect.height - expectedSize.height)
-
-            if let preferredDisplayBounds {
-                let overlap = rect.intersection(preferredDisplayBounds).area
-                if overlap <= 1 {
-                    score += 10_000
-                } else {
-                    let rectArea = max(1, rect.area)
-                    let outsideRatio = max(0, min(1, (rectArea - overlap) / rectArea))
-                    score += outsideRatio * 500
-                }
-            }
-
-            if score < bestScore {
-                bestScore = score
-                bestRect = rect
-            }
+        let candidates = list.compactMap { info -> CGRect? in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int, ownerPID == Int(pid) else { return nil }
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { return nil }
+            guard let boundsDict = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: boundsDict)
         }
 
-        return bestRect
+        return CGWindowGeometryFallbackSelection.select(
+            candidates: candidates,
+            expectedSize: expectedSize,
+            preferredDisplayBounds: preferredDisplayBounds
+        )
     }
 
     private func pickScreenForCGRect(_ cgRect: CGRect) -> (screen: NSScreen, area: CGFloat)? {
@@ -2963,13 +2991,22 @@ final class WindowCenteringService {
         primaryTopY: CGFloat,
         targetFrame: CGRect
     ) -> Bool {
+        guard
+            let rawPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
+            let rawSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
+        else {
+            return false
+        }
+
         if
             let pid,
             ScreenCapturePermission.ensureAuthorized(prompt: false),
             let cgRect = cgWindowBounds(
                 windowID: windowIDAttribute(on: windowElement),
                 pid: pid,
-                expectedSize: targetFrame.size,
+                // Use the exact AX element's current size. Scoring by target size can select
+                // an already-tiled sibling and falsely complete this window without a write.
+                expectedSize: rawSize,
                 preferredDisplayID: displayID(for: context.screen)
             ),
             let screenPick = pickScreenForCGRect(cgRect)
@@ -2984,13 +3021,6 @@ final class WindowCenteringService {
                 return true
             }
             DiagnosticLog.debug("tileReachedTarget: CG mismatch, falling back to AX pid=\(pid) cgRect=\(cgRect) target=\(targetFrame)")
-        }
-
-        guard
-            let rawPosition = pointAttribute(kAXPositionAttribute as CFString, on: windowElement),
-            let rawSize = sizeAttribute(kAXSizeAttribute as CFString, on: windowElement)
-        else {
-            return false
         }
 
         let currentFrame = rawToGlobalRect(

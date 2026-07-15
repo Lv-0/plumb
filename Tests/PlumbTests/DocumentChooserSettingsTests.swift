@@ -289,6 +289,59 @@ func classify_gallerySignatureOverridesDocumentContent() {
 }
 
 @Test
+func documentClassificationRetry_waitsThenTimesOutWhenSubtreeStaysUndetermined() {
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .undetermined,
+        attempt: 1,
+        maxAttempts: 6
+    ) == .keepWaiting)
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .undetermined,
+        attempt: 5,
+        maxAttempts: 6
+    ) == .keepWaiting)
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .undetermined,
+        attempt: 6,
+        maxAttempts: 6
+    ) == .timedOut)
+}
+
+@Test
+func documentClassificationRetry_transitionsOnlyAfterPositiveEvidence() {
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .gallery,
+        attempt: 1,
+        maxAttempts: 6
+    ) == .finishGallery)
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .document,
+        attempt: 1,
+        maxAttempts: 6
+    ) == .beginStableGate)
+}
+
+@Test
+func additionalDocumentAdmissionLetsUndeterminedWindowReachItsClassificationGate() {
+    #expect(WindowEventObserver.shouldAdmitAdditionalDocumentWindow(
+        hasDocument: false,
+        kindWhenUnsaved: .undetermined
+    ))
+    #expect(WindowEventObserver.shouldAdmitAdditionalDocumentWindow(
+        hasDocument: false,
+        kindWhenUnsaved: .document
+    ))
+    #expect(!WindowEventObserver.shouldAdmitAdditionalDocumentWindow(
+        hasDocument: false,
+        kindWhenUnsaved: .gallery
+    ))
+    #expect(WindowEventObserver.shouldAdmitAdditionalDocumentWindow(
+        hasDocument: true,
+        kindWhenUnsaved: .gallery
+    ))
+}
+
+@Test
 func classify_documentContentWithPartialChooser_isDocument() {
     // 只有 AXOutline（无 Browser、无 CollectionList）+ 有文档内容 → 不是选择器签名 → .document。
     // 锁定：Outline 单独出现不构成选择器，文档内容优先。

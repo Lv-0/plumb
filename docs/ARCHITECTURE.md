@@ -78,9 +78,20 @@ observer today and does not leak into coordinate or animation code.
 8. Every geometry-writing path applies the same secondary-window and Journal
    Settings exclusions. Document galleries and undetermined windows never enter
    the tile FIFO.
-9. Coordinate evidence can be unresolved. Zero-overlap and ambiguous CG
-   candidates are not silently promoted to the first screen/window.
-10. Settings and geometry behavior remain testable without AX permission.
+9. A newly-created document window whose AX subtree is not ready owns a bounded,
+   exact-window classification continuation. It does not depend on the app's
+   activation-time retry still being alive, and it can only hand off to that
+   same window's stable gate after positive document evidence.
+10. AX move/resize ordering is not treated as user intent by itself for a brand-
+    new document identity. Existing `AXWindows` are seeded as known at attach;
+    only an unknown eligible identity receives a bounded startup bootstrap.
+    Pointer-down evidence always cancels this suppression and remains manual.
+11. Coordinate evidence can be unresolved. Zero-overlap and ambiguous CG
+    candidates are not silently promoted to the first screen/window. When an
+    app omits `AXWindowNumber`, the same-PID CG fallback is scored against the
+    exact AX element's current size, never the tile target; the best candidate
+    must be unique before it can support an already-at-target decision.
+12. Settings and geometry behavior remain testable without AX permission.
 
 ## State model
 
@@ -88,6 +99,7 @@ The intended per-window lifecycle is:
 
 ```text
 awaitingCandidate
+  -> waitingForClassification
   -> waitingForStable
   -> centering | tiling
   -> waitingForCorrection

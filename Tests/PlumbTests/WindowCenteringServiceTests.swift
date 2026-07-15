@@ -38,6 +38,62 @@ func processScopedCacheCanInvalidateAllProcesses() {
 }
 
 @Test
+func cgWindowFallbackSelectsCurrentDocumentInsteadOfAlreadyTiledSibling() {
+    let tiledSibling = CGRect(x: 16, y: 43, width: 1_480, height: 847)
+    let currentDocument = CGRect(x: 263, y: 33, width: 1_051, height: 867)
+
+    let selected = CGWindowGeometryFallbackSelection.select(
+        candidates: [tiledSibling, currentDocument],
+        expectedSize: currentDocument.size,
+        preferredDisplayBounds: nil
+    )
+
+    #expect(selected == currentDocument)
+}
+
+@Test
+func cgWindowFallbackFailsClosedForEqualSizeSiblings() {
+    let first = CGRect(x: 120, y: 80, width: 1_051, height: 867)
+    let second = CGRect(x: 263, y: 33, width: 1_051, height: 867)
+
+    let selected = CGWindowGeometryFallbackSelection.select(
+        candidates: [first, second],
+        expectedSize: first.size,
+        preferredDisplayBounds: nil
+    )
+
+    #expect(selected == nil)
+}
+
+@Test
+func cgWindowFallbackKeepsUniqueSingleWindowEvidence() {
+    let onlyWindow = CGRect(x: 263, y: 33, width: 1_051, height: 867)
+
+    let selected = CGWindowGeometryFallbackSelection.select(
+        candidates: [onlyWindow],
+        expectedSize: onlyWindow.size,
+        preferredDisplayBounds: nil
+    )
+
+    #expect(selected == onlyWindow)
+}
+
+@Test
+func cgWindowFallbackUsesPreferredDisplayToBreakSameSizeTie() {
+    let preferredDisplay = CGRect(x: 0, y: 0, width: 1_512, height: 982)
+    let preferredWindow = CGRect(x: 263, y: 33, width: 1_051, height: 867)
+    let otherDisplayWindow = CGRect(x: 1_700, y: 33, width: 1_051, height: 867)
+
+    let selected = CGWindowGeometryFallbackSelection.select(
+        candidates: [otherDisplayWindow, preferredWindow],
+        expectedSize: preferredWindow.size,
+        preferredDisplayBounds: preferredDisplay
+    )
+
+    #expect(selected == preferredWindow)
+}
+
+@Test
 func acceptedTileFallbackRequiresWriterRecord() {
     var store = AcceptedTileFallbackStore()
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
