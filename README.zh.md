@@ -117,7 +117,7 @@ swift build -c release
 
 ## 使用说明
 
-1. 启动后，菜单栏出现水滴图标。
+1. 启动后，菜单栏出现 Plumb 图标。
 2. 授予 [辅助功能（Accessibility）](#辅助功能accessibility) 权限——居中功能依赖此权限。
 3.（可选）授予 [屏幕录制（Screen Recording）](#屏幕录制screen-recording) 权限，以提升多显示器坐标识别稳定性。
 4. 点击菜单栏图标：

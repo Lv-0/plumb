@@ -39,7 +39,7 @@ struct AboutSection: View {
         VStack(alignment: .leading, spacing: 16) {
             // 行 1：应用名 + 版本号
             HStack(spacing: 12) {
-                Image(systemName: "drop.fill")   // 与状态栏水滴图标呼应
+                Image(systemName: "drop.fill")   // 沿用独立的 App 图标意象
                     .font(.title3)
                     .foregroundStyle(.tint)
                     .frame(width: 28)

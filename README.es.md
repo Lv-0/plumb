@@ -117,7 +117,7 @@ Consulta [Compilar localmente](#compilar-localmente).
 
 ## Uso
 
-1. Tras el inicio, aparece un icono de gota de agua en la barra de menús.
+1. Tras el inicio, aparece el icono de Plumb en la barra de menús.
 2. Concede el permiso de [Accesibilidad](#accesibilidad) — el centrado depende de él.
 3. (Opcional) Concede el permiso de [Grabación de pantalla](#grabación-de-pantalla) para mejorar la estabilidad de la detección de coordenadas en multi-pantalla.
 4. Haz clic en el icono de la barra de menús:

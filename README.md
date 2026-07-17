@@ -119,7 +119,7 @@ See [Build locally](#build-locally).
 
 ## Usage
 
-1. After launch, a water-drop icon appears in the menu bar.
+1. After launch, the Plumb icon appears in the menu bar.
 2. Grant the [Accessibility](#accessibility) permission — centering depends on it.
 3. (Optional) Grant the [Screen Recording](#screen-recording) permission to improve multi-display coordinate detection stability.
 4. Click the menu-bar icon:

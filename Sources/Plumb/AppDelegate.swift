@@ -6,7 +6,7 @@ import AppKit
 // 模块角色：应用生命周期与菜单栏 UI 的总装。
 //
 // 职责：
-//   - 启动时创建状态栏菜单项（水滴图标）+ 菜单（立即居中 / 设置… / 权限… / 退出）。
+//   - 启动时创建状态栏菜单项（Plumb 品牌图标）+ 菜单（立即居中 / 设置… / 权限… / 退出）。
 //   - 装配 NSApp.mainMenu：accessory（LSUIElement）应用默认没有主菜单，⌘W/⌘Q 这类标准快捷键
 //     无从派发；装配后「关闭窗口 ⌘W」「退出 ⌘Q」可用，打开设置（临时切到 .regular）时菜单栏也会出现。
 //   - 申请屏幕录制与辅助功能权限；启动 WindowEventObserver 进入自动居中/平铺主循环。
@@ -332,14 +332,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let statusImage = NSImage(contentsOf: iconURL)
         {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 20, height: 20)
+            statusImage.size = NSSize(width: 18, height: 18)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
             item.button?.imageScaling = .scaleProportionallyDown
             item.button?.title = ""
-        } else if let statusImage = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Plumb") {
+        } else if let statusImage = NSImage(systemSymbolName: "rectangle.center.inset.filled", accessibilityDescription: "Plumb") {
             statusImage.isTemplate = true
-            statusImage.size = NSSize(width: 20, height: 20)
+            statusImage.size = NSSize(width: 18, height: 18)
             item.button?.image = statusImage
             item.button?.imagePosition = .imageOnly
             item.button?.imageScaling = .scaleProportionallyDown
@@ -402,7 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// 从状态栏移除水滴图标（「隐藏菜单栏图标」开启或切换时调用）。
+    /// 从状态栏移除 Plumb 图标（「隐藏菜单栏图标」开启或切换时调用）。
     private func hideStatusBarIcon() {
         guard let item = statusItem else { return }
         NSStatusBar.system.removeStatusItem(item)

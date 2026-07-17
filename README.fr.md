@@ -117,7 +117,7 @@ Voir [Compiler localement](#compiler-localement).
 
 ## Utilisation
 
-1. Après le lancement, une icône de goutte d'eau apparaît dans la barre de menus.
+1. Après le lancement, l’icône Plumb apparaît dans la barre des menus.
 2. Accordez la permission d'[Accessibilité](#accessibilité) — le centrage en dépend.
 3. (Facultatif) Accordez la permission d'[Enregistrement d'écran](#enregistrement-décran) pour améliorer la stabilité de la détection des coordonnées en multi-écrans.
 4. Cliquez sur l'icône de la barre de menus :
