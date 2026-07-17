@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.59/Plumb-2.0.59.zip",
   "sha256": "eaa417f3023afd3e92bed8f1ae2182249ee8a8617dd1baa6830b71698c0d2583",
   "notes": {
-    "en": "Adds an option to auto-center windows only when applications launch. When enabled, switching apps, screens, or Spaces no longer triggers auto-centering; when disabled, Plumb keeps its previous behavior. Includes persistence, backward compatibility, localization, and regression coverage.",
-    "zh": "新增“仅在应用启动时自动居中”选项。开启后，切换应用、屏幕或空间不再触发自动居中；关闭时继续保留原有逻辑。包含设置持久化、旧配置兼容、多语言和回归测试。",
-    "es": "Añade una opción para centrar ventanas automáticamente solo al iniciar las aplicaciones. Al activarla, cambiar de aplicación, pantalla o Space ya no vuelve a centrar las ventanas; al desactivarla, Plumb conserva el comportamiento anterior. Incluye persistencia, compatibilidad, traducciones y pruebas de regresión.",
-    "fr": "Ajoute une option pour centrer automatiquement les fenêtres uniquement au lancement des applications. Lorsqu’elle est activée, changer d’application, d’écran ou d’espace ne recentre plus les fenêtres ; lorsqu’elle est désactivée, Plumb conserve son comportement précédent. Inclut la persistance, la rétrocompatibilité, les traductions et des tests de régression.",
-    "ja": "アプリ起動時だけウィンドウを自動中央寄せするオプションを追加しました。有効にすると、アプリ、ディスプレイ、操作スペースを切り替えても再度中央寄せされません。無効時は従来の動作を維持し、設定保存・後方互換性・多言語表示・回帰テストも含まれます。"
+    "en": "Redesigned the menu bar icon with a clearer screen-and-centered-window symbol. The monochrome template adapts automatically to light, dark, and highlighted menu bar states.",
+    "zh": "重新设计了菜单栏图标，以更直观的“屏幕 + 居中窗口”图形表达 Plumb 的作用。新的单色模板图标可自动适配浅色、深色及菜单高亮状态。",
+    "es": "Se ha rediseñado el icono de la barra de menús con un símbolo más claro: una ventana centrada dentro de una pantalla. El nuevo icono monocromo se adapta automáticamente a los modos claro y oscuro y al resaltado del menú.",
+    "fr": "L’icône de la barre des menus a été repensée autour d’un symbole plus explicite : une fenêtre centrée dans un écran. Cette nouvelle icône monochrome s’adapte automatiquement aux modes clair et sombre ainsi qu’à la surbrillance des menus.",
+    "ja": "メニューバーアイコンを、画面中央に配置されたウインドウを表す、より分かりやすいデザインに刷新しました。新しいモノクロのテンプレートアイコンは、ライト／ダーク表示やメニュー選択時のハイライトに自動で適応します。"
   },
   "minOS": "26.0"
 }
