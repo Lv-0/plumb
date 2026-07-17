@@ -1,7 +1,7 @@
 {
-  "version": "2.0.58",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.58/Plumb-2.0.58.zip",
-  "sha256": "43efb9c202c94479fd28578e4fd6cb0fe345aa1787d9d0ea91121443ab59d52f",
+  "version": "2.0.59",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.59/Plumb-2.0.59.zip",
+  "sha256": "eaa417f3023afd3e92bed8f1ae2182249ee8a8617dd1baa6830b71698c0d2583",
   "notes": {
     "en": "Adds an option to auto-center windows only when applications launch. When enabled, switching apps, screens, or Spaces no longer triggers auto-centering; when disabled, Plumb keeps its previous behavior. Includes persistence, backward compatibility, localization, and regression coverage.",
     "zh": "新增“仅在应用启动时自动居中”选项。开启后，切换应用、屏幕或空间不再触发自动居中；关闭时继续保留原有逻辑。包含设置持久化、旧配置兼容、多语言和回归测试。",
