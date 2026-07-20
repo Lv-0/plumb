@@ -1,7 +1,7 @@
 {
-  "version": "2.0.59",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.59/Plumb-2.0.59.zip",
-  "sha256": "eaa417f3023afd3e92bed8f1ae2182249ee8a8617dd1baa6830b71698c0d2583",
+  "version": "2.0.60",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.60/Plumb-2.0.60.zip",
+  "sha256": "982e7ef74830e74114aa72dc41301eaf3ebf08cde59741c3707c4aaf96c6018f",
   "notes": {
     "en": "Redesigned the menu bar icon with a clearer screen-and-centered-window symbol. The monochrome template adapts automatically to light, dark, and highlighted menu bar states.",
     "zh": "重新设计了菜单栏图标，以更直观的“屏幕 + 居中窗口”图形表达 Plumb 的作用。新的单色模板图标可自动适配浅色、深色及菜单高亮状态。",
