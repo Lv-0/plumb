@@ -43,6 +43,7 @@ func filePersistenceRoundTrip() async throws {
         documentChooserBundleIDs: ["com.microsoft.word", "com.microsoft.excel"]
     )
     input.centerOnlyOnAppLaunch = true
+    input.tileOnlyOnAppLaunch = true
     store.save(input)
 
     // 文件应已生成。
@@ -54,6 +55,7 @@ func filePersistenceRoundTrip() async throws {
 
     #expect(loaded == input)
     #expect(loaded.centerOnlyOnAppLaunch)
+    #expect(loaded.tileOnlyOnAppLaunch)
 }
 
 @Test

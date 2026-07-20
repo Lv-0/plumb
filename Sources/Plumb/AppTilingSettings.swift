@@ -15,6 +15,7 @@ import Foundation
 //   - centerEnabled / centeredBundleIDs           ：居中总开关与居中白名单
 //     （空列表 => 居中全部；非空 => 仅列表内；关闭 => 永不自动居中）。
 //   - centerOnlyOnAppLaunch                       ：仅在应用进程启动时自动居中。
+//   - tileOnlyOnAppLaunch                         ：仅在应用进程启动时自动平铺。
 //   - perAppInsets                                 ：每个 app 单独的上/下/左/右间距（key=归一化 bundle id）。
 //   - documentChooserBundleIDs                    ：启用"文档选择器感知"的 App。
 //     这些文档类 App（Pages/Word/Excel/Numbers 等）启动时常先弹出模板/文件列表窗口，
@@ -88,7 +89,7 @@ struct AppTilingSettings: Equatable, Codable {
     //   注意：历史标量键不进 CodingKeys（否则合成 Encodable 会因无对应存储属性而失败），
     //   仅在下面的 _LegacyKeys 单独声明，仅供 init(from:) 解码旧文件。
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, edgeInsets, tiledBundleIDs, hideSystemAppsInPicker
+        case isEnabled, edgeInsets, tiledBundleIDs, tileOnlyOnAppLaunch, hideSystemAppsInPicker
         case centerEnabled, centeredBundleIDs, centerOnlyOnAppLaunch, documentChooserBundleIDs
         case perAppInsets, hideStatusBarIcon, autoCheckUpdates
     }
@@ -110,6 +111,8 @@ struct AppTilingSettings: Equatable, Codable {
             edgeInsets = TileInsets(all: legacyScalar)
         }
         tiledBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .tiledBundleIDs) ?? []
+        // 后增字段：旧设置缺键时回退 false，完整保留原有的激活/Space 自动平铺逻辑。
+        tileOnlyOnAppLaunch = try c.decodeIfPresent(Bool.self, forKey: .tileOnlyOnAppLaunch) ?? false
         hideSystemAppsInPicker = try c.decodeIfPresent(Bool.self, forKey: .hideSystemAppsInPicker) ?? true
         centerEnabled = try c.decodeIfPresent(Bool.self, forKey: .centerEnabled) ?? true
         centeredBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .centeredBundleIDs) ?? []
@@ -148,7 +151,8 @@ struct AppTilingSettings: Equatable, Codable {
         perAppInsets: [String: TileInsets] = [:],
         hideStatusBarIcon: Bool = false,
         autoCheckUpdates: Bool = true,
-        centerOnlyOnAppLaunch: Bool = false
+        centerOnlyOnAppLaunch: Bool = false,
+        tileOnlyOnAppLaunch: Bool = false
     ) {
         self.isEnabled = isEnabled
         self.edgeInsets = edgeInsets
@@ -161,6 +165,7 @@ struct AppTilingSettings: Equatable, Codable {
         self.hideStatusBarIcon = hideStatusBarIcon
         self.autoCheckUpdates = autoCheckUpdates
         self.centerOnlyOnAppLaunch = centerOnlyOnAppLaunch
+        self.tileOnlyOnAppLaunch = tileOnlyOnAppLaunch
     }
 
     /// 默认启用"文档选择器感知"的 App 集合。
@@ -189,6 +194,9 @@ struct AppTilingSettings: Equatable, Codable {
     /// 全局默认四向间距。未单独设置 perAppInsets 的 app 回退到此项。
     var edgeInsets: TileInsets
     var tiledBundleIDs: Set<String>
+    /// 开启后，仅应用进程启动产生的激活周期允许自动平铺；默认关闭，保持原有逻辑。
+    /// 只约束自动平铺，不影响自动居中或菜单栏“立即居中”。
+    var tileOnlyOnAppLaunch: Bool
     var hideSystemAppsInPicker: Bool
 
     /// 是否隐藏菜单栏 Plumb 图标（默认 false = 显示，保持既有行为）。
@@ -228,7 +236,8 @@ struct AppTilingSettings: Equatable, Codable {
         centeredBundleIDs: [],
         documentChooserBundleIDs: defaultDocumentChooserBundleIDs,
         perAppInsets: [:],
-        centerOnlyOnAppLaunch: false
+        centerOnlyOnAppLaunch: false,
+        tileOnlyOnAppLaunch: false
     )
 
     func normalized() -> AppTilingSettings {
@@ -265,7 +274,8 @@ struct AppTilingSettings: Equatable, Codable {
             perAppInsets: normalizedPerApp,
             hideStatusBarIcon: hideStatusBarIcon,
             autoCheckUpdates: autoCheckUpdates,
-            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch
+            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch,
+            tileOnlyOnAppLaunch: tileOnlyOnAppLaunch
         )
     }
 
@@ -337,6 +347,7 @@ struct AppTilingSettings: Equatable, Codable {
 final class AppTilingSettingsStore {
     private enum Keys {
         static let enabled = "tiling.enabled"
+        static let tileOnlyOnAppLaunch = "tiling.onlyOnAppLaunch"
         static let edgeInsets = "tiling.edgeInsets"
         static let bundleIDs = "tiling.bundleIDs"
         static let hideSystemApps = "tiling.hideSystemAppsInPicker"
@@ -451,7 +462,7 @@ final class AppTilingSettingsStore {
 
     /// 设置摘要（用于日志，不含敏感数据，仅计数+开关）。
     func summary(forLog s: AppTilingSettings) -> String {
-            "enabled=\(s.isEnabled) centerEnabled=\(s.centerEnabled) centerLaunchOnly=\(s.centerOnlyOnAppLaunch) insets=t\(Int(s.edgeInsets.top))b\(Int(s.edgeInsets.bottom))l\(Int(s.edgeInsets.left))r\(Int(s.edgeInsets.right)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
+            "enabled=\(s.isEnabled) tileLaunchOnly=\(s.tileOnlyOnAppLaunch) centerEnabled=\(s.centerEnabled) centerLaunchOnly=\(s.centerOnlyOnAppLaunch) insets=t\(Int(s.edgeInsets.top))b\(Int(s.edgeInsets.bottom))l\(Int(s.edgeInsets.left))r\(Int(s.edgeInsets.right)) tiled=\(s.tiledBundleIDs.count) centered=\(s.centeredBundleIDs.count) chooser=\(s.documentChooserBundleIDs.count) perAppInsets=\(s.perAppInsets.count) hideIcon=\(s.hideStatusBarIcon) autoCheck=\(s.autoCheckUpdates)"
     }
 
     private func summary(_ s: AppTilingSettings) -> String {
@@ -546,6 +557,7 @@ final class AppTilingSettingsStore {
 
     private func loadFromUserDefaults() -> AppTilingSettings {
         let hasEnabled = defaults.object(forKey: Keys.enabled) != nil
+        let hasTileOnlyOnAppLaunch = defaults.object(forKey: Keys.tileOnlyOnAppLaunch) != nil
         let hasEdgeInsets = defaults.object(forKey: Keys.edgeInsets) != nil
         let hasLegacyEdgeMargin = defaults.object(forKey: Keys.legacyEdgeMargin) != nil
         let hasBundleIDs = defaults.object(forKey: Keys.bundleIDs) != nil
@@ -559,7 +571,7 @@ final class AppTilingSettingsStore {
         let hasHideStatusBarIcon = defaults.object(forKey: Keys.hideStatusBarIcon) != nil
         let hasAutoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) != nil
 
-        if !hasEnabled, !hasEdgeInsets, !hasLegacyEdgeMargin, !hasBundleIDs, !hasHideSystemApps,
+        if !hasEnabled, !hasTileOnlyOnAppLaunch, !hasEdgeInsets, !hasLegacyEdgeMargin, !hasBundleIDs, !hasHideSystemApps,
            !hasCenterEnabled, !hasCenteredBundleIDs, !hasCenterOnlyOnAppLaunch, !hasDocumentChooserBundleIDs,
            !hasPerAppInsets, !hasLegacyPerAppMargins, !hasHideStatusBarIcon,
            !hasAutoCheckUpdates {
@@ -567,6 +579,9 @@ final class AppTilingSettingsStore {
         }
 
         let isEnabled = hasEnabled ? defaults.bool(forKey: Keys.enabled) : AppTilingSettings.default.isEnabled
+        let tileOnlyOnAppLaunch = hasTileOnlyOnAppLaunch
+            ? defaults.bool(forKey: Keys.tileOnlyOnAppLaunch)
+            : AppTilingSettings.default.tileOnlyOnAppLaunch
         // 全局四向间距：新键 edgeInsets（[String: Double] 的 top/bottom/left/right）；
         // 缺失时从历史标量 edgeMargin 一次性迁移 → TileInsets(all:)。
         var edgeInsets: TileInsets
@@ -634,12 +649,14 @@ final class AppTilingSettingsStore {
             perAppInsets: perAppInsets,
             hideStatusBarIcon: hideStatusBarIcon,
             autoCheckUpdates: autoCheckUpdates,
-            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch
+            centerOnlyOnAppLaunch: centerOnlyOnAppLaunch,
+            tileOnlyOnAppLaunch: tileOnlyOnAppLaunch
         ).normalized()
     }
 
     private func saveToUserDefaults(_ normalized: AppTilingSettings) {
         defaults.set(normalized.isEnabled, forKey: Keys.enabled)
+        defaults.set(normalized.tileOnlyOnAppLaunch, forKey: Keys.tileOnlyOnAppLaunch)
         // 全局四向间距镜像双写：[String: Double]（top/bottom/left/right）。
         // 不再双写旧键 tiling.edgeMargin（仅读取迁移用）——首次 save 后旧键即被新键取代。
         let edgeDict: [String: Double] = [

@@ -74,6 +74,8 @@ enum L10n {
         // 平铺段
         case enableAutoTiling
         case enableAutoTilingHint
+        case tileOnlyOnAppLaunch
+        case tileOnlyOnAppLaunchHint
         case margin
         case marginHint
         case tilingFootnoteOn
@@ -177,6 +179,8 @@ enum L10n {
             .centerOnlyOnAppLaunchHint: "Center apps only when they launch; switching apps or screens will not center them again.",
             .enableAutoTiling: "Enable Auto-Tiling",
             .enableAutoTilingHint: "When enabled, checked apps below are auto-tiled onto the screen.",
+            .tileOnlyOnAppLaunch: "Only Tile When Apps Launch",
+            .tileOnlyOnAppLaunchHint: "Tile apps only when they launch; switching apps, screens, or Spaces will not tile them again.",
             .margin: "Margin",
             .marginHint: "Spacing between window and screen edges when tiling.",
             .tilingFootnoteOn: "Check apps to auto-tile; unchecked apps stay centered.",
@@ -268,6 +272,8 @@ enum L10n {
             .centerOnlyOnAppLaunchHint: "Centra las apps solo al iniciarse; cambiar de app o de pantalla no vuelve a centrarlas.",
             .enableAutoTiling: "Activar mosaico automático",
             .enableAutoTilingHint: "Cuando está activado, las apps marcadas abajo se colocan en mosaico en la pantalla automáticamente.",
+            .tileOnlyOnAppLaunch: "Mosaico solo al iniciar apps",
+            .tileOnlyOnAppLaunchHint: "Coloca las apps en mosaico solo al iniciarse; cambiar de app, pantalla o Space no vuelve a colocarlas.",
             .margin: "Margen",
             .marginHint: "Espacio entre la ventana y los bordes de la pantalla al colocar en mosaico.",
             .tilingFootnoteOn: "Marca las apps que quieres en mosaico; las no marcadas permanecen centradas.",
@@ -359,6 +365,8 @@ enum L10n {
             .centerOnlyOnAppLaunchHint: "Centre les apps uniquement à leur lancement ; changer d'app ou d'écran ne les recentre pas.",
             .enableAutoTiling: "Activer la mosaïque automatique",
             .enableAutoTilingHint: "Lorsque c'est activé, les apps cochées ci-dessous sont placées en mosaïque à l'écran automatiquement.",
+            .tileOnlyOnAppLaunch: "Mosaïque uniquement au lancement",
+            .tileOnlyOnAppLaunchHint: "Place les apps en mosaïque uniquement à leur lancement ; changer d'app, d'écran ou d'espace ne relance pas l'action.",
             .margin: "Marge",
             .marginHint: "Espace entre la fenêtre et les bords de l'écran lors de la mosaïque.",
             .tilingFootnoteOn: "Cochez les apps à placer en mosaïque ; les apps non cochées restent centrées.",
@@ -450,6 +458,8 @@ enum L10n {
             .centerOnlyOnAppLaunchHint: "开启后，仅在应用启动时自动居中；切换应用或屏幕不会再次触发。",
             .enableAutoTiling: "启用自动平铺",
             .enableAutoTilingHint: "开启后，勾选下方应用时会自动平铺到屏幕。",
+            .tileOnlyOnAppLaunch: "仅在应用启动时自动平铺",
+            .tileOnlyOnAppLaunchHint: "开启后，仅在应用启动时自动平铺；切换应用、屏幕或空间不会再次触发。",
             .margin: "边距",
             .marginHint: "平铺时窗口与屏幕边缘之间的间距。",
             .tilingFootnoteOn: "勾选希望自动平铺的应用；未勾选的应用保持居中。",
@@ -541,6 +551,8 @@ enum L10n {
             .centerOnlyOnAppLaunchHint: "アプリの起動時にのみ中央寄せします。アプリや画面を切り替えても再実行しません。",
             .enableAutoTiling: "自動タイルを有効化",
             .enableAutoTilingHint: "オンにすると、下のチェックしたアプリが自動的に画面にタイル配置されます。",
+            .tileOnlyOnAppLaunch: "アプリ起動時のみ自動タイル配置",
+            .tileOnlyOnAppLaunchHint: "アプリの起動時にのみタイル配置します。アプリ、画面、または操作スペースを切り替えても再実行しません。",
             .margin: "余白",
             .marginHint: "タイル配置時のウィンドウと画面端の間隔。",
             .tilingFootnoteOn: "自動タイルするアプリにチェックを入れてください。未チェックのアプリは中央寄せのままです。",
@@ -635,6 +647,8 @@ enum L10n {
     static var centerOnlyOnAppLaunchHint: String { tr(.centerOnlyOnAppLaunchHint) }
     static var enableAutoTiling: String { tr(.enableAutoTiling) }
     static var enableAutoTilingHint: String { tr(.enableAutoTilingHint) }
+    static var tileOnlyOnAppLaunch: String { tr(.tileOnlyOnAppLaunch) }
+    static var tileOnlyOnAppLaunchHint: String { tr(.tileOnlyOnAppLaunchHint) }
     static var margin: String { tr(.margin) }
     static var marginHint: String { tr(.marginHint) }
     static var tilingFootnoteOn: String { tr(.tilingFootnoteOn) }

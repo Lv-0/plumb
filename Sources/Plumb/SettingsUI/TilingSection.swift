@@ -5,7 +5,7 @@ import SwiftUI
 //
 // 模块角色：设置中"平铺"标签页的内容视图。
 //
-// 布局：顶部固定卡片（总开关 + 边距滑块）+ 胶囊子标签 + 左右可切换的双页内容区。
+// 布局：顶部固定卡片（总开关 + 仅启动时平铺 + 边距滑块）+ 胶囊子标签 + 左右可切换的双页内容区。
 //   - 顶部卡片两页都可见，属于全局配置。
 //   - 左页「平铺应用列表」= AppListSection（绑定 tiledBundleIDs）。
 //   - 右页「文档类 App」= DocumentChooserSection（绑定 documentChooserBundleIDs）。
@@ -26,7 +26,7 @@ struct TilingSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部固定卡片：总开关 + 边距滑块（两页都可见，全局配置）。
+            // 顶部固定卡片：总开关 + 仅启动时平铺 + 边距滑块（两页都可见，全局配置）。
             headerCard
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
@@ -45,7 +45,7 @@ struct TilingSection: View {
 
     // MARK: - 顶部固定卡片
 
-    /// 总开关 + 边距滑块，共用一个 Liquid Glass 风格容器。
+    /// 总开关 + 启动策略开关 + 边距滑块，共用一个 Liquid Glass 风格容器。
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             // 平铺总开关：绑定 settings.isEnabled，未开启则整个平铺功能不生效。
@@ -60,6 +60,24 @@ struct TilingSection: View {
                 Spacer(minLength: 12)
                 PillToggle(isOn: $settings.isEnabled)
                     .animation(.spring(duration: 0.32, bounce: 0.25), value: settings.isEnabled)
+            }
+
+            Divider().opacity(0.2)
+
+            // 启动策略：打开后，每个目标 App 进程生命周期只在真实启动产生的首次激活中平铺。
+            // 切换 App、屏幕或 Space 均不会再次授权；App 退出并重启后获得新的启动授权。
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.tileOnlyOnAppLaunch)
+                        .foregroundStyle(.primary)
+                    Text(L10n.tileOnlyOnAppLaunchHint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 12)
+                PillToggle(isOn: $settings.tileOnlyOnAppLaunch)
+                    .accessibilityLabel(Text(L10n.tileOnlyOnAppLaunch))
+                    .animation(.spring(duration: 0.32, bounce: 0.25), value: settings.tileOnlyOnAppLaunch)
             }
 
             Divider().opacity(0.2)

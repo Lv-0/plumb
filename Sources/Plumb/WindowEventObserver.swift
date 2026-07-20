@@ -71,15 +71,62 @@ enum DocumentStartupNotificationPolicy {
     }
 }
 
-/// Auto-centering may optionally be limited to the activation created by a real
-/// application launch. Tiling remains independent: this policy only removes a
-/// `.center` decision when the current activation lacks launch authorization.
-enum AutomaticCenteringTriggerPolicy {
+/// Auto-centering and auto-tiling have independent launch-only switches, but share
+/// the same exact process-lifetime launch admission. The base layout decision stays
+/// authoritative; this policy only removes the selected mode when its switch requires
+/// launch authorization and the current activation does not own it.
+enum AutomaticLayoutTriggerPolicy {
     static func allowsAutomaticCentering(
         centerOnlyOnAppLaunch: Bool,
         isLaunchAuthorizedActivation: Bool
     ) -> Bool {
         !centerOnlyOnAppLaunch || isLaunchAuthorizedActivation
+    }
+
+    static func allowsAutomaticTiling(
+        tileOnlyOnAppLaunch: Bool,
+        isLaunchAuthorizedActivation: Bool
+    ) -> Bool {
+        !tileOnlyOnAppLaunch || isLaunchAuthorizedActivation
+    }
+
+    static func requiresLaunchAuthorization(
+        settings: AppTilingSettings,
+        bundleIdentifier: String?
+    ) -> Bool {
+        switch settings.resolvedAutomaticLayout(for: bundleIdentifier) {
+        case .tile:
+            settings.tileOnlyOnAppLaunch
+        case .center:
+            settings.centerOnlyOnAppLaunch
+        case .none:
+            false
+        }
+    }
+
+    static func observesLaunchNotifications(settings: AppTilingSettings) -> Bool {
+        settings.centerOnlyOnAppLaunch || settings.tileOnlyOnAppLaunch
+    }
+
+    static func allows(
+        mode: AutomaticLayoutMode,
+        settings: AppTilingSettings,
+        isLaunchAuthorizedActivation: Bool
+    ) -> Bool {
+        switch mode {
+        case .tile:
+            allowsAutomaticTiling(
+                tileOnlyOnAppLaunch: settings.tileOnlyOnAppLaunch,
+                isLaunchAuthorizedActivation: isLaunchAuthorizedActivation
+            )
+        case .center:
+            allowsAutomaticCentering(
+                centerOnlyOnAppLaunch: settings.centerOnlyOnAppLaunch,
+                isLaunchAuthorizedActivation: isLaunchAuthorizedActivation
+            )
+        case .none:
+            true
+        }
     }
 
     static func resolvedLayoutMode(
@@ -88,11 +135,31 @@ enum AutomaticCenteringTriggerPolicy {
         isLaunchAuthorizedActivation: Bool
     ) -> AutomaticLayoutMode {
         let baseMode = settings.resolvedAutomaticLayout(for: bundleIdentifier)
-        guard baseMode == .center else { return baseMode }
-        return allowsAutomaticCentering(
-            centerOnlyOnAppLaunch: settings.centerOnlyOnAppLaunch,
+        return allows(
+            mode: baseMode,
+            settings: settings,
             isLaunchAuthorizedActivation: isLaunchAuthorizedActivation
-        ) ? .center : .none
+        ) ? baseMode : .none
+    }
+}
+
+/// A launch-only document app can finish its initial retry on a gallery window,
+/// before any document has actually been tiled. Keep that launch authorization
+/// until the first real document tiles, or until app/Space/lifecycle loss revokes it.
+enum InitialRetryLaunchAuthorizationPolicy {
+    static func shouldRevoke(
+        outcome: HandleOutcome,
+        baseMode: AutomaticLayoutMode,
+        tileOnlyOnAppLaunch: Bool,
+        isDocumentChooserApp: Bool,
+        hasCompletedAutomaticLayout: Bool
+    ) -> Bool {
+        let isPendingLaunchOnlyDocument = outcome == .completed
+            && baseMode == .tile
+            && tileOnlyOnAppLaunch
+            && isDocumentChooserApp
+            && !hasCompletedAutomaticLayout
+        return !isPendingLaunchOnlyDocument
     }
 }
 
@@ -351,9 +418,10 @@ final class WindowEventObserver {
     /// before it may read or write geometry.
     private var activationTracker = LayoutActivationTracker()
     /// Short-lived, process-identity-bound admissions produced only by
-    /// NSWorkspace.didLaunchApplicationNotification while launch-only centering is enabled.
+    /// NSWorkspace.didLaunchApplicationNotification while the resolved automatic layout
+    /// mode has its launch-only switch enabled.
     private var applicationLaunchAdmissions = ApplicationLaunchAdmissionTracker()
-    /// Exact activation allowed to perform automatic center writes in launch-only mode.
+    /// Exact activation allowed to perform automatic layout writes in launch-only mode.
     /// A normal app switch or Space rebind creates a different token and therefore cannot reuse it.
     private var launchAuthorizedActivationToken: LayoutActivationToken?
     private var nextLayoutOperationSequence: UInt64 = 0
@@ -723,19 +791,22 @@ final class WindowEventObserver {
         initialCenterTimer = nil
     }
 
-    /// Ends the bounded launch retry and consumes its launch-only authorization.
-    /// This prevents later windows in the same still-frontmost app from borrowing
-    /// an opening event after the startup window-selection period has finished.
+    /// Ends the bounded launch retry and normally consumes its launch-only authorization.
+    /// A launch-only document app may preserve authorization after its gallery is centered,
+    /// so the first real document in that still-active launch can consume it by tiling.
     private func finishInitialCenteringRetries(
         ownedBy lease: LayoutContinuationLease,
         activationToken: LayoutActivationToken,
         pid: pid_t,
-        reason: String
+        reason: String,
+        revokeAuthorization: Bool = true
     ) {
         guard initialCenterTimerOwnership.owner == lease else { return }
         cancelInitialCenterTimer(ownedBy: lease)
-        revokeLaunchAuthorization(ifOwnedBy: activationToken)
-        DiagnosticLog.debug("initial-retry: finished pid=\(pid) reason=\(reason)")
+        if revokeAuthorization {
+            revokeLaunchAuthorization(ifOwnedBy: activationToken)
+        }
+        DiagnosticLog.debug("initial-retry: finished pid=\(pid) revokeLaunch=\(revokeAuthorization) reason=\(reason)")
     }
 
     private func cancelReattachTimer(ownedBy lease: LayoutContinuationLease? = nil) {
@@ -1085,7 +1156,7 @@ final class WindowEventObserver {
             let app = NSRunningApplication(processIdentifier: pid)
             let bundleID = app?.bundleIdentifier
             switch BackgroundSpaceLayoutPolicy.disposition(
-                for: AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+                for: AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
                     settings: settings,
                     bundleIdentifier: bundleID,
                     isLaunchAuthorizedActivation: false
@@ -1263,13 +1334,15 @@ final class WindowEventObserver {
     }
 
     @objc private func appDidLaunch(_ notification: Notification) {
-        // With the option off, launch notifications must not change observer state or
-        // restart an activation; this preserves the historical didActivate-driven flow.
-        guard tilingSettingsStore.load().centerOnlyOnAppLaunch else { return }
         guard
             let userInfo = notification.userInfo,
             let app = userInfo[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         else { return }
+        let settings = tilingSettingsStore.load()
+        // With both launch-only switches off, launch notifications must not change
+        // observer state or restart an activation. Center launch authorization remains
+        // global because tiled document galleries use a center-only subpath.
+        guard AutomaticLayoutTriggerPolicy.observesLaunchNotifications(settings: settings) else { return }
 
         let pid = app.processIdentifier
         applicationLaunchAdmissions.record(
@@ -1278,7 +1351,7 @@ final class WindowEventObserver {
             launchDate: app.launchDate,
             now: Date()
         )
-        DiagnosticLog.debug("launch-only-center: recorded launch admission pid=\(pid) bundle=\(app.bundleIdentifier ?? "?")")
+        DiagnosticLog.debug("launch-only-layout: recorded launch admission pid=\(pid) bundle=\(app.bundleIdentifier ?? "?")")
 
         // didLaunch and didActivate can arrive in either order. If this process is
         // already frontmost, consume/upgrade immediately; otherwise didActivate will.
@@ -1396,7 +1469,7 @@ final class WindowEventObserver {
                     appElement: appElement,
                     bundleIdentifier: app.bundleIdentifier
                 )
-                DiagnosticLog.debug("launch-only-center: upgraded current activation pid=\(app.processIdentifier)")
+                DiagnosticLog.debug("launch-only-layout: upgraded current activation pid=\(app.processIdentifier)")
             }
             DiagnosticLog.debug("attach: already observing pid=\(app.processIdentifier) (\(app.bundleIdentifier ?? "?"))")
             return
@@ -1484,7 +1557,7 @@ final class WindowEventObserver {
         let activationToken = activationTracker.activate(pid: pid)
         launchAuthorizedActivationToken = launchAuthorized ? activationToken : nil
         if launchAuthorized {
-            DiagnosticLog.debug("launch-only-center: authorized activation pid=\(pid) generation=\(activationToken.generation)")
+            DiagnosticLog.debug("launch-only-layout: authorized activation pid=\(pid) generation=\(activationToken.generation)")
         }
         let appElement = AXUIElementCreateApplication(pid)
         seedObservedWindowKeys(pid: pid, appElement: appElement)
@@ -1686,21 +1759,22 @@ final class WindowEventObserver {
         let bundleIdentifier = frontmostApp.bundleIdentifier
         let triggerSettings = tilingSettingsStore.load()
         let launchAuthorized = isLaunchAuthorizedActivation(currentActivationToken(for: pid))
-        let launchOnlyCenteringSuppressed = triggerSettings.resolvedAutomaticLayout(for: bundleIdentifier) == .center
-            && !AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
-                centerOnlyOnAppLaunch: triggerSettings.centerOnlyOnAppLaunch,
-                isLaunchAuthorizedActivation: launchAuthorized
-            )
+        let baseLayoutMode = triggerSettings.resolvedAutomaticLayout(for: bundleIdentifier)
+        let launchOnlyLayoutSuppressed = !AutomaticLayoutTriggerPolicy.allows(
+            mode: baseLayoutMode,
+            settings: triggerSettings,
+            isLaunchAuthorizedActivation: launchAuthorized
+        )
         let isPointerManualNotification = (
             notification == (kAXMovedNotification as String)
                 || notification == (kAXResizedNotification as String)
         ) && NSEvent.pressedMouseButtons != 0
-        if launchOnlyCenteringSuppressed, !isPointerManualNotification {
+        if launchOnlyLayoutSuppressed, !isPointerManualNotification {
             // This gate intentionally precedes move/resize bookkeeping. Workspace may
             // deliver didActivate just before didLaunch; startup self-layout notifications
             // in that gap must not mark the window manual and defeat the later launch grant.
             // A direct pointer gesture remains authoritative and still enters the manual path.
-            DiagnosticLog.debug("handle[\(notification)]: launch-only centering suppressed pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
+            DiagnosticLog.debug("handle[\(notification)]: launch-only \(baseLayoutMode) suppressed pid=\(pid) bundle=\(bundleIdentifier ?? "?")")
             return .ignored
         }
 
@@ -1846,7 +1920,7 @@ final class WindowEventObserver {
         }
         let tilingSettings = tilingSettingsStore.load()
         let launchAuthorized = isLaunchAuthorizedActivation(activationToken)
-        let allowsAutomaticCentering = AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
+        let allowsAutomaticCentering = AutomaticLayoutTriggerPolicy.allowsAutomaticCentering(
             centerOnlyOnAppLaunch: tilingSettings.centerOnlyOnAppLaunch,
             isLaunchAuthorizedActivation: launchAuthorized
         )
@@ -1854,7 +1928,7 @@ final class WindowEventObserver {
         // 「平铺」或「居中」之一——不再有「先平铺再居中」（centerAfterTile）。
         // 显式决策替代旧的隐式 tile-then-center 行为：后者让尺寸受限的平铺 App（拒绝目标高度）
         // 在每次激活后被居中再次移动，造成反复跳动（见 performTileAndLock 的 preflight 注释）。
-        let layoutMode = AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+        let layoutMode = AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
             settings: tilingSettings,
             bundleIdentifier: bundleIdentifier,
             isLaunchAuthorizedActivation: launchAuthorized
@@ -2489,13 +2563,14 @@ final class WindowEventObserver {
         guard let activationToken = currentActivationToken(for: pid) else { return }
         cancelInitialCenterTimer()
         let settings = tilingSettingsStore.load()
-        if settings.resolvedAutomaticLayout(for: bundleIdentifier) == .center,
-           !AutomaticCenteringTriggerPolicy.allowsAutomaticCentering(
-               centerOnlyOnAppLaunch: settings.centerOnlyOnAppLaunch,
-               isLaunchAuthorizedActivation: isLaunchAuthorizedActivation(activationToken)
-           )
+        let baseLayoutMode = settings.resolvedAutomaticLayout(for: bundleIdentifier)
+        if !AutomaticLayoutTriggerPolicy.allows(
+            mode: baseLayoutMode,
+            settings: settings,
+            isLaunchAuthorizedActivation: isLaunchAuthorizedActivation(activationToken)
+        )
         {
-            DiagnosticLog.debug("initial-retry: launch-only centering suppressed pid=\(pid)")
+            DiagnosticLog.debug("initial-retry: launch-only \(baseLayoutMode) suppressed pid=\(pid)")
             return
         }
         let lease = makeContinuationLease(token: activationToken)
@@ -2538,11 +2613,23 @@ final class WindowEventObserver {
             // undetermined 则返回 `.retry`，等待 AX 子树就绪后重新分类。
             let outcome = self.handle(notification: "initial-retry", element: appElement, forcedPID: pid)
             if !outcome.shouldContinueInitialRetry {
+                let currentSettings = self.tilingSettingsStore.load()
+                let baseMode = currentSettings.resolvedAutomaticLayout(for: bundleIdentifier)
+                let shouldRevokeLaunch = InitialRetryLaunchAuthorizationPolicy.shouldRevoke(
+                    outcome: outcome,
+                    baseMode: baseMode,
+                    tileOnlyOnAppLaunch: currentSettings.tileOnlyOnAppLaunch,
+                    isDocumentChooserApp: currentSettings.isDocumentChooserApp(
+                        bundleIdentifier: bundleIdentifier
+                    ),
+                    hasCompletedAutomaticLayout: self.processedPIDs.contains(pid)
+                )
                 self.finishInitialCenteringRetries(
                     ownedBy: lease,
                     activationToken: activationToken,
                     pid: pid,
-                    reason: "terminal outcome \(outcome)"
+                    reason: "terminal outcome \(outcome)",
+                    revokeAuthorization: shouldRevokeLaunch
                 )
                 return
             }

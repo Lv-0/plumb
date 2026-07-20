@@ -2,17 +2,17 @@ import Foundation
 import Testing
 @testable import Plumb
 
-@Test("launch-only centering permits launch activations and preserves tiling")
-func launchOnlyCenteringTriggerPolicy() {
+@Test("launch-only layout switches independently gate centering and tiling")
+func launchOnlyLayoutTriggerPolicy() {
     var settings = AppTilingSettings.default
     settings.centerOnlyOnAppLaunch = true
 
-    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
         settings: settings,
         bundleIdentifier: "com.example.centered",
         isLaunchAuthorizedActivation: true
     ) == .center)
-    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
         settings: settings,
         bundleIdentifier: "com.example.centered",
         isLaunchAuthorizedActivation: false
@@ -20,18 +20,93 @@ func launchOnlyCenteringTriggerPolicy() {
 
     settings.isEnabled = true
     settings.tiledBundleIDs = ["com.example.tiled"]
-    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
         settings: settings,
         bundleIdentifier: "com.example.tiled",
         isLaunchAuthorizedActivation: false
     ) == .tile)
 
+    settings.tileOnlyOnAppLaunch = true
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled",
+        isLaunchAuthorizedActivation: true
+    ) == .tile)
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled",
+        isLaunchAuthorizedActivation: false
+    ) == .none)
+
     settings.centerOnlyOnAppLaunch = false
-    #expect(AutomaticCenteringTriggerPolicy.resolvedLayoutMode(
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
         settings: settings,
         bundleIdentifier: "com.example.centered",
         isLaunchAuthorizedActivation: false
     ) == .center)
+
+    settings.tileOnlyOnAppLaunch = false
+    #expect(AutomaticLayoutTriggerPolicy.resolvedLayoutMode(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled",
+        isLaunchAuthorizedActivation: false
+    ) == .tile)
+}
+
+@Test("launch-only policy observes either switch and follows tiling priority")
+func launchOnlyLayoutAdmissionPolicy() {
+    var settings = AppTilingSettings.default
+    #expect(!AutomaticLayoutTriggerPolicy.observesLaunchNotifications(settings: settings))
+
+    settings.tileOnlyOnAppLaunch = true
+    #expect(AutomaticLayoutTriggerPolicy.observesLaunchNotifications(settings: settings))
+    #expect(!AutomaticLayoutTriggerPolicy.requiresLaunchAuthorization(
+        settings: settings,
+        bundleIdentifier: "com.example.centered"
+    ))
+
+    settings.isEnabled = true
+    settings.tiledBundleIDs = ["com.example.tiled"]
+    #expect(AutomaticLayoutTriggerPolicy.requiresLaunchAuthorization(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled"
+    ))
+
+    settings.tileOnlyOnAppLaunch = false
+    settings.centerOnlyOnAppLaunch = true
+    #expect(AutomaticLayoutTriggerPolicy.requiresLaunchAuthorization(
+        settings: settings,
+        bundleIdentifier: "com.example.centered"
+    ))
+    #expect(!AutomaticLayoutTriggerPolicy.requiresLaunchAuthorization(
+        settings: settings,
+        bundleIdentifier: "com.example.tiled"
+    ))
+}
+
+@Test("launch-only document gallery preserves authorization until a document tiles")
+func launchOnlyDocumentGalleryAuthorizationPolicy() {
+    #expect(!InitialRetryLaunchAuthorizationPolicy.shouldRevoke(
+        outcome: .completed,
+        baseMode: .tile,
+        tileOnlyOnAppLaunch: true,
+        isDocumentChooserApp: true,
+        hasCompletedAutomaticLayout: false
+    ))
+    #expect(InitialRetryLaunchAuthorizationPolicy.shouldRevoke(
+        outcome: .completed,
+        baseMode: .tile,
+        tileOnlyOnAppLaunch: true,
+        isDocumentChooserApp: true,
+        hasCompletedAutomaticLayout: true
+    ))
+    #expect(InitialRetryLaunchAuthorizationPolicy.shouldRevoke(
+        outcome: .completed,
+        baseMode: .tile,
+        tileOnlyOnAppLaunch: true,
+        isDocumentChooserApp: false,
+        hasCompletedAutomaticLayout: false
+    ))
 }
 
 @Test("launch admission is exact, single-use, and expires")

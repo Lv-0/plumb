@@ -72,7 +72,8 @@ Open `Tiling Settings…` from the menu bar to enable/disable the feature and ma
 - **Per-app margin override**: tap any app in the Tiling list to expand an inline drawer and set its top, bottom, left, and right margins independently. Apps without an override use the global margin on all four sides; "Use Default" removes the override.
 - Select allowlisted apps from installed applications (system apps hidden by default, toggleable)
 - For allowlisted apps, **tiling has priority** over auto-centering
-- Trigger scope is one app activation / Space cycle, not the lifetime of a process. Re-activating an app or changing Space starts a new evaluation.
+- Optional **Only Tile When Apps Launch** mode: each app is tiled only from a real process launch; switching apps, screens, or Spaces does not tile it again. Quit and relaunch the app to allow a new automatic tile.
+- With that option off, trigger scope remains one app activation / Space cycle. Re-activating an app or changing Space starts a new evaluation.
 - Plumb tries both the standard AX size write and an AXFrame fallback. A reposition-only result is not treated as successful tiling; bounded retries continue, and only target-width geometry or the documented vertically anchored fallback is accepted.
 - For document apps (Pages, Numbers, Word, Excel), template galleries and file lists are centered only. Saved documents are tiled, while detected unsaved documents wait briefly for their frame to stabilize before tiling.
 
