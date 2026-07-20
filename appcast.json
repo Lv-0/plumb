@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.60/Plumb-2.0.60.zip",
   "sha256": "982e7ef74830e74114aa72dc41301eaf3ebf08cde59741c3707c4aaf96c6018f",
   "notes": {
-    "en": "Redesigned the menu bar icon with a clearer screen-and-centered-window symbol. The monochrome template adapts automatically to light, dark, and highlighted menu bar states.",
-    "zh": "重新设计了菜单栏图标，以更直观的“屏幕 + 居中窗口”图形表达 Plumb 的作用。新的单色模板图标可自动适配浅色、深色及菜单高亮状态。",
-    "es": "Se ha rediseñado el icono de la barra de menús con un símbolo más claro: una ventana centrada dentro de una pantalla. El nuevo icono monocromo se adapta automáticamente a los modos claro y oscuro y al resaltado del menú.",
-    "fr": "L’icône de la barre des menus a été repensée autour d’un symbole plus explicite : une fenêtre centrée dans un écran. Cette nouvelle icône monochrome s’adapte automatiquement aux modes clair et sombre ainsi qu’à la surbrillance des menus.",
-    "ja": "メニューバーアイコンを、画面中央に配置されたウインドウを表す、より分かりやすいデザインに刷新しました。新しいモノクロのテンプレートアイコンは、ライト／ダーク表示やメニュー選択時のハイライトに自動で適応します。"
+    "en": "Added an optional Only Tile When Apps Launch setting, off by default. When enabled, switching apps, screens, or Spaces will not tile again; quit and relaunch the target app to allow a new automatic tile.",
+    "zh": "新增可选的“仅在应用启动时自动平铺”开关，默认关闭。开启后，切换应用、屏幕或空间不会再次触发平铺；退出并重新打开目标应用后才会获得新的自动平铺机会。",
+    "es": "Se añadió la opción Solo mosaico al iniciar apps, desactivada de forma predeterminada. Al activarla, cambiar de app, pantalla o Space no vuelve a colocarla en mosaico; hay que cerrar y volver a abrir la app para permitir una nueva colocación automática.",
+    "fr": "Ajout de l’option Mosaïque uniquement au lancement, désactivée par défaut. Lorsqu’elle est activée, changer d’app, d’écran ou d’espace ne relance pas la mosaïque ; il faut quitter puis relancer l’app pour autoriser une nouvelle disposition automatique.",
+    "ja": "デフォルトでオフの「アプリ起動時のみ自動タイル配置」設定を追加しました。有効にすると、アプリ、画面、または操作スペースを切り替えても再配置されず、対象アプリを終了して再起動したときだけ新たに自動配置されます。"
   },
   "minOS": "26.0"
 }
