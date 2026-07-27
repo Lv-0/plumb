@@ -1,7 +1,7 @@
 {
-  "version": "2.0.61",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.61/Plumb-2.0.61.zip",
-  "sha256": "fb34b6fbd145b2d322e1d08cf2809e97065c4e63461bc01813608bf7bdd85734",
+  "version": "2.0.62",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.62/Plumb-2.0.62.zip",
+  "sha256": "22b8cbb139062c16aef99620834d3dc83ab7936eec31793dce3ad4f9919b49a0",
   "notes": {
     "en": "Improved automatic tiling reliability with stricter final geometry checks and better handling of slow-loading document windows. Fixed cases where a window could be accepted before reaching its requested layout. Validated with the full test suite.",
     "zh": "提升自动平铺可靠性，加强窗口最终几何校验，并改善慢启动文档窗口的处理。修复窗口未完全达到目标布局却被提前接受的问题。已通过完整测试验证。",
