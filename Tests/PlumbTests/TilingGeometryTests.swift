@@ -366,6 +366,21 @@ func frameSatisfiesUnprovenTiledTarget_exactTarget_accepts() async throws {
 }
 
 @Test
+func frameSatisfiesUnprovenTiledTarget_zcodeRightGapRejects() async throws {
+    // ZCode 3.5.2 现场回归：配置目标 1472×847，但当前 AX frame 为 1456×845，
+    // 左/底正确、右侧缺 16px、顶部缺 2px。首次预检不能把普通 Electron 窗口
+    // 猜成字符网格约束；必须进入真实 resize/动画事务。
+    let target = CGRect(x: 20, y: 92, width: 1472, height: 847)
+    let zcodeBeforeWrite = CGRect(x: 20, y: 92, width: 1456, height: 845)
+
+    #expect(WindowGeometry.frameMatchesTiledTarget(zcodeBeforeWrite, target: target))
+    #expect(WindowGeometry.frameSatisfiesUnprovenTiledTarget(
+        zcodeBeforeWrite,
+        target: target
+    ) == false)
+}
+
+@Test
 func frameSatisfiesUnprovenTiledTarget_arbitraryHalfHeightRejects() async throws {
     // Runtime canary: target-width 500px window was top-aligned to a 1030px target and
     // previously self-proved via frameMatchesFallbackProduct without any Plumb writer.

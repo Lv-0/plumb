@@ -143,9 +143,10 @@ enum WindowGeometry {
             abs(frame.height - product.height) <= tolerance
     }
 
-    /// 平铺完成严格判定：**逐边语义**——四向边距是否都落在可接受区间内。
+    /// 写入后的受约束平铺判定：**逐边语义**——四向边距是否落在 writer 可接受区间内。
     ///
-    /// 用途：区分「真正落到平铺目标」与「贴底但顶部缺口」等错误形态——后者若被放行，
+    /// 用途：在 Plumb 已执行目标 resize 后，区分字符网格约束与「贴底但顶部缺口」等错误形态。
+    /// 它包含 16px 的有意宽松范围，绝不能单独用于无写入 preflight；后者若被放行，
     /// 会 markCentered + processedPIDs 锁在错误几何上（如 Numbers 新建文档顶距翻倍 bug：
     /// 贴底、高度矮 16px，旧「minY 严格 + height ≤16」判定放行，但顶距被吃掉 16px）。
     ///
@@ -224,18 +225,19 @@ enum WindowGeometry {
             topOvershoot <= outwardOvershootTolerance
     }
 
-    /// 统一平铺完成判定（唯一真源）：一个 frame 是否应被接受为「平铺完成」。
+    /// 写入后的平铺完成判定：一个 frame 是否可作为真实写入事务的最终产物。
     ///
     /// 三选一，按此顺序短路：
-    ///   1. `frameMatchesTiledTarget` —— 真正落到平铺目标（逐边语义：左严格 3px、底向内宽松 16px、
-    ///      顶 ±6px、右 −16/+6px；防止「贴底短高」吃掉顶距）。
+    ///   1. `frameMatchesTiledTarget` —— writer 后的字符网格约束产物（逐边语义：左严格 3px、
+    ///      底向内宽松 16px、顶 ±6px、右 −16/+6px；防止「贴底短高」吃掉顶距）。
     ///   2. `frameMatchesFallbackProduct` —— 等于「妥协形态」（四维 3px）。这是 app 拒绝目标尺寸后
     ///      `emitFinalAnchor` 愿意留下的唯一妥协 frame；判定必然接受 → 锚定与判定同源，循环消除。
     ///   3. `frameCoversTiledTarget` —— 完整覆盖目标、四向外扩 ≤ 3px 的几何兜底（应对系统顶部夹取
     ///      产生的 ±3px 不可达误差，不再吞 inset）。
     ///
-    /// 抽成 nonisolated 纯函数，供 `emitFinalAnchor` / `tileReachedTarget` / `isWindowAtTiledTarget`
-    ///（经服务层薄封装）共用，并直接单元测试。
+    /// ⚠️ 这个谓词包含字符网格与垂直尺寸约束的宽松产物，必须只在 Plumb 已实际执行目标
+    /// resize 之后使用。首次预检必须走 `frameSatisfiesUnprovenTiledTarget`；若最终只能留下
+    /// 宽松产物，service 还必须记录同一窗口 + 同一目标 + 同一回读 frame 的 writer provenance。
     static func frameSatisfiesFinalTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
         if frameMatchesTiledTarget(frame, target: target) { return true }
         if frameMatchesFallbackProduct(frame, target: target) { return true }
@@ -247,11 +249,13 @@ enum WindowGeometry {
     ///
     /// `frameMatchesFallbackProduct` 以观察到的实际尺寸构造妥协 frame，因此它只能用于 Plumb
     /// 已经尝试目标 resize 并读回 app 约束结果之后。若把它用于首次 preflight，任何目标宽度、
-    /// 顶/底锚定的任意高度窗口都会自证为完成。无来源检查只允许真实目标（含小幅 grid snap）或
-    /// 3px 内完整覆盖；历史 writer-produced fallback 由 service 的 provenance store 另行放行。
+    /// 顶/底锚定的任意高度窗口都会自证为完成；若把 `frameMatchesTiledTarget` 用于首次 preflight，
+    /// 一个右侧缺口 16px 的普通窗口也会被误当作字符网格约束（ZCode 回归）。
+    ///
+    /// 因此无来源检查只允许四条边都在 3px 内的严格目标/微小坐标噪声。字符网格 snap 与垂直
+    /// fallback 一律要求 service 中已有真实 writer provenance。
     static func frameSatisfiesUnprovenTiledTarget(_ frame: CGRect, target: CGRect) -> Bool {
-        frameMatchesTiledTarget(frame, target: target) ||
-            frameCoversTiledTarget(frame, target: target)
+        frameCoversTiledTarget(frame, target: target)
     }
 
     /// 把“全屏 frame 与可用 visibleFrame”之间的逐边 inset 计算下沉为纯函数。

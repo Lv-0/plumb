@@ -289,22 +289,27 @@ func classify_gallerySignatureOverridesDocumentContent() {
 }
 
 @Test
-func documentClassificationRetry_waitsThenTimesOutWhenSubtreeStaysUndetermined() {
+func documentClassificationRetry_backsOffWithoutAbandoningSlowWindow() {
     #expect(WindowEventObserver.documentClassificationRetryDecision(
         for: .undetermined,
         attempt: 1,
-        maxAttempts: 6
-    ) == .keepWaiting)
+        fastSampleLimit: 6
+    ) == .keepWaitingFast)
     #expect(WindowEventObserver.documentClassificationRetryDecision(
         for: .undetermined,
         attempt: 5,
-        maxAttempts: 6
-    ) == .keepWaiting)
+        fastSampleLimit: 6
+    ) == .keepWaitingFast)
     #expect(WindowEventObserver.documentClassificationRetryDecision(
         for: .undetermined,
         attempt: 6,
-        maxAttempts: 6
-    ) == .timedOut)
+        fastSampleLimit: 6
+    ) == .keepWaitingSlow)
+    #expect(WindowEventObserver.documentClassificationRetryDecision(
+        for: .undetermined,
+        attempt: 20,
+        fastSampleLimit: 6
+    ) == .keepWaitingSlow)
 }
 
 @Test
@@ -312,13 +317,45 @@ func documentClassificationRetry_transitionsOnlyAfterPositiveEvidence() {
     #expect(WindowEventObserver.documentClassificationRetryDecision(
         for: .gallery,
         attempt: 1,
-        maxAttempts: 6
+        fastSampleLimit: 6
     ) == .finishGallery)
     #expect(WindowEventObserver.documentClassificationRetryDecision(
         for: .document,
         attempt: 1,
-        maxAttempts: 6
+        fastSampleLimit: 6
     ) == .beginStableGate)
+}
+
+@Test
+func documentStabilityNeverForcesAnAnimatingWindowAtDeadline() {
+    #expect(WindowEventObserver.documentStabilityRetryDecision(
+        consecutiveStableSamples: 0,
+        attempt: 6,
+        fastSampleLimit: 6,
+        requiredConsecutiveSamples: 3
+    ) == .keepWaitingSlow)
+    #expect(WindowEventObserver.documentStabilityRetryDecision(
+        consecutiveStableSamples: 2,
+        attempt: 20,
+        fastSampleLimit: 6,
+        requiredConsecutiveSamples: 3
+    ) == .keepWaitingSlow)
+}
+
+@Test
+func documentStabilityRequiresPositiveConsecutiveEvidence() {
+    #expect(WindowEventObserver.documentStabilityRetryDecision(
+        consecutiveStableSamples: 2,
+        attempt: 3,
+        fastSampleLimit: 6,
+        requiredConsecutiveSamples: 3
+    ) == .keepWaitingFast)
+    #expect(WindowEventObserver.documentStabilityRetryDecision(
+        consecutiveStableSamples: 3,
+        attempt: 12,
+        fastSampleLimit: 6,
+        requiredConsecutiveSamples: 3
+    ) == .beginTile)
 }
 
 @Test

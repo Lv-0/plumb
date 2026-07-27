@@ -125,6 +125,36 @@ func acceptedTileFallbackRequiresWriterRecord() {
 }
 
 @Test
+func acceptedGridSnapRequiresWriterRecord() {
+    var store = AcceptedTileFallbackStore()
+    let target = CGRect(x: 16, y: 40, width: 960, height: 752)
+    let gridSnapped = CGRect(x: 16, y: 40, width: 945, height: 752)
+
+    #expect(store.accepts(
+        key: "303:9:ax:90",
+        pid: 303,
+        targetFrame: target,
+        currentFrame: gridSnapped
+    ) == false)
+
+    let didRecord = store.record(
+        key: "303:9:ax:90",
+        pid: 303,
+        targetFrame: target,
+        acceptedFrame: gridSnapped,
+        reason: .writerProduced
+    )
+
+    #expect(didRecord)
+    #expect(store.accepts(
+        key: "303:9:ax:90",
+        pid: 303,
+        targetFrame: target,
+        currentFrame: gridSnapped
+    ))
+}
+
+@Test
 func acceptedTileFallbackRejectsChangedTargetOrFrame() {
     var targetStore = AcceptedTileFallbackStore()
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)

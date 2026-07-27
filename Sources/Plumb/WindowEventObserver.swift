@@ -519,17 +519,21 @@ final class WindowEventObserver {
     /// 新建文档窗口的 AX 子树可能在 AXWindowCreated/AXFocusedWindowChanged 到达时仍为空壳。
     /// 分类等待必须按窗口拥有，不能依赖已经可能耗尽的 activation-wide initial retry，也不能
     /// 让同 PID 的多个文档互相覆盖。首次 .undetermined 事件只居中一次；后续 timer tick 仅分类，
-    /// 明确为 .document 后转交下方稳定门，明确为 .gallery 或超时则安全结束且不锁 PID。
+    /// 明确为 .document 后转交下方稳定门，明确为 .gallery 才安全结束且不锁 PID。未就绪窗口
+    /// 在快速采样后转为低频持久观察，不能因为一个固定超时永久漏掉慢启动文档。
     private var documentClassificationTimers: [String: DispatchSourceTimer] = [:]
     private var documentClassificationTimerOwnership = MultiOwnedOperationState<String, LayoutContinuationLease>()
     private static let documentClassificationSampleIntervalMs: Int = 400
-    private static let documentClassificationMaxSamples: Int = 6 // 400ms × 6 ≈ 2.4s
+    private static let documentClassificationFastSampleLimit: Int = 6 // 前 2.4s 快速观察
+    private static let documentClassificationSlowSampleIntervalMs: Int = 1_500
     /// 阶段 3.1 的稳定门按窗口拥有。一个文档 App 可同时创建多个未保存文档；若按 PID
     /// 共用单槽，先稳定的窗口会让同 PID 的其它窗口绕过自己的稳定检查。
     private var documentStableTimers: [String: DispatchSourceTimer] = [:]
     private var documentStableTimerOwnership = MultiOwnedOperationState<String, LayoutContinuationLease>()
     private static let documentStableSampleIntervalMs: Int = 400
-    private static let documentStableMaxSamples: Int = 6     // 400ms × 6 ≈ 2.4s
+    private static let documentStableFastSampleLimit: Int = 6
+    private static let documentStableSlowSampleIntervalMs: Int = 1_000
+    private static let documentStableRequiredConsecutiveSamples: Int = 3
     private static let documentStableTolerancePx: CGFloat = 2
     /// 阶段 3.2：完成后单次校正定时器。完成回调发现读回尺寸膨胀（app 迟到的自 resize）时，
     /// 延迟 ~500ms 按「先 size 后 position」重写一次精确目标，再走判定与预算锁定，替代加载中
@@ -2797,16 +2801,27 @@ final class WindowEventObserver {
             let decision = Self.documentClassificationRetryDecision(
                 for: kind,
                 attempt: samples,
-                maxAttempts: Self.documentClassificationMaxSamples
+                fastSampleLimit: Self.documentClassificationFastSampleLimit
             )
             DiagnosticLog.debug(
-                "document-classification-gate: sample \(samples)/\(Self.documentClassificationMaxSamples) " +
+                "document-classification-gate: sample \(samples) fastLimit=\(Self.documentClassificationFastSampleLimit) " +
                 "pid=\(pid) key=\(windowKey) kind=\(kind) decision=\(decision)"
             )
 
             switch decision {
-            case .keepWaiting:
+            case .keepWaitingFast:
                 break
+            case .keepWaitingSlow:
+                if samples == Self.documentClassificationFastSampleLimit {
+                    timer.schedule(
+                        deadline: .now() + .milliseconds(Self.documentClassificationSlowSampleIntervalMs),
+                        repeating: .milliseconds(Self.documentClassificationSlowSampleIntervalMs)
+                    )
+                    DiagnosticLog.debug(
+                        "document-classification-gate: entering slow readiness watch " +
+                        "pid=\(pid) key=\(windowKey) intervalMs=\(Self.documentClassificationSlowSampleIntervalMs)"
+                    )
+                }
             case .finishGallery:
                 self.endDocumentClassificationGate(lease: lease)
                 self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification resolved gallery")
@@ -2824,10 +2839,6 @@ final class WindowEventObserver {
                     insets: insets,
                     bundleIdentifier: bundleIdentifier
                 )
-            case .timedOut:
-                self.endDocumentClassificationGate(lease: lease)
-                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "classification timed out")
-                DiagnosticLog.debug("document-classification-gate: timed out, keep unlocked pid=\(pid) key=\(windowKey)")
             }
         }
         documentClassificationTimers[windowKey] = timer
@@ -2863,9 +2874,9 @@ final class WindowEventObserver {
 
     /// 阶段 3.1：document-chooser .document 窗口的「等稳再铺」采样门。
     ///
-    /// 每 `documentStableSampleIntervalMs`（400ms）采样一次窗口 frame，连续两次一致（±2px）才
-    /// 启动平铺；最多采样 `documentStableMaxSamples`（6 ≈ 2.4s）次后无条件开始。定时器可取消、
-    /// 带前台守卫，与「attach 后 0.45s 再首铺」的设计哲学一致，直接实现「一次就平铺完成」。
+    /// 每 `documentStableSampleIntervalMs`（400ms）采样一次窗口 frame，连续多次一致（±2px）才
+    /// 启动平铺。快速阶段后转为 1s 低频观察，不再因固定次数而强制对仍在启动动画中的窗口写入。
+    /// 定时器可取消、带前台/窗口/用户手势守卫；慢启动只要最终稳定就会继续平铺。
     /// 采样期间通过 window-key 集合抑制 `startInitialCenteringRetries` 对同一窗口的重复进入；
     /// 同 PID 的其它未保存文档仍各自拥有独立 gate/timer。
     private func startDocumentStableGate(
@@ -2887,6 +2898,7 @@ final class WindowEventObserver {
         _ = documentStableTimerOwnership.begin(owner: lease, for: windowKey)
         var lastFrame: CGRect?
         var samples = 0
+        var consecutiveStableSamples = 0
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .milliseconds(Self.documentStableSampleIntervalMs),
                        repeating: .milliseconds(Self.documentStableSampleIntervalMs))
@@ -2929,6 +2941,33 @@ final class WindowEventObserver {
                 return
             }
 
+            // Readiness is not one-way: a placeholder that briefly exposed document content may
+            // resolve back to a gallery or become undetermined while the app replaces its window.
+            // Reclassify before every geometry sample so file lists are never tiled by a stale gate.
+            let kind: DocumentAppWindowKind = self.windowHasDocument(primaryWindow)
+                ? .document
+                : self.classifyDocumentAppWindow(primaryWindow)
+            switch kind {
+            case .gallery:
+                self.endDocumentStableGate(lease: lease)
+                self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate resolved gallery")
+                DiagnosticLog.debug("document-stable-gate: gallery resolved, keep unlocked pid=\(pid)")
+                return
+            case .undetermined:
+                self.endDocumentStableGate(lease: lease)
+                DiagnosticLog.debug("document-stable-gate: readiness regressed, return to classification pid=\(pid)")
+                self.startDocumentClassificationGate(
+                    pid: pid,
+                    appElement: appElement,
+                    primaryWindow: primaryWindow,
+                    insets: insets,
+                    bundleIdentifier: bundleIdentifier
+                )
+                return
+            case .document:
+                break
+            }
+
             let current = self.readGlobalFrame(of: primaryWindow, pid: pid)
             let stable: Bool
             if let current, let lastFrame {
@@ -2939,9 +2978,20 @@ final class WindowEventObserver {
             } else {
                 stable = false
             }
-            DiagnosticLog.debug("document-stable-gate: sample \(samples)/\(Self.documentStableMaxSamples) pid=\(pid) frame=\(current.map { String(describing: $0) } ?? "nil") stable=\(stable)")
+            consecutiveStableSamples = stable ? consecutiveStableSamples + 1 : 0
+            let decision = Self.documentStabilityRetryDecision(
+                consecutiveStableSamples: consecutiveStableSamples,
+                attempt: samples,
+                fastSampleLimit: Self.documentStableFastSampleLimit,
+                requiredConsecutiveSamples: Self.documentStableRequiredConsecutiveSamples
+            )
+            DiagnosticLog.debug(
+                "document-stable-gate: sample \(samples) fastLimit=\(Self.documentStableFastSampleLimit) " +
+                "pid=\(pid) frame=\(current.map { String(describing: $0) } ?? "nil") " +
+                "stable=\(stable) streak=\(consecutiveStableSamples) decision=\(decision)"
+            )
 
-            if stable || samples >= Self.documentStableMaxSamples {
+            if decision == .beginTile {
                 self.endDocumentStableGate(lease: lease)
                 self.endDocumentStartupBootstrap(windowKey: windowKey, reason: "stable gate handing off to tile")
                 let _ = self.performTileAndLock(
@@ -2954,6 +3004,18 @@ final class WindowEventObserver {
                 )
             } else {
                 lastFrame = current
+                if decision == .keepWaitingSlow,
+                   samples == Self.documentStableFastSampleLimit
+                {
+                    timer.schedule(
+                        deadline: .now() + .milliseconds(Self.documentStableSlowSampleIntervalMs),
+                        repeating: .milliseconds(Self.documentStableSlowSampleIntervalMs)
+                    )
+                    DiagnosticLog.debug(
+                        "document-stable-gate: entering slow stability watch " +
+                        "pid=\(pid) key=\(windowKey) intervalMs=\(Self.documentStableSlowSampleIntervalMs)"
+                    )
+                }
             }
         }
         documentStableTimers[windowKey] = timer
@@ -3506,20 +3568,20 @@ final class WindowEventObserver {
     }
 
     enum DocumentClassificationRetryDecision: Equatable {
-        case keepWaiting
+        case keepWaitingFast
+        case keepWaitingSlow
         case finishGallery
         case beginStableGate
-        case timedOut
     }
 
     /// Pure transition policy for the per-window classification gate. The timer owns scheduling;
     /// this function only decides whether the observed AX subtree remains unresolved or may move to
-    /// one of the two safe terminal paths. Keeping it pure makes timeout and transition semantics
+    /// one of the two safe terminal paths. Keeping it pure makes retry and transition semantics
     /// deterministic under unit tests without requiring live Accessibility objects.
     nonisolated static func documentClassificationRetryDecision(
         for kind: DocumentAppWindowKind,
         attempt: Int,
-        maxAttempts: Int
+        fastSampleLimit: Int
     ) -> DocumentClassificationRetryDecision {
         switch kind {
         case .gallery:
@@ -3527,8 +3589,29 @@ final class WindowEventObserver {
         case .document:
             return .beginStableGate
         case .undetermined:
-            return attempt >= max(1, maxAttempts) ? .timedOut : .keepWaiting
+            return attempt >= max(1, fastSampleLimit) ? .keepWaitingSlow : .keepWaitingFast
         }
+    }
+
+    enum DocumentStabilityRetryDecision: Equatable {
+        case keepWaitingFast
+        case keepWaitingSlow
+        case beginTile
+    }
+
+    /// A launch animation must never become ready merely because a deadline elapsed. The gate
+    /// starts quickly, then backs off while retaining exact-window lifecycle ownership. Only a
+    /// positive run of stable samples may begin tiling.
+    nonisolated static func documentStabilityRetryDecision(
+        consecutiveStableSamples: Int,
+        attempt: Int,
+        fastSampleLimit: Int,
+        requiredConsecutiveSamples: Int
+    ) -> DocumentStabilityRetryDecision {
+        if consecutiveStableSamples >= max(1, requiredConsecutiveSamples) {
+            return .beginTile
+        }
+        return attempt >= max(1, fastSampleLimit) ? .keepWaitingSlow : .keepWaitingFast
     }
 
     /// A completed document under the PID-cycle lock must not suppress a newly-created window whose

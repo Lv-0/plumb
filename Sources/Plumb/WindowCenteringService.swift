@@ -175,7 +175,7 @@ struct AcceptedTileFallbackStore {
         acceptedFrame: CGRect,
         reason: Reason
     ) -> Bool {
-        guard WindowGeometry.frameMatchesFallbackProduct(acceptedFrame, target: targetFrame),
+        guard WindowGeometry.frameSatisfiesFinalTiledTarget(acceptedFrame, target: targetFrame),
               !WindowGeometry.frameSatisfiesUnprovenTiledTarget(acceptedFrame, target: targetFrame)
         else {
             removeValue(forKey: key)
@@ -216,7 +216,7 @@ struct AcceptedTileFallbackStore {
         // provenance merely because one coordinate source mismatches; every probe still
         // has to match the exact accepted frame before it can return true.
         return Self.framesMatch(record.acceptedFrame, currentFrame, tolerance: tolerance) &&
-            WindowGeometry.frameMatchesFallbackProduct(currentFrame, target: targetFrame)
+            WindowGeometry.frameSatisfiesFinalTiledTarget(currentFrame, target: targetFrame)
     }
 
     mutating func removeValue(forKey key: String) {
@@ -2091,7 +2091,12 @@ final class WindowCenteringService {
 
             // 4. 读回解算后的 global frame，统一判定通过 → 收尾。
             let postFrame = self.currentGlobalFrame(windowElement, context: context, primaryTopY: primaryTopY)
-            let satisfied = postFrame.map { self.frameSatisfiesFinalTiledTarget($0, target: targetFrame) } ?? false
+            // Early success must be strict. A grid-snapped/vertically constrained frame is only
+            // accepted after the complete bounded rewrite chain, when finishEmitFinalAnchor can
+            // attach writer provenance. Otherwise the first clamped readback would stop retries.
+            let satisfied = postFrame.map {
+                self.frameSatisfiesUnprovenTiledTarget($0, target: targetFrame)
+            } ?? false
             DiagnosticLog.debug("tile-animator: precise-rewrite check \(attemptIndex + 1)/\(backoffsMs.count) actual=\(actual) sizeReached=\(sizeReached) postFrame=\(postFrame.map { String(describing: $0) } ?? "nil") satisfied=\(satisfied)")
 
             if satisfied || isFinalAttempt {
