@@ -134,3 +134,42 @@ func defaultSettings_hasEmptyPerAppInsets() async throws {
     #expect(AppTilingSettings.default.perAppInsets.isEmpty)
     #expect(AppTilingSettings.default.effectiveInsets(for: "com.anything") == TileInsets(all: AppTilingSettings.defaultEdgeMargin))
 }
+
+// MARK: - Per-app drawer editing state
+
+@Test
+func appInsetsEditor_defaultValueTracksChangedGlobalInsets() async throws {
+    var editor = AppInsetsEditorState(currentInsets: TileInsets(all: 16))
+    let changedDefaults = TileInsets(top: 10, bottom: 12, left: 20, right: 24)
+
+    editor.synchronize(with: changedDefaults)
+
+    #expect(editor.draftInsets == changedDefaults)
+    #expect(!editor.shouldCommit(hasCustomInsets: false, defaultInsets: changedDefaults))
+}
+
+@Test
+func appInsetsEditor_useDefaultClearsDraftAndRejectsLateCommit() async throws {
+    let defaults = TileInsets(top: 10, bottom: 10, left: 16, right: 16)
+    var editor = AppInsetsEditorState(currentInsets: TileInsets(all: 80))
+
+    editor.useDefault(defaults)
+
+    #expect(editor.draftInsets == defaults)
+    #expect(!editor.shouldCommit(hasCustomInsets: false, defaultInsets: defaults))
+}
+
+@Test
+func appInsetsEditor_customEditRemainsCommittable() async throws {
+    let defaults = TileInsets(all: 16)
+    var editor = AppInsetsEditorState(currentInsets: defaults)
+    editor.draftInsets.right = 48
+
+    #expect(editor.shouldCommit(hasCustomInsets: false, defaultInsets: defaults))
+}
+
+@Test
+func marginEditCommitPolicy_invalidatesFocusSessionAfterUseDefault() async throws {
+    #expect(MarginEditCommitPolicy.canCommit(startGeneration: 4, currentGeneration: 4))
+    #expect(!MarginEditCommitPolicy.canCommit(startGeneration: 4, currentGeneration: 5))
+}

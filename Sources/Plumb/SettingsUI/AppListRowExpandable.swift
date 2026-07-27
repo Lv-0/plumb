@@ -127,12 +127,12 @@ struct AppInsetsDrawer: View {
     let onChange: (TileInsets) -> Void
     let onUseDefault: () -> Void
 
-    // 四个方向滑块的本地状态：用 currentInsets 初始化，拖动时即时回调 onChange。
-    // 用 @State 持有以获得流畅拖动，onAppear / onChange 时同步外部值。
-    @State private var top: CGFloat
-    @State private var bottom: CGFloat
-    @State private var left: CGFloat
-    @State private var right: CGFloat
+    // 抽屉只有一份本地编辑草稿。四个方向共享同一个 TileInsets，外部默认值或
+    // "使用默认"变化时整体替换，避免四个独立 @State 在 SwiftUI 更新顺序中部分滞留。
+    @State private var editorState: AppInsetsEditorState
+    /// 每次"使用默认"递增。正在编辑的 MarginRow 记录开始编辑时的 generation；
+    /// 若失焦时 generation 已变化，说明旧编辑已被重置，必须丢弃而不能回写。
+    @State private var resetGeneration: UInt64 = 0
 
     init(defaultInsets: TileInsets, currentInsets: TileInsets, hasCustomInsets: Bool,
          onChange: @escaping (TileInsets) -> Void, onUseDefault: @escaping () -> Void) {
@@ -141,10 +141,7 @@ struct AppInsetsDrawer: View {
         self.hasCustomInsets = hasCustomInsets
         self.onChange = onChange
         self.onUseDefault = onUseDefault
-        _top = State(initialValue: currentInsets.top)
-        _bottom = State(initialValue: currentInsets.bottom)
-        _left = State(initialValue: currentInsets.left)
-        _right = State(initialValue: currentInsets.right)
+        _editorState = State(initialValue: AppInsetsEditorState(currentInsets: currentInsets))
     }
 
     var body: some View {
@@ -152,10 +149,26 @@ struct AppInsetsDrawer: View {
             Divider().opacity(0.15)
 
             VStack(spacing: 8) {
-                MarginRow(label: L10n.marginTop, value: $top) { commitAll() }
-                MarginRow(label: L10n.marginBottom, value: $bottom) { commitAll() }
-                MarginRow(label: L10n.marginLeft, value: $left) { commitAll() }
-                MarginRow(label: L10n.marginRight, value: $right) { commitAll() }
+                MarginRow(
+                    label: L10n.marginTop,
+                    value: draftBinding(\.top),
+                    editGeneration: resetGeneration
+                ) { commitAll() }
+                MarginRow(
+                    label: L10n.marginBottom,
+                    value: draftBinding(\.bottom),
+                    editGeneration: resetGeneration
+                ) { commitAll() }
+                MarginRow(
+                    label: L10n.marginLeft,
+                    value: draftBinding(\.left),
+                    editGeneration: resetGeneration
+                ) { commitAll() }
+                MarginRow(
+                    label: L10n.marginRight,
+                    value: draftBinding(\.right),
+                    editGeneration: resetGeneration
+                ) { commitAll() }
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -163,7 +176,13 @@ struct AppInsetsDrawer: View {
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 // "使用默认"按钮：未自定义时置灰（已在默认态）。
-                Button(action: onUseDefault) {
+                Button {
+                    // 先使所有进行中的旧编辑失效，再同步显示值，最后删除持久化 override。
+                    // 无论 TextField 的失焦回调发生在按钮 action 前还是后，最终都不会复活旧值。
+                    resetGeneration &+= 1
+                    editorState.useDefault(defaultInsets)
+                    onUseDefault()
+                } label: {
                     Text(L10n.useDefaultMargin)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(hasCustomInsets ? Color.primary : Color.secondary)
@@ -202,21 +221,60 @@ struct AppInsetsDrawer: View {
         // ——必须把四个方向的本地 @State 同步回生效值。否则 @State(initialValue:) 只在首次创建时生效，
         // 滑块位置与数值会停留在旧值，与实际生效的间距不一致。
         .onChange(of: currentInsets) { _, newValue in
-            top = newValue.top
-            bottom = newValue.bottom
-            left = newValue.left
-            right = newValue.right
+            editorState.synchronize(with: newValue)
         }
+    }
+
+    /// 将单一 TileInsets 草稿的某个方向暴露成 Slider/TextField 所需的 Binding。
+    private func draftBinding(_ keyPath: WritableKeyPath<TileInsets, CGFloat>) -> Binding<CGFloat> {
+        Binding(
+            get: { editorState.draftInsets[keyPath: keyPath] },
+            set: { editorState.draftInsets[keyPath: keyPath] = $0 }
+        )
     }
 
     /// 把四个本地 @State 组装为 TileInsets 回调写入。
     private func commitAll() {
-        onChange(TileInsets(top: top, bottom: bottom, left: left, right: right))
+        // 默认态且草稿仍等于默认值时不创建无意义的 per-app override。
+        // 这也是最后一道 stale-write 防线："使用默认"后的迟到回调只能得到 no-op。
+        guard editorState.shouldCommit(
+            hasCustomInsets: hasCustomInsets,
+            defaultInsets: defaultInsets
+        ) else { return }
+        onChange(editorState.draftInsets)
     }
 
     /// 默认态徽章的四向数值摘要，如 "上 16 / 下 16 / 左 16 / 右 16"。
     private func insetsSummary(_ insets: TileInsets) -> String {
         "\(L10n.marginTop) \(Int(insets.top.rounded())) / \(L10n.marginBottom) \(Int(insets.bottom.rounded())) / \(L10n.marginLeft) \(Int(insets.left.rounded())) / \(L10n.marginRight) \(Int(insets.right.rounded()))"
+    }
+}
+
+/// AppInsetsDrawer 的纯状态核心，隔离 SwiftUI 生命周期并允许单元测试覆盖。
+struct AppInsetsEditorState: Equatable {
+    var draftInsets: TileInsets
+
+    init(currentInsets: TileInsets) {
+        draftInsets = currentInsets
+    }
+
+    mutating func synchronize(with currentInsets: TileInsets) {
+        draftInsets = currentInsets
+    }
+
+    mutating func useDefault(_ defaultInsets: TileInsets) {
+        draftInsets = defaultInsets
+    }
+
+    func shouldCommit(hasCustomInsets: Bool, defaultInsets: TileInsets) -> Bool {
+        hasCustomInsets || draftInsets != defaultInsets
+    }
+}
+
+/// 输入框失焦时是否仍拥有提交权。重置发生后，旧 focus session 必须失效。
+enum MarginEditCommitPolicy {
+    static func canCommit(startGeneration: UInt64, currentGeneration: UInt64) -> Bool {
+        startGeneration == currentGeneration
     }
 }
 
@@ -247,10 +305,13 @@ enum MarginValueParser {
 struct MarginRow: View {
     let label: String
     @Binding var value: CGFloat
+    var editGeneration: UInt64 = 0
     let onCommit: () -> Void
 
     /// TextField 的本地字符串。仅在 commit 时与 CGFloat value 双向同步。
     @State private var textInput: String = ""
+    @State private var focusStartGeneration: UInt64 = 0
+    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -269,6 +330,7 @@ struct MarginRow: View {
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
+                .focused($isTextFieldFocused)
                 .frame(width: 40)
                 .padding(.vertical, 2)
                 .padding(.horizontal, 4)
@@ -277,7 +339,6 @@ struct MarginRow: View {
                         .fill(Color.primary.opacity(0.06))
                 )
                 .onSubmit { commit() }
-                .onDisappear { commit() }
             Text("px")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -290,6 +351,22 @@ struct MarginRow: View {
         .onAppear {
             textInput = MarginValueParser.intString(value)
         }
+        .onChange(of: isTextFieldFocused) { oldValue, newValue in
+            if newValue {
+                focusStartGeneration = editGeneration
+            } else if oldValue {
+                if MarginEditCommitPolicy.canCommit(
+                    startGeneration: focusStartGeneration,
+                    currentGeneration: editGeneration
+                ) {
+                    // 点击抽屉其他位置即提交，不能再依赖 onDisappear（失焦时视图通常仍挂载）。
+                    commit()
+                } else {
+                    // "使用默认"已使这次编辑失效：恢复当前绑定值，绝不回写旧文本。
+                    textInput = MarginValueParser.intString(value)
+                }
+            }
+        }
     }
 
     /// 失焦/回车提交：解析文本框 → 钳制到合法范围 → 回写 value 与文本框 → 回调 onCommit。
@@ -300,4 +377,3 @@ struct MarginRow: View {
         onCommit()
     }
 }
-
