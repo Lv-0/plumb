@@ -1,7 +1,7 @@
 {
-  "version": "2.0.60",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.60/Plumb-2.0.60.zip",
-  "sha256": "982e7ef74830e74114aa72dc41301eaf3ebf08cde59741c3707c4aaf96c6018f",
+  "version": "2.0.61",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.61/Plumb-2.0.61.zip",
+  "sha256": "fb34b6fbd145b2d322e1d08cf2809e97065c4e63461bc01813608bf7bdd85734",
   "notes": {
     "en": "Added an optional Only Tile When Apps Launch setting, off by default. When enabled, switching apps, screens, or Spaces will not tile again; quit and relaunch the target app to allow a new automatic tile.",
     "zh": "新增可选的“仅在应用启动时自动平铺”开关，默认关闭。开启后，切换应用、屏幕或空间不会再次触发平铺；退出并重新打开目标应用后才会获得新的自动平铺机会。",
