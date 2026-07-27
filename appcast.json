@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.61/Plumb-2.0.61.zip",
   "sha256": "fb34b6fbd145b2d322e1d08cf2809e97065c4e63461bc01813608bf7bdd85734",
   "notes": {
-    "en": "Added an optional Only Tile When Apps Launch setting, off by default. When enabled, switching apps, screens, or Spaces will not tile again; quit and relaunch the target app to allow a new automatic tile.",
-    "zh": "新增可选的“仅在应用启动时自动平铺”开关，默认关闭。开启后，切换应用、屏幕或空间不会再次触发平铺；退出并重新打开目标应用后才会获得新的自动平铺机会。",
-    "es": "Se añadió la opción Solo mosaico al iniciar apps, desactivada de forma predeterminada. Al activarla, cambiar de app, pantalla o Space no vuelve a colocarla en mosaico; hay que cerrar y volver a abrir la app para permitir una nueva colocación automática.",
-    "fr": "Ajout de l’option Mosaïque uniquement au lancement, désactivée par défaut. Lorsqu’elle est activée, changer d’app, d’écran ou d’espace ne relance pas la mosaïque ; il faut quitter puis relancer l’app pour autoriser une nouvelle disposition automatique.",
-    "ja": "デフォルトでオフの「アプリ起動時のみ自動タイル配置」設定を追加しました。有効にすると、アプリ、画面、または操作スペースを切り替えても再配置されず、対象アプリを終了して再起動したときだけ新たに自動配置されます。"
+    "en": "Improved automatic tiling reliability with stricter final geometry checks and better handling of slow-loading document windows. Fixed cases where a window could be accepted before reaching its requested layout. Validated with the full test suite.",
+    "zh": "提升自动平铺可靠性，加强窗口最终几何校验，并改善慢启动文档窗口的处理。修复窗口未完全达到目标布局却被提前接受的问题。已通过完整测试验证。",
+    "es": "Mejora la fiabilidad del mosaico automático con comprobaciones más estrictas de la geometría final y un mejor manejo de las ventanas de documentos de carga lenta. Corrige casos en los que una ventana se aceptaba antes de alcanzar el diseño solicitado. Validado con la suite de pruebas completa.",
+    "fr": "Améliore la fiabilité du placement en mosaïque automatique grâce à des vérifications plus strictes de la géométrie finale et à une meilleure gestion des fenêtres de documents lentes à charger. Corrige les cas où une fenêtre était acceptée avant d'atteindre la disposition demandée. Validé par la suite de tests complète.",
+    "ja": "最終ジオメトリの検証を厳密にし、読み込みの遅いドキュメントウインドウの処理を改善して、自動タイル配置の信頼性を向上しました。要求されたレイアウトに達する前にウインドウが受理される場合を修正しました。完全なテストスイートで検証済みです。"
   },
   "minOS": "26.0"
 }
