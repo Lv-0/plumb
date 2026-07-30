@@ -107,17 +107,17 @@ enum WindowGeometry {
     ///
     /// 宽度仍保持左边距；高度分两类：
     /// - 实际高度比目标矮：保顶部，底部间距放宽（Terminal/electerm 字符网格 snap）。
-    /// - 实际高度比目标高：保底部，顶部少量外扩（Numbers 外接屏会把高度读回 visibleFrame 高度）。
+    /// - 实际高度比目标高：围绕目标中心上下均摊不可避免的溢出，保持用户设置的上下边距差值。
     static func constrainedTileFallbackOrigin(targetFrame: CGRect, actualSize: CGSize) -> CGPoint {
         let y = actualSize.height > targetFrame.height
-            ? targetFrame.minY
+            ? targetFrame.midY - actualSize.height / 2
             : targetFrame.maxY - actualSize.height
         return CGPoint(x: targetFrame.minX, y: y.rounded())
     }
 
     /// 「妥协形态」：app 拒绝目标尺寸时，Plumb 愿意留下的最终 frame。
     ///
-    /// 即 `constrainedTileFallbackOrigin` 推出的完整 CGRect（宽度保左距；高度矮→保顶、高→保底）。
+    /// 即 `constrainedTileFallbackOrigin` 推出的完整 CGRect（宽度保左距；高度矮→保顶、高→均摊）。
     /// 这是**唯一的**妥协形态纯函数：`emitFinalAnchor` 锚定时用它推出 origin，完成判定用它推出
     /// 应被接受的完整 frame。由此「锚定愿意留下的任何形态，判定必然接受」——循环从构造上消除
     ///（根因 D：Numbers 把高度读回 visibleFrame 后，旧 `frameCoversTiledTarget` 的 24px 外扩容差
@@ -189,8 +189,8 @@ enum WindowGeometry {
 
     /// 平铺完成兜底判定：窗口没有向内露出空白，并且只少量外扩。
     ///
-    /// Numbers 可能拒绝目标高度、读回更高窗口。最终锚定会优先保底部间距，让多出的高度
-    /// 向顶部外扩；这种不是「未铺满」，继续重试只会循环。若 app 的最小高度仍略高于
+    /// Numbers 可能拒绝目标高度、读回更高窗口。最终锚定会围绕目标中心均摊多出的高度；
+    /// 这种不是「未铺满」，继续重试只会循环。若 app 的最小高度仍略高于
     /// 可用高度减 bottom inset，macOS 会把顶部夹到可见区顶端，底部最多会少几像素；
     /// 这种不可达目标接受，小于等于容差。完整吞掉 bottom inset 的贴底状态仍拒绝。
     ///

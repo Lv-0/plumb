@@ -1915,12 +1915,12 @@ final class WindowCenteringService {
     /// - **尺寸对、位置漂**（posOff-only，iWork resize 漂 origin）：写一次 `targetAXOrigin` 收尾。
     /// - **尺寸偏差**（sizeOff，app 拒缩放 / 载入忙碌期竞态）：启动「精确目标重写链」——
     ///   用退避定时器（250ms / 500ms / 1000ms）等待 app 忙碌期结束，每轮**只写目标尺寸 `endSize`**
-    ///   再按读回的实际尺寸锚位置（保顶或保底的妥协形态），3 次后无条件收尾。
+    ///   再按读回的实际尺寸锚位置（矮窗保顶、高窗均摊的妥协形态），3 次后无条件收尾。
     ///
     /// 关键：**位置写入永远用刚读回的实际高度换算**，绝不用「假设高度」——否则会把实际更高的
     /// 窗口底边推到屏幕外（旧 shrink 阶梯的出屏 bug）。app 抢的是尺寸、从不抗拒位置写入，
     /// 所以即使 3 次重写都没把尺寸写到 `endSize`，最后一次按实际尺寸的妥协锚定也能保证
-    /// 「顶距或底距之一严格等于设置值」（妥协形态与 `expectedFallbackFrame` 同源，判定必然接受）。
+    /// 「矮窗保顶、高窗均摊溢出」（妥协形态与 `expectedFallbackFrame` 同源，判定必然接受）。
     private func emitFinalAnchor(
         windowElement: AXUIElement,
         endSize: CGSize,
@@ -2310,9 +2310,9 @@ final class WindowCenteringService {
 
     /// 预算耗尽锁定前的最后修正（无动画、无定时器、单次写入）。
     ///
-    /// 读实际 frame，若未满足统一判定，按 `constrainedTileFallbackOrigin`（矮窗保顶 / 高窗保底）
+    /// 读实际 frame，若未满足统一判定，按 `constrainedTileFallbackOrigin`（矮窗保顶 / 高窗均摊）
     /// **只写一次 position**。位置写入 app 从不抗拒（Numbers 抢的是尺寸），保证锁定结局
-    /// 「顶距或底距之一严格等于设置值」，不再出现「贴底短高、缺口全堆到顶部」被锁定的形态。
+    /// 得到确定性妥协形态，不再出现「贴底短高、缺口全堆到顶部」被锁定的形态。
     ///
     /// 若 `isAnyAnimationInProgress` 为真则直接返回（不与进行中的平铺会话打架——会话内部
     /// 已有自己的精确重写链做位置修正）。读取失败或无法确定坐标空间时返回（保守不动）。
@@ -2360,7 +2360,7 @@ final class WindowCenteringService {
             return
         }
 
-        // 妥协锚定（矮窗保顶 / 高窗保底）+ 用实际尺寸换算 AX origin，只写一次 position。
+        // 妥协锚定（矮窗保顶 / 高窗均摊）+ 用实际尺寸换算 AX origin，只写一次 position。
         let anchoredBL = WindowGeometry.constrainedTileFallbackOrigin(targetFrame: targetFrame, actualSize: actualFrame.size)
         let anchoredAX = toAXOrigin(
             bottomLeftOrigin: anchoredBL,

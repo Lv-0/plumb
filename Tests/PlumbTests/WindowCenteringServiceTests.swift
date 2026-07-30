@@ -97,7 +97,7 @@ func cgWindowFallbackUsesPreferredDisplayToBreakSameSizeTie() {
 func acceptedTileFallbackRequiresWriterRecord() {
     var store = AcceptedTileFallbackStore()
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
-    let constrained = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    let constrained = CGRect(x: 16, y: 0, width: 1888, height: 1050)
 
     let acceptedBeforeRecord = store.accepts(
         key: "101:7:ax:70",
@@ -158,7 +158,7 @@ func acceptedGridSnapRequiresWriterRecord() {
 func acceptedTileFallbackRejectsChangedTargetOrFrame() {
     var targetStore = AcceptedTileFallbackStore()
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
-    let constrained = CGRect(x: 144, y: 162, width: 1224, height: 752)
+    let constrained = CGRect(x: 144, y: 140, width: 1224, height: 752)
     let didRecordTarget = targetStore.record(
         key: "202:8:ax:80",
         pid: 202,
@@ -206,7 +206,7 @@ func acceptedTileFallbackRejectsChangedTargetOrFrame() {
 func acceptedTileFallbackInvalidatesOnlyTerminatedPID() {
     var store = AcceptedTileFallbackStore()
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
-    let constrained = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    let constrained = CGRect(x: 16, y: 0, width: 1888, height: 1050)
     let didRecordFirst = store.record(
         key: "101:7:ax:70",
         pid: 101,

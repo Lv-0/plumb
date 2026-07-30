@@ -157,16 +157,16 @@ func constrainedTileFallbackOrigin_shorterWindowKeepsTopEdge() async throws {
 }
 
 @Test
-func constrainedTileFallbackOrigin_tallerWindowKeepsBottomEdge() async throws {
-    // Numbers 外接屏：实际高度可能比目标高，必须保底部间距，不能把多出的高度压到底部。
+func constrainedTileFallbackOrigin_tallerWindowBalancesOverflow() async throws {
+    // 实际高度比目标高时，上下均摊不可避免的溢出，避免只牺牲某一侧边距。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
     let actual = CGSize(width: 1888, height: 1050)
 
     let origin = WindowGeometry.constrainedTileFallbackOrigin(targetFrame: target, actualSize: actual)
 
     #expect(origin.x == target.minX)
-    #expect(origin.y == target.minY)
-    #expect(origin.y + actual.height == target.maxY + 20)
+    #expect(origin.y == target.minY - 10)
+    #expect(origin.y + actual.height == target.maxY + 10)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -291,18 +291,18 @@ func frameCoversTiledTarget_largeOvershoot_rejects() async throws {
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Test
-func expectedFallbackFrame_tallerWindowKeepsBottomInset() async throws {
-    // Numbers 外接屏：实际高度 1050 > 目标 1030 → 妥协形态保底部（y=target.minY=10），多出的
-    // 20px 向顶部外扩。这正是 emitFinalAnchor 会锚定的 frame，判定必须接受。
+func expectedFallbackFrame_tallerWindowBalancesOverflow() async throws {
+    // Numbers 外接屏：实际高度 1050 > 目标 1030 → 妥协形态上下各外扩 10px。
+    // 这正是 emitFinalAnchor 会锚定的 frame，判定必须接受。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
     let actual = CGSize(width: 1888, height: 1050)
 
     let product = WindowGeometry.expectedFallbackFrame(targetFrame: target, actualSize: actual)
 
     #expect(product.minX == target.minX)
-    #expect(product.minY == target.minY)                 // 保底部 inset
+    #expect(product.minY == target.minY - 10)            // 底部均摊 10px
     #expect(product.height == actual.height)             // 用实际高度
-    #expect(product.maxY == target.maxY + 20)            // 多出高度向顶外扩
+    #expect(product.maxY == target.maxY + 10)            // 顶部均摊 10px
 }
 
 @Test
@@ -320,18 +320,18 @@ func expectedFallbackFrame_shorterWindowKeepsTopEdge() async throws {
 
 @Test
 func frameMatchesFallbackProduct_tallerAnchoredWindow_accepts() async throws {
-    // emitFinalAnchor 锚定后的 Numbers 窗口（高 1050、y=10）正好等于妥协形态 → 判定通过。
+    // emitFinalAnchor 锚定后的 Numbers 窗口（高 1050、y=0）正好等于妥协形态 → 判定通过。
     // 这条测试是「锚定与判定同源、循环消除」的直接编码。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
-    let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    let anchored = CGRect(x: 16, y: 0, width: 1888, height: 1050)
     #expect(WindowGeometry.frameMatchesFallbackProduct(anchored, target: target) == true)
 }
 
 @Test
 func frameMatchesFallbackProduct_driftedFromFallback_rejects() async throws {
-    // 妥协形态是 y=10；若 origin 漂到 y=20（10px > 3px 容差）→ 不等于妥协形态，拒绝。
+    // 妥协形态是 y=0；若 origin 漂到 y=10（10px > 3px 容差）→ 不等于妥协形态，拒绝。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
-    let drifted = CGRect(x: 16, y: 20, width: 1888, height: 1050)
+    let drifted = CGRect(x: 16, y: 10, width: 1888, height: 1050)
     #expect(WindowGeometry.frameMatchesFallbackProduct(drifted, target: target) == false)
 }
 
@@ -352,10 +352,10 @@ func frameSatisfiesFinalTiledTarget_exactTarget_accepts() async throws {
 
 @Test
 func frameSatisfiesFinalTiledTarget_fallbackProduct_accepts() async throws {
-    // 高窗口保底锚定 → 妥协形态 → 写后最终判定接受（不再循环）。无写 preflight
+    // 高窗口均摊溢出 → 妥协形态 → 写后最终判定接受（不再循环）。无写 preflight
     // 还必须要求 service 中存在匹配的 writer provenance。
     let target = CGRect(x: 16, y: 10, width: 1888, height: 1030)
-    let anchored = CGRect(x: 16, y: 10, width: 1888, height: 1050)
+    let anchored = CGRect(x: 16, y: 0, width: 1888, height: 1050)
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(anchored, target: target) == true)
 }
 
@@ -394,7 +394,7 @@ func frameSatisfiesUnprovenTiledTarget_arbitraryHalfHeightRejects() async throws
 @Test
 func frameSatisfiesUnprovenTiledTarget_writerFallbackStillNeedsEvidence() async throws {
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
-    let fallback = CGRect(x: 144, y: 162, width: 1224, height: 752)
+    let fallback = CGRect(x: 144, y: 140, width: 1224, height: 752)
 
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(fallback, target: target) == true)
     #expect(WindowGeometry.frameSatisfiesUnprovenTiledTarget(fallback, target: target) == false)
@@ -544,17 +544,16 @@ func netEaseReproduction_tileTargetExactValue() async throws {
 }
 
 @Test
-func netEaseReproduction_tallerWindowFallbackPreservesBottomEdge() async throws {
-    // app 拒绝高度 707、读回 752（比目标高）。taller-window fallback 保底边距：
-    // origin.y = targetFrame.minY（多出的高度向顶部外扩，底距严格 = bottom inset）。
+func netEaseReproduction_tallerWindowFallbackBalancesVerticalInsets() async throws {
+    // app 拒绝高度 707、读回 752（比目标高）。taller-window fallback 上下均摊 45px 溢出，
+    // 使原本相等的 top/bottom inset 仍保持视觉对称。
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
     let actualSize = CGSize(width: 1224, height: 752)
 
     let fallback = WindowGeometry.expectedFallbackFrame(targetFrame: target, actualSize: actualSize)
 
-    #expect(fallback == CGRect(x: 144, y: 162, width: 1224, height: 752))
-    // 底边严格 = visibleFrame.minY + bottom inset = 82 + 80 = 162。
-    #expect(fallback.minY == 162)
+    #expect(fallback == CGRect(x: 144, y: 140, width: 1224, height: 752))
+    #expect(fallback.midY == target.midY.rounded())
 }
 
 @Test
@@ -562,20 +561,17 @@ func netEaseReproduction_fallbackFrameSatisfiesFinalTiledTarget() async throws {
     // 锚定后的妥协形态必须被完成判定接受——这是「锚定愿意留下的，判定必然接受」不变量，
     // service 在真实 writer 后记录该 frame，后续 no-write preflight 通过 provenance 幂等锁定。
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
-    let fallback = CGRect(x: 144, y: 162, width: 1224, height: 752)
+    let fallback = CGRect(x: 144, y: 140, width: 1224, height: 752)
 
     #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(fallback, target: target) == true)
 }
 
 @Test
-func netEaseReproduction_centeredFrameRejectedAsTileProduct() async throws {
-    // 旧 centerAfterTile 把同一尺寸的窗口从妥协形态 (144,162) 居中移动到 (144,140)
-    //（centeredOrigin: visibleFrame.midY - height/2 = (82+867/2) - 752/2 = 495.5 - 376 = 119.5 → 120，
-    //  实测读回 140，含坐标空间/取整差异）。居中后的 frame 不等于妥协形态（minY 140 ≠ 162），
-    //  下次激活的完成判定不接受它 → 整条写入序列重来。本断言固化「居中后形态被拒绝」，
-    //  说明为何保留 centerAfterTile 会让 preflight 失效（preBlock 4）。
+func netEaseReproduction_bottomAnchoredFrameRejectedAsTileProduct() async throws {
+    // 新妥协形态为 (144,140,1224,752)。旧保底形态不再是同源产物，必须拒绝，
+    // 防止恢复成只牺牲顶部边距的结果。
     let target = CGRect(x: 144, y: 162, width: 1224, height: 707)
-    let centeredAfterTile = CGRect(x: 144, y: 140, width: 1224, height: 752)
+    let bottomAnchored = CGRect(x: 144, y: 162, width: 1224, height: 752)
 
-    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(centeredAfterTile, target: target) == false)
+    #expect(WindowGeometry.frameSatisfiesFinalTiledTarget(bottomAnchored, target: target) == false)
 }
