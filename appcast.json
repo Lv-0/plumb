@@ -3,11 +3,11 @@
   "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.67/Plumb-2.0.67.zip",
   "sha256": "d81294ff1b2ae04e89d21a2f549e078cc0f346a8bbcbd07af92b2c28c6856c44",
   "notes": {
-    "en": "Fixed tiling for apps that enforce a taller minimum window height. Unavoidable vertical overflow is now balanced between the top and bottom instead of accumulating on one side.",
-    "zh": "修复应用强制较大最小窗口高度时的平铺间距。无法避免的垂直溢出现在会在上下两侧均匀分配，不再集中到单侧。",
-    "es": "Se corrigió el mosaico en aplicaciones que imponen una altura mínima de ventana mayor. El desbordamiento vertical inevitable ahora se reparte entre la parte superior e inferior.",
-    "fr": "Correction du pavage pour les applications imposant une hauteur minimale de fenêtre plus grande. Le débordement vertical inévitable est désormais réparti entre le haut et le bas.",
-    "ja": "より大きな最小ウインドウ高さを強制するアプリのタイル配置を修正しました。避けられない縦方向のはみ出しを上下に均等配分します。"
+    "en": "Maintenance rebuild after validating single-instance window-layout stability. No user-facing behavior changes are included in this release.",
+    "zh": "维护性重构建：已完成单实例窗口布局稳定性验证。本版本不包含面向用户的功能或行为变更。",
+    "es": "Reconstrucción de mantenimiento tras validar la estabilidad del diseño de ventanas con una sola instancia. Esta versión no incluye cambios de comportamiento ni funciones visibles para los usuarios.",
+    "fr": "Reconstruction de maintenance après validation de la stabilité de la gestion des fenêtres avec une seule instance. Cette version n’inclut aucun changement de fonctionnalité ou de comportement visible pour les utilisateurs.",
+    "ja": "単一インスタンスでのウィンドウレイアウト安定性を確認したメンテナンス再ビルドです。本バージョンにはユーザー向けの機能変更や動作変更は含まれていません。"
   },
   "minOS": "26.0"
 }
