@@ -106,6 +106,13 @@ struct AppListSection: View {
                     searchFocused = true
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(
+                for: SettingsWindowNotifications.windowDidShow
+            )) { _ in
+                // SettingsWindowController 会被缓存复用；窗口关闭再打开时本地 @State
+                // 仍可能保留上次输入。每次显示设置窗口都恢复为空搜索。
+                query = ""
+            }
 
             // 应用列表：选中在前 —— 切换开关时平滑重排。
             LazyVStack(spacing: 2) {
