@@ -1,7 +1,7 @@
 {
-  "version": "2.0.62",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.62/Plumb-2.0.62.zip",
-  "sha256": "22b8cbb139062c16aef99620834d3dc83ab7936eec31793dce3ad4f9919b49a0",
+  "version": "2.0.66",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.66/Plumb-2.0.66.zip",
+  "sha256": "9357bdfe0a68b7a588d82473d80f5d72baafeb0e2e082dc49689344df1ec8d13",
   "notes": {
     "en": "Fixed per-app margin editing in the tiling settings drawer. Numeric margin changes now save when leaving the field, and Use Default no longer restores stale custom values.",
     "zh": "修复平铺设置中应用独立边距编辑的问题。数字边距离开输入框时会保存，“使用默认”不再恢复旧的自定义值。",
