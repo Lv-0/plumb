@@ -1,7 +1,7 @@
 {
-  "version": "2.0.66",
-  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.66/Plumb-2.0.66.zip",
-  "sha256": "9357bdfe0a68b7a588d82473d80f5d72baafeb0e2e082dc49689344df1ec8d13",
+  "version": "2.0.67",
+  "url": "https://github.com/Lv-0/plumb/releases/download/v2.0.67/Plumb-2.0.67.zip",
+  "sha256": "d81294ff1b2ae04e89d21a2f549e078cc0f346a8bbcbd07af92b2c28c6856c44",
   "notes": {
     "en": "Fixed tiling for apps that enforce a taller minimum window height. Unavoidable vertical overflow is now balanced between the top and bottom instead of accumulating on one side.",
     "zh": "修复应用强制较大最小窗口高度时的平铺间距。无法避免的垂直溢出现在会在上下两侧均匀分配，不再集中到单侧。",
