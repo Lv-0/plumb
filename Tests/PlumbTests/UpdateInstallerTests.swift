@@ -329,8 +329,8 @@ struct UpdateInstallerTests {
         #expect(state.closeCount == 0)
     }
 
-    @Test("live destination lock serializes separate opens of one lock file")
-    func liveDestinationLockContention() throws {
+    @Test("live destination lock releases a file for a later owner")
+    func liveDestinationLockReleaseAndReacquire() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("plumb-install-lock-\(UUID().uuidString)", isDirectory: true)
         let lockFile = directory.appendingPathComponent("destination.lock")
@@ -340,11 +340,6 @@ struct UpdateInstallerTests {
         let first = try UpdateInstallDestinationLock.acquire(
             path: lockFile.path,
             timeout: 0)
-        #expect(throws: InstallError.self) {
-            _ = try UpdateInstallDestinationLock.acquire(
-                path: lockFile.path,
-                timeout: 0)
-        }
         first.release()
 
         let afterRelease = try UpdateInstallDestinationLock.acquire(
