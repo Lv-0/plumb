@@ -46,7 +46,7 @@ if [[ ! -f "${ZIP_PATH}" ]]; then
 fi
 
 api() {
-  curl --fail-with-body -sS \
+  curl --http1.1 --fail-with-body -sS \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -85,7 +85,7 @@ upload_asset() {
     [[ "$remote_state" == "uploaded" ]] || { echo "Existing asset ${name} state is ${remote_state}, not uploaded" >&2; exit 1; }
 
     local_sha="$(shasum -a 256 "$path" | awk '{print $1}')"
-    if ! remote_sha="$(curl --fail-with-body -sSL "$remote_url" | shasum -a 256 | awk '{print $1}')"; then
+    if ! remote_sha="$(curl --http1.1 --fail-with-body -sSL "$remote_url" | shasum -a 256 | awk '{print $1}')"; then
       echo "Failed to download existing asset ${name} for immutable SHA verification" >&2
       exit 1
     fi
@@ -104,7 +104,7 @@ upload_asset() {
   echo "  uploading ${name}..."
   local upload_response local_size
   local_size="$(wc -c < "$path" | tr -d '[:space:]')"
-  upload_response="$(curl --fail-with-body -sS \
+  upload_response="$(curl --http1.1 --fail-with-body -sS \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "Content-Type: application/octet-stream" \
     --data-binary @"${path}" \
